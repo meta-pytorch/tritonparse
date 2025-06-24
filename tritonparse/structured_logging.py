@@ -3,6 +3,7 @@
 import atexit
 import fnmatch
 import gzip
+import hashlib
 import importlib
 import inspect
 import io
@@ -10,6 +11,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
@@ -45,14 +47,156 @@ _KERNEL_ALLOWLIST_PATTERNS: Optional[List[str]] = None
 TRITON_TRACE_LAUNCH = os.getenv("TRITON_TRACE_LAUNCH", None) in ["1", "true", "True"]
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
+# Enable tensor blob storage
+TRITONPARSE_SAVE_TENSOR_BLOBS = os.getenv("TRITONPARSE_SAVE_TENSOR_BLOBS", "0") in [
+    "1",
+    "true",
+    "True",
+]
+# Tensor size limit in bytes (default 10GB)
+TRITONPARSE_TENSOR_SIZE_LIMIT = int(
+    os.getenv("TRITONPARSE_TENSOR_SIZE_LIMIT", str(10 * 1024 * 1024 * 1024))
+)
 
 TRITON_TRACE_HANDLER = None
+# Global tensor blob manager instance
+TENSOR_BLOB_MANAGER = None
+
 if importlib.util.find_spec("torch") is not None:
     TORCH_INSTALLED = True
     import torch
     from torch.utils._traceback import CapturedTraceback
 else:
     TORCH_INSTALLED = False
+
+
+class TensorBlobManager:
+    """
+    Manager for storing tensor data as content-addressed blobs.
+
+    Uses BLAKE2b hashing for content addressing and stores blobs in a two-level
+    directory structure to avoid filesystem limitations with large numbers of files.
+    """
+
+    def __init__(self, root_dir: Optional[str] = None):
+        self.root_dir = None
+        self.hash_to_path_cache = {}  # In-memory cache for hash -> path mapping
+        if root_dir:
+            self.set_root_dir(root_dir)
+
+    def set_root_dir(self, root_dir: str):
+        """Set the root directory for blob storage."""
+        self.root_dir = Path(root_dir) / "saved_tensors"
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        log.debug(f"TensorBlobManager: using root directory {self.root_dir}")
+
+    def _compute_hash(self, data: bytes) -> str:
+        """Compute BLAKE2b hash of the data."""
+        return hashlib.blake2b(data).hexdigest()
+
+    def _get_blob_path(self, hash_hex: str) -> Path:
+        """Get the file path for a given hash using two-level directory structure."""
+        if not self.root_dir:
+            raise ValueError("Root directory not set")
+
+        # Two-level directory: first 2 chars / full_hash.bin
+        subdir = hash_hex[:2]
+        filename = f"{hash_hex}.bin"
+        return (self.root_dir / subdir / filename).resolve()
+
+    def _get_tensor_size_bytes(self, tensor) -> int:
+        """Get tensor size in bytes before serialization."""
+        if hasattr(tensor, "numel") and hasattr(tensor, "element_size"):
+            return tensor.numel() * tensor.element_size()
+        return 0
+
+    def save_tensor_blob(self, tensor) -> Dict[str, Any]:
+        """
+        Save tensor as a blob and return metadata.
+
+        Args:
+            tensor: PyTorch tensor to save
+
+        Returns:
+            Dictionary with blob metadata or error information:
+            - Success: {'tensor_hash': str, 'blob_path': str, 'blob_size': int, 'serialization_method': str}
+            - Error: {'error': str, 'tensor_hash': None}
+        """
+        if not self.root_dir:
+            return {"error": "Blob storage not initialized", "tensor_hash": None}
+
+        try:
+            # Check tensor size before serialization
+            tensor_size = self._get_tensor_size_bytes(tensor)
+            if tensor_size > TRITONPARSE_TENSOR_SIZE_LIMIT:
+                log.warning(
+                    f"Tensor size {tensor_size} bytes exceeds limit {TRITONPARSE_TENSOR_SIZE_LIMIT} bytes, skipping blob storage"
+                )
+                return {
+                    "error": f"Tensor size {tensor_size} bytes exceeds limit {TRITONPARSE_TENSOR_SIZE_LIMIT} bytes",
+                    "tensor_hash": None,
+                }
+
+            # Serialize tensor using torch.save
+            # TODO: Consider async serialization for very large tensors to avoid blocking
+            import io
+
+            buffer = io.BytesIO()
+            if TORCH_INSTALLED:
+                torch.save(tensor.cpu(), buffer)
+            else:
+                return {
+                    "error": "PyTorch not available for tensor serialization",
+                    "tensor_hash": None,
+                }
+
+            blob_data = buffer.getvalue()
+            hash_hex = self._compute_hash(blob_data)
+
+            # Check if we already have this blob
+            if hash_hex in self.hash_to_path_cache:
+                blob_path = self.hash_to_path_cache[hash_hex]
+                if blob_path.exists():
+                    return {
+                        "tensor_hash": hash_hex,
+                        "blob_path": str(blob_path),
+                        "blob_size": len(blob_data),
+                        "serialization_method": "torch_save",
+                    }
+
+            # Create blob file
+            blob_path = self._get_blob_path(hash_hex)
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Atomic write using temporary file + rename
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=blob_path.parent,
+                prefix=f".tmp_{hash_hex}_",
+                delete=False,
+            ) as tmp_file:
+                tmp_file.write(blob_data)
+                tmp_path = Path(tmp_file.name)
+
+            # Atomic rename
+            tmp_path.rename(blob_path)
+
+            # Cache the path
+            self.hash_to_path_cache[hash_hex] = blob_path
+
+            log.debug(f"Saved tensor blob: {hash_hex} -> {blob_path}")
+
+            return {
+                "tensor_hash": hash_hex,
+                "blob_path": str(blob_path),
+                "blob_size": len(blob_data),
+                "serialization_method": "torch_save",
+            }
+
+        except Exception as e:
+            error_msg = f"Failed to save tensor blob: {str(e)}"
+            log.error(error_msg)
+            return {"error": error_msg, "tensor_hash": None}
 
 
 class TritonLogRecord(logging.LogRecord):
@@ -254,6 +398,11 @@ def _log_torch_tensor_info(tensor_value):
     # Add data_ptr for memory tracking (optional)
     if hasattr(tensor_value, "data_ptr"):
         arg_info["data_ptr"] = hex(tensor_value.data_ptr())
+
+    # Add tensor blob storage if enabled
+    if TRITONPARSE_SAVE_TENSOR_BLOBS and TENSOR_BLOB_MANAGER is not None:
+        blob_info = TENSOR_BLOB_MANAGER.save_tensor_blob(tensor_value)
+        arg_info.update(blob_info)
     return arg_info
 
 
@@ -675,7 +824,7 @@ def init_logs():
            DEBUG:tritonparse_trace:
        lines by blocking propagation to the root logger.
     """
-    global TRITON_TRACE_HANDLER, triton_trace_folder
+    global TRITON_TRACE_HANDLER, triton_trace_folder, TENSOR_BLOB_MANAGER
 
     # Basic logger settings (safe to run on every call)
     triton_trace_log.setLevel(logging.DEBUG)
@@ -700,6 +849,15 @@ def init_logs():
     if TRITON_TRACE_HANDLER not in triton_trace_log.handlers:
         TRITON_TRACE_HANDLER.setFormatter(TritonJsonFormatter())
         triton_trace_log.addHandler(TRITON_TRACE_HANDLER)
+
+    # Initialize tensor blob manager if enabled
+    if TRITONPARSE_SAVE_TENSOR_BLOBS:
+        if TENSOR_BLOB_MANAGER is None:
+            TENSOR_BLOB_MANAGER = TensorBlobManager()
+
+        # Set or update root directory for blob storage
+        if root_dir and TENSOR_BLOB_MANAGER.root_dir is None:
+            TENSOR_BLOB_MANAGER.set_root_dir(root_dir)
 
 
 def trace_structured_triton(
