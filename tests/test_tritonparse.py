@@ -6,6 +6,7 @@ TORCHINDUCTOR_FX_GRAPH_CACHE=0 TRITONPARSE_DEBUG=1 python -m unittest tests.test
 ```
 """
 
+import gzip
 import json
 import os
 import shutil
@@ -590,6 +591,173 @@ class TestTritonparseCUDA(unittest.TestCase):
         finally:
             # Clean up
             shutil.rmtree(temp_dir)
+            print("✓ Cleaned up temporary directory")
+            tritonparse.structured_logging.clear_logging_config()
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+    def test_autotune_two_simple_kernels(self):
+        """
+        Tests autotuning for two simple, distinct Triton kernels.
+        Verifies that tritonparse correctly captures all compilation events from autotuning
+        and subsequent launch events.
+        """
+
+        # Kernel 1: Vector Addition
+        @triton.autotune(
+            configs=[
+                triton.Config({"BLOCK_SIZE": 128}, num_warps=4),
+                triton.Config({"BLOCK_SIZE": 1024}, num_warps=8),
+            ],
+            key=["n_elements"],
+        )
+        @triton.jit
+        def add_kernel(
+            x_ptr,
+            y_ptr,
+            output_ptr,
+            n_elements,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+        # Kernel 2: Vector Scaling
+        @triton.autotune(
+            configs=[
+                triton.Config({"BLOCK_SIZE": 256}, num_warps=4),
+                triton.Config({"BLOCK_SIZE": 512}, num_warps=4),
+            ],
+            key=["n_elements"],
+        )
+        @triton.jit
+        def scale_kernel(
+            x_ptr,
+            output_ptr,
+            scale_factor,
+            n_elements,
+            BLOCK_SIZE: tl.constexpr,
+        ):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            x = tl.load(x_ptr + offsets, mask=mask)
+            output = x * scale_factor
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+        # Setup temporary directories for logging
+        temp_dir = tempfile.mkdtemp()
+        log_path = os.path.join(temp_dir, "logs_autotune")
+        parsed_output_path = os.path.join(temp_dir, "parsed_autotune")
+        os.makedirs(log_path, exist_ok=True)
+        os.makedirs(parsed_output_path, exist_ok=True)
+        print(f"Temporary directory for autotune test: {temp_dir}")
+
+        # Initialize logging
+        tritonparse.structured_logging.init(log_path, enable_trace_launch=True)
+
+        try:
+            torch.manual_seed(0)
+            size = 2048
+            x = torch.randn(size, device="cuda", dtype=torch.float32)
+            y = torch.randn(size, device="cuda", dtype=torch.float32)
+
+            # --- Run Add Kernel ---
+            # This first call will trigger autotuning, running both configs.
+            print("--- Testing Add Kernel (autotuning) ---")
+            output_add = torch.empty_like(x)
+
+            def add_grid(META):
+                return (triton.cdiv(size, META["BLOCK_SIZE"]),)
+
+            add_kernel[add_grid](x, y, output_add, size)
+            torch.cuda.synchronize()
+            print("Add kernel autotuning complete.")
+
+            # Run again to generate a second launch event for the best config.
+            add_kernel[add_grid](x, y, output_add, size)
+            torch.cuda.synchronize()
+            print("Add kernel second launch complete.")
+
+            # --- Run Add Kernel again with new shape to trigger autotuning ---
+            print("\n--- Testing Add Kernel (autotuning with new shape) ---")
+            new_size = 1024
+            x2 = torch.randn(new_size, device="cuda", dtype=torch.float32)
+            y2 = torch.randn(new_size, device="cuda", dtype=torch.float32)
+            output_add2 = torch.empty_like(x2)
+
+            def add_grid_new(META):
+                return (triton.cdiv(new_size, META["BLOCK_SIZE"]),)
+
+            add_kernel[add_grid_new](x2, y2, output_add2, new_size)
+            torch.cuda.synchronize()
+            print("Add kernel autotuning on new shape complete.")
+
+            # --- Run Scale Kernel ---
+            # This will also trigger autotuning for its configs.
+            print("\n--- Testing Scale Kernel (autotuning) ---")
+            output_scale = torch.empty_like(x)
+
+            def scale_grid(META):
+                return (triton.cdiv(size, META["BLOCK_SIZE"]),)
+
+            scale_kernel[scale_grid](x, output_scale, 2.0, size)
+            torch.cuda.synchronize()
+            print("Scale kernel autotuning complete.")
+
+            # Parse the logs
+            tritonparse.utils.unified_parse(
+                source=log_path, out=parsed_output_path, overwrite=True
+            )
+
+            # --- Verification ---
+            compilation_hashes = set()
+            launch_count = 0
+            for log_file in os.listdir(log_path):
+                if log_file.endswith(".ndjson"):
+                    with open(os.path.join(log_path, log_file)) as f:
+                        for line in f:
+                            event = json.loads(line)
+                            if event["event_type"] == "compilation":
+                                compilation_hashes.add(
+                                    event["payload"]["metadata"]["hash"]
+                                )
+                            elif event["event_type"] == "launch":
+                                launch_count += 1
+
+            print(f"Found {len(compilation_hashes)} unique compilation hashes.")
+            print(f"Found {launch_count} launch events.")
+            self.assertEqual(
+                len(compilation_hashes),
+                4,
+                "Expected 4 unique compilation events from autotuning.",
+            )
+
+            # Verify launch_diff in parsed output
+            launch_diff_count = 0
+            for parsed_file in os.listdir(parsed_output_path):
+                if parsed_file.endswith(".ndjson.gz"):
+                    with gzip.open(
+                        os.path.join(parsed_output_path, parsed_file), "rt"
+                    ) as f:
+                        for line in f:
+                            event = json.loads(line)
+                            if event["event_type"] == "launch_diff":
+                                launch_diff_count += 1
+            print(f"Found {launch_diff_count} launch_diff events.")
+            self.assertEqual(launch_diff_count, 4, "Expected 4 launch_diff events.")
+
+            print("✓ Verification successful")
+
+        finally:
+            # Clean up
+            # shutil.rmtree(temp_dir)
             print("✓ Cleaned up temporary directory")
             tritonparse.structured_logging.clear_logging_config()
 

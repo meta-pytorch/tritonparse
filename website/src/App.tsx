@@ -353,6 +353,12 @@ function App() {
           onViewIR={handleViewSingleIR}
           selectedKernel={selectedKernel}
           onSelectKernel={handleSelectKernel}
+          onSelectKernelByHash={(hash: string) => {
+            const kernelIndex = kernels.findIndex(k => k.metadata.hash === hash);
+            if (kernelIndex !== -1) {
+              handleSelectKernel(kernelIndex);
+            }
+          }}
         />
       ) : (
         <CodeView kernels={kernels} selectedKernel={selectedKernel} />

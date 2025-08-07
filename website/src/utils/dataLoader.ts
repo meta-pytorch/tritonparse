@@ -231,14 +231,14 @@ export interface LogEntry {
  */
 export interface ProcessedKernel {
     name: string; // Inferred from filename
-    sourceFiles: string[]; // All related source files
     stack: StackEntry[];
     irFiles: Record<string, string>; // IR file contents
     filePaths: Record<string, string>; // IR file paths
     sourceMappings?: Record<string, Record<string, SourceMapping>>; // Source mappings for each IR file
-    pythonSourceInfo?: PythonSourceCodeInfo; // Python source code information
+    pythonSource?: PythonSourceCodeInfo;
     metadata?: KernelMetadata; // Compilation metadata
-    launchDiff?: LogEntry; // Aggregated launch event differences
+    launchDiff?: any;
+    autotuneAnalyses: AutotuneAnalysisEvent[]; // New field for autotune data
 }
 
 /**
@@ -404,6 +404,7 @@ export function loadLogDataFromFile(file: File): Promise<LogEntry[]> {
  */
 export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
     const kernelsByHash: Map<string, ProcessedKernel> = new Map();
+    const autotuneEvents: AutotuneAnalysisEvent[] = [];
 
     // First pass: process all compilation events
     for (const entry of logEntries) {
@@ -429,38 +430,64 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                         : fileName;
             }
 
-            const sourceMappings = entry.payload.source_mappings || {};
-
             const newKernel: ProcessedKernel = {
                 name: kernelName,
-                sourceFiles: entry.stack?.map(entry =>
-                    typeof entry.filename === 'string' ? entry.filename :
-                    Array.isArray(entry.filename) ? entry.filename[0] : "unknown"
-                ) || [],
                 stack: entry.stack || [],
                 irFiles: entry.payload.file_content,
                 filePaths: entry.payload.file_path,
-                sourceMappings,
-                pythonSourceInfo: entry.payload.python_source,
+                sourceMappings: entry.payload.source_mappings,
+                pythonSource: entry.payload.python_source,
                 metadata: entry.payload.metadata,
+                autotuneAnalyses: [], // Initialize with an empty array
             };
             kernelsByHash.set(hash, newKernel);
+        } else if (entry.event_type === "autotune_analysis") {
+            autotuneEvents.push(entry);
         }
     }
 
     // Second pass: attach launch_diff events
     for (const entry of logEntries) {
-        if (entry.event_type === "launch_diff") { // No payload for launch_diff
+        if (entry.event_type === "launch_diff") {
             const hash = entry.hash;
             if (hash && kernelsByHash.has(hash)) {
                 const kernel = kernelsByHash.get(hash)!;
                 kernel.launchDiff = entry; // Attach the entire event object
             } else {
-                console.warn(`Could not find matching kernel for launch_diff hash: ${hash}`);
+                console.warn(
+                    `Could not find matching kernel for launch_diff hash: ${hash}`
+                );
             }
         }
     }
 
-    const finalKernels = Array.from(kernelsByHash.values());
-    return finalKernels;
+    // Third pass: Link autotune analysis events to kernels
+    for (const autotuneEvent of autotuneEvents) {
+        if (autotuneEvent.compilation_hashes) {
+            for (const hash of autotuneEvent.compilation_hashes) {
+                const kernel = kernelsByHash.get(hash);
+                if (kernel) {
+                    kernel.autotuneAnalyses.push(autotuneEvent);
+                }
+            }
+        }
+    }
+
+    return Array.from(kernelsByHash.values());
+}
+
+export interface AutotuneAnalysisEvent {
+  event_type: "autotune_analysis";
+  session_id: string;
+  name: string;
+  selected_hash: string | null;
+  compilation_hashes: string[];
+  common_info: {
+    stack: any[];
+    python_source: any;
+  };
+  configs: {
+    config_params: Record<string, any>;
+    compilation_hash: string;
+  }[];
 }
