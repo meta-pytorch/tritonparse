@@ -756,7 +756,7 @@ def maybe_trace_triton(
 
     # Add timing information if available
     if times:
-        trace_data["times"] = times
+        trace_data["metadata"]["times"] = times
     # Log the collected information through the tracing system
     trace_structured_triton(
         event_type,
