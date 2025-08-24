@@ -34,6 +34,14 @@ from triton.knobs import CompileTimes
 from tritonparse.structured_logging import convert, extract_python_source_info
 
 
+def should_keep_output() -> bool:
+    """Return True if test outputs (e.g., temp dirs) should be preserved.
+
+    Controlled by environment variable TEST_KEEP_OUTPUT=1.
+    """
+    return os.environ.get("TEST_KEEP_OUTPUT") == "1"
+
+
 class TestTritonparseCPU(unittest.TestCase):
     """CPU-only tests (no CUDA required)"""
 
@@ -286,8 +294,13 @@ class TestTritonparseCUDA(unittest.TestCase):
             assert len(parsed_files) > 0, "No files found in parsed output directory"
         finally:
             # Clean up
-            shutil.rmtree(temp_dir)
-            print("✓ Cleaned up temporary directory")
+            if should_keep_output():
+                print(
+                    f"✓ Preserving temporary directory (TEST_KEEP_OUTPUT=1): {temp_dir}"
+                )
+            else:
+                shutil.rmtree(temp_dir)
+                print("✓ Cleaned up temporary directory")
             tritonparse.structured_logging.clear_logging_config()
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
@@ -589,8 +602,13 @@ class TestTritonparseCUDA(unittest.TestCase):
 
         finally:
             # Clean up
-            shutil.rmtree(temp_dir)
-            print("✓ Cleaned up temporary directory")
+            if should_keep_output():
+                print(
+                    f"✓ Preserving temporary directory (TEST_KEEP_OUTPUT=1): {temp_dir}"
+                )
+            else:
+                shutil.rmtree(temp_dir)
+                print("✓ Cleaned up temporary directory")
             tritonparse.structured_logging.clear_logging_config()
 
 
