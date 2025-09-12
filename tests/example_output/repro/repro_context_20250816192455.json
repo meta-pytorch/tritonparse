@@ -1,0 +1,448 @@
+[
+  {
+    "compilation_metadata": {
+      "allowed_dot_input_precisions": [
+        "tf32",
+        "tf32x3",
+        "ieee"
+      ],
+      "arch": "sm90",
+      "backend_name": "cuda",
+      "cluster_dims": [
+        1,
+        1,
+        1
+      ],
+      "debug": false,
+      "default_dot_input_precision": "tf32",
+      "deprecated_fp8_dot_operand_dtypes": [
+        "fp8e4b15"
+      ],
+      "enable_fp_fusion": true,
+      "extern_libs": [
+        [
+          "libdevice",
+          "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/triton/backends/nvidia/lib/libdevice.10.bc"
+        ]
+      ],
+      "global_scratch_align": 1,
+      "global_scratch_size": 0,
+      "hash": "3879173b7390886e64802fd88af12f9a7c0dcb6550e23d866dc27e4b5714ae64",
+      "ir_override": null,
+      "launch_cooperative_grid": false,
+      "launch_pdl": false,
+      "max_num_imprecise_acc_default": 1073741824,
+      "maxnreg": null,
+      "name": "_topk_forward",
+      "num_ctas": 1,
+      "num_stages": 3,
+      "num_warps": 4,
+      "ptx_options": null,
+      "ptx_version": null,
+      "sanitize_overflow": true,
+      "shared": 528,
+      "supported_fp8_dtypes": [
+        "fp8e4b15",
+        "fp8e4nv",
+        "fp8e5"
+      ],
+      "target": {
+        "arch": 90,
+        "backend": "cuda",
+        "warp_size": 32
+      },
+      "tensordesc_meta": [],
+      "tmem_size": 0,
+      "triton_version": "3.4.0"
+    },
+    "event_type": "launch",
+    "extracted_args": {
+      "APPLY_SOFTMAX": {
+        "type": "bool",
+        "value": true
+      },
+      "BLOCK_M": {
+        "type": "int",
+        "value": 32
+      },
+      "BLOCK_N": {
+        "type": "int",
+        "value": 32
+      },
+      "BLOCK_S": {
+        "type": "int",
+        "value": 128
+      },
+      "Bits": {
+        "data_ptr": "0x7eff45fffe00",
+        "device": "cuda:0",
+        "dtype": "torch.uint32",
+        "element_size": 4,
+        "is_contiguous": true,
+        "memory_usage": 304,
+        "numel": 76,
+        "shape": [
+          76,
+          1
+        ],
+        "storage_offset": 0,
+        "stride": [
+          1,
+          96
+        ],
+        "type": "tensor"
+      },
+      "N_EXPTS_ACT": {
+        "type": "int",
+        "value": 4
+      },
+      "N_EXPTS_PAD": {
+        "type": "int",
+        "value": 32
+      },
+      "S": {
+        "data_ptr": "0x7f000bfffc00",
+        "device": "cuda:0",
+        "dtype": "torch.int32",
+        "element_size": 4,
+        "is_contiguous": true,
+        "memory_usage": 512,
+        "numel": 128,
+        "shape": [
+          128
+        ],
+        "storage_offset": 0,
+        "stride": [
+          1
+        ],
+        "type": "tensor"
+      },
+      "USE_PROVIDED_INDX": {
+        "type": "bool",
+        "value": false
+      },
+      "X": {
+        "dtype": "torch.bfloat16",
+        "shape": [
+          76,
+          32
+        ],
+        "shape_max": [
+          76,
+          32
+        ],
+        "storage": {
+          "data": {
+            "data_ptr": "0x7eff55e00000",
+            "device": "cuda:0",
+            "dtype": "torch.bfloat16",
+            "element_size": 2,
+            "is_contiguous": true,
+            "memory_usage": 4864,
+            "numel": 2432,
+            "shape": [
+              76,
+              32
+            ],
+            "storage_offset": 0,
+            "stride": [
+              32,
+              1
+            ],
+            "type": "tensor"
+          },
+          "layout": {
+            "initial_shape": [
+              76,
+              32
+            ],
+            "name": null,
+            "type": "StridedLayout"
+          },
+          "type": "triton_kernels.tensor.Storage"
+        },
+        "type": "triton_kernels.tensor.Tensor"
+      },
+      "Yi": {
+        "data_ptr": "0x7f000bfff800",
+        "device": "cuda:0",
+        "dtype": "torch.int16",
+        "element_size": 2,
+        "is_contiguous": true,
+        "memory_usage": 608,
+        "numel": 304,
+        "shape": [
+          76,
+          4
+        ],
+        "storage_offset": 0,
+        "stride": [
+          4,
+          1
+        ],
+        "type": "tensor"
+      },
+      "Yv": {
+        "data_ptr": "0x7f000bffc600",
+        "device": "cuda:0",
+        "dtype": "torch.bfloat16",
+        "element_size": 2,
+        "is_contiguous": true,
+        "memory_usage": 608,
+        "numel": 304,
+        "shape": [
+          76,
+          4
+        ],
+        "storage_offset": 0,
+        "stride": [
+          4,
+          1
+        ],
+        "type": "tensor"
+      },
+      "n_expts_tot": {
+        "type": "int",
+        "value": 32
+      },
+      "n_rows": {
+        "type": "int",
+        "value": 76
+      },
+      "s_blocks": {
+        "type": "int",
+        "value": 1
+      },
+      "stride_rm": {
+        "type": "int",
+        "value": 1
+      },
+      "stride_rn": {
+        "type": "int",
+        "value": 96
+      },
+      "stride_xm": {
+        "type": "int",
+        "value": 32
+      },
+      "stride_ym": {
+        "type": "int",
+        "value": 4
+      }
+    },
+    "function": null,
+    "grid": [
+      3
+    ],
+    "name": "_topk_forward",
+    "pid": 3148601,
+    "stack": [
+      {
+        "filename": "/storage/users/yhao24/ml_scripts/gpt-oss/run.py",
+        "line": 23,
+        "loc": "result = generator(",
+        "name": "<module>"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/pipelines/text_generation.py",
+        "line": 314,
+        "loc": "return super().__call__(Chat(text_inputs), **kwargs)",
+        "name": "__call__"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/pipelines/base.py",
+        "line": 1458,
+        "loc": "return self.run_single(inputs, preprocess_params, forward_params, postprocess_params)",
+        "name": "__call__"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/pipelines/base.py",
+        "line": 1465,
+        "loc": "model_outputs = self.forward(model_inputs, **forward_params)",
+        "name": "run_single"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/pipelines/base.py",
+        "line": 1365,
+        "loc": "model_outputs = self._forward(model_inputs, **forward_params)",
+        "name": "forward"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/pipelines/text_generation.py",
+        "line": 419,
+        "loc": "output = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)",
+        "name": "_forward"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/utils/_contextlib.py",
+        "line": 120,
+        "loc": "return func(*args, **kwargs)",
+        "name": "decorate_context"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/generation/utils.py",
+        "line": 2629,
+        "loc": "result = self._sample(",
+        "name": "generate"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/generation/utils.py",
+        "line": 3610,
+        "loc": "outputs = self(**model_inputs, return_dict=True)",
+        "name": "_sample"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1773,
+        "loc": "return self._call_impl(*args, **kwargs)",
+        "name": "_wrapped_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1784,
+        "loc": "return forward_call(*args, **kwargs)",
+        "name": "_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/utils/generic.py",
+        "line": 959,
+        "loc": "output = func(self, *args, **kwargs)",
+        "name": "wrapper"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/models/gpt_oss/modeling_gpt_oss.py",
+        "line": 658,
+        "loc": "outputs: MoeModelOutputWithPast = self.model(",
+        "name": "forward"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1773,
+        "loc": "return self._call_impl(*args, **kwargs)",
+        "name": "_wrapped_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1784,
+        "loc": "return forward_call(*args, **kwargs)",
+        "name": "_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/utils/generic.py",
+        "line": 1083,
+        "loc": "outputs = func(self, *args, **kwargs)",
+        "name": "wrapper"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/models/gpt_oss/modeling_gpt_oss.py",
+        "line": 491,
+        "loc": "hidden_states = decoder_layer(",
+        "name": "forward"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/modeling_layers.py",
+        "line": 94,
+        "loc": "return super().__call__(*args, **kwargs)",
+        "name": "__call__"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1773,
+        "loc": "return self._call_impl(*args, **kwargs)",
+        "name": "_wrapped_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1784,
+        "loc": "return forward_call(*args, **kwargs)",
+        "name": "_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/models/gpt_oss/modeling_gpt_oss.py",
+        "line": 370,
+        "loc": "hidden_states, _ = self.mlp(hidden_states)  # diff with llama: router scores",
+        "name": "forward"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1773,
+        "loc": "return self._call_impl(*args, **kwargs)",
+        "name": "_wrapped_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/nn/modules/module.py",
+        "line": 1784,
+        "loc": "return forward_call(*args, **kwargs)",
+        "name": "_call_impl"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/transformers/integrations/mxfp4.py",
+        "line": 298,
+        "loc": "routing_data, gather_idx, scatter_idx = routing(router_logits, self.router.top_k)",
+        "name": "mlp_forward"
+      },
+      {
+        "filename": "/home/users/yhao24/.cache/huggingface/hub/models--kernels-community--triton_kernels/snapshots/1d2e9557ac0d4c651055a209055748d4db0fe65b/build/torch-universal/triton_kernels/routing.py",
+        "line": 296,
+        "loc": "expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act,  #",
+        "name": "routing"
+      },
+      {
+        "filename": "/home/users/yhao24/.cache/huggingface/hub/models--kernels-community--triton_kernels/snapshots/1d2e9557ac0d4c651055a209055748d4db0fe65b/build/torch-universal/triton_kernels/topk.py",
+        "line": 87,
+        "loc": "ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)",
+        "name": "topk"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/torch/autograd/function.py",
+        "line": 576,
+        "loc": "return super().apply(*args, **kwargs)  # type: ignore[misc]",
+        "name": "apply"
+      },
+      {
+        "filename": "/home/users/yhao24/.cache/huggingface/hub/models--kernels-community--triton_kernels/snapshots/1d2e9557ac0d4c651055a209055748d4db0fe65b/build/torch-universal/triton_kernels/topk.py",
+        "line": 72,
+        "loc": "y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)",
+        "name": "forward"
+      },
+      {
+        "filename": "/home/users/yhao24/.cache/huggingface/hub/models--kernels-community--triton_kernels/snapshots/1d2e9557ac0d4c651055a209055748d4db0fe65b/build/torch-universal/triton_kernels/topk.py",
+        "line": 41,
+        "loc": "_topk_forward[(pids, )](",
+        "name": "topk_forward"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/triton/runtime/jit.py",
+        "line": 390,
+        "loc": "return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)",
+        "name": "<lambda>"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/triton/runtime/jit.py",
+        "line": 617,
+        "loc": "kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,",
+        "name": "run"
+      },
+      {
+        "filename": "/scratch/yhao/miniconda3/envs/ptf/lib/python3.12/site-packages/triton/backends/nvidia/driver.py",
+        "line": 708,
+        "loc": "self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,",
+        "name": "__call__"
+      },
+      {
+        "filename": "/storage/users/yhao24/d/tritonparse/tritonparse/structured_logging.py",
+        "line": 1038,
+        "loc": "trace_structured_triton(\"launch\", metadata_fn=lambda: convert(trace_data))",
+        "name": "__call__"
+      },
+      {
+        "filename": "/storage/users/yhao24/d/tritonparse/tritonparse/structured_logging.py",
+        "line": 742,
+        "loc": "metadata_dict[\"stack\"] = get_stack_trace()",
+        "name": "trace_structured_triton"
+      }
+    ],
+    "stream": 0,
+    "timestamp": "2025-08-16T13:54:46.%fZ"
+  }
+]

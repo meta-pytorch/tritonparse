@@ -183,11 +183,78 @@ def convert(obj):
             asdict(obj)
         )  # Convert dataclass to dict and then process that dict
 
+    if _is_triton_kernels_layout(obj):
+        layout_info = {"type": type(obj).__name__}
+        if hasattr(obj, "initial_shape"):
+            layout_info["initial_shape"] = convert(obj.initial_shape)
+        if hasattr(obj, "name"):
+            layout_info["name"] = convert(obj.name)
+        return layout_info
+
     # 4. Common Triton constexpr objects
     if isinstance(obj, dtype):
         return f"triton.language.core.dtype('{str(obj)}')"
+
+    if TORCH_INSTALLED and isinstance(obj, torch.dtype):
+        return str(obj)
+
     log.warning(f"Unknown type: {type(obj)}")
     return str(obj)  # Return primitive types as-is
+
+
+def _is_triton_kernels_layout(obj):
+    """
+    Check if an object is an instance of a Layout class from a
+    triton_kernels module by checking its MRO.
+    """
+    t = type(obj)
+    for base_class in t.__mro__:
+        module_name = getattr(base_class, "__module__", "")
+        type_name = getattr(base_class, "__name__", "")
+        if type_name == "Layout" and module_name.startswith("triton_kernels"):
+            return True
+    return False
+
+
+def _is_from_triton_kernels_module(obj):
+    """
+    Check if an object is an instance of Tensor or Storage from a
+    triton_kernels module.
+    """
+    t = type(obj)
+    module_name = getattr(t, "__module__", "")
+    type_name = getattr(t, "__name__", "")
+    return type_name in ("Tensor", "Storage") and module_name.startswith(
+        "triton_kernels"
+    )
+
+
+def _log_torch_tensor_info(tensor_value):
+    """
+    Extracts metadata from a torch.Tensor object.
+
+    Args:
+        tensor_value (torch.Tensor): The tensor to extract information from.
+
+    Returns:
+        dict: A dictionary containing tensor metadata.
+    """
+    arg_info = {}
+    arg_info["type"] = "tensor"
+    arg_info["shape"] = list(tensor_value.shape)
+    arg_info["dtype"] = str(tensor_value.dtype)
+    arg_info["device"] = str(tensor_value.device)
+    arg_info["stride"] = list(tensor_value.stride())
+    arg_info["numel"] = tensor_value.numel()
+    arg_info["is_contiguous"] = tensor_value.is_contiguous()
+    arg_info["element_size"] = tensor_value.element_size()
+    arg_info["storage_offset"] = tensor_value.storage_offset()
+    # Memory usage in bytes
+    arg_info["memory_usage"] = tensor_value.numel() * tensor_value.element_size()
+    # Add data_ptr for memory tracking (optional)
+    if hasattr(tensor_value, "data_ptr"):
+        arg_info["data_ptr"] = hex(tensor_value.data_ptr())
+    return arg_info
 
 
 def maybe_enable_debug_logging():
@@ -769,7 +836,8 @@ def maybe_trace_triton(
 
 def extract_arg_info(arg_dict):
     """
-    Extract detailed information from kernel arguments, especially for PyTorch tensors.
+    Extract detailed information from kernel arguments, especially for PyTorch
+    tensors.
 
     Args:
         arg_dict: Dictionary of kernel arguments
@@ -785,19 +853,40 @@ def extract_arg_info(arg_dict):
         # Check if it's a PyTorch tensor
         if TORCH_INSTALLED and isinstance(arg_value, torch.Tensor):
             arg_info["type"] = "tensor"
-            arg_info["shape"] = list(arg_value.shape)
-            arg_info["dtype"] = str(arg_value.dtype)
-            arg_info["device"] = str(arg_value.device)
-            arg_info["stride"] = list(arg_value.stride())
-            arg_info["numel"] = arg_value.numel()
-            arg_info["is_contiguous"] = arg_value.is_contiguous()
-            arg_info["element_size"] = arg_value.element_size()
-            arg_info["storage_offset"] = arg_value.storage_offset()
-            # Memory usage in bytes
-            arg_info["memory_usage"] = arg_value.numel() * arg_value.element_size()
-            # Add data_ptr for memory tracking (optional)
-            if hasattr(arg_value, "data_ptr"):
-                arg_info["data_ptr"] = hex(arg_value.data_ptr())
+            arg_info.update(_log_torch_tensor_info(arg_value))
+        # Handle custom Tensor/Storage types from triton_kernels
+        elif _is_from_triton_kernels_module(arg_value):
+            type_name = type(arg_value).__name__
+            arg_info["type"] = f"triton_kernels.tensor.{type_name}"
+
+            if type_name == "Tensor":
+                # Dump all attributes needed to reconstruct the Tensor wrapper
+                if hasattr(arg_value, "shape"):
+                    arg_info["shape"] = convert(arg_value.shape)
+                if hasattr(arg_value, "shape_max"):
+                    arg_info["shape_max"] = convert(arg_value.shape_max)
+                if hasattr(arg_value, "dtype"):
+                    arg_info["dtype"] = convert(arg_value.dtype)
+                if hasattr(arg_value, "storage"):
+                    # Recursively process the storage, which can be another
+                    # custom type or a torch.Tensor
+                    storage_arg = {"storage": arg_value.storage}
+                    arg_info["storage"] = extract_arg_info(storage_arg)["storage"]
+
+            elif type_name == "Storage":
+                # Dump all attributes needed to reconstruct the Storage object
+                if (
+                    hasattr(arg_value, "data")
+                    and TORCH_INSTALLED
+                    and isinstance(arg_value.data, torch.Tensor)
+                ):
+                    # The 'data' is a torch.Tensor, log its metadata fully
+                    arg_info["data"] = _log_torch_tensor_info(arg_value.data)
+                if hasattr(arg_value, "layout"):
+                    arg_info["layout"] = convert(arg_value.layout)
+            else:
+                log.warning(f"Unknown type: {type(arg_value)}")
+
         # Handle scalar values
         elif isinstance(arg_value, (int, float, bool)):
             arg_info["type"] = type(arg_value).__name__

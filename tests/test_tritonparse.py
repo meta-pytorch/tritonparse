@@ -6,6 +6,7 @@ TORCHINDUCTOR_FX_GRAPH_CACHE=0 TRITONPARSE_DEBUG=1 python -m unittest tests.test
 ```
 """
 
+import gzip
 import json
 import os
 import shutil
@@ -572,8 +573,6 @@ class TestTritonparseCUDA(unittest.TestCase):
             )
 
             # Unzip and check launch_diff events in the .ndjson.gz file
-            import gzip
-
             for ndjson_gz_file in ndjson_gz_files:
                 ndjson_gz_path = os.path.join(parsed_output_path, ndjson_gz_file)
                 launch_diff_count = 0
@@ -599,6 +598,97 @@ class TestTritonparseCUDA(unittest.TestCase):
                     launch_diff_count == 5
                 ), f"Expected 5 launch_diff events, found {launch_diff_count}"
                 print("✓ Verified 5 launch_diff events in parsed output")
+
+        finally:
+            # Clean up
+            if should_keep_output():
+                print(
+                    f"✓ Preserving temporary directory (TEST_KEEP_OUTPUT=1): {temp_dir}"
+                )
+            else:
+                shutil.rmtree(temp_dir)
+                print("✓ Cleaned up temporary directory")
+            tritonparse.structured_logging.clear_logging_config()
+
+    def test_triton_kernels_Tensor(self):
+        from triton_kernels.topk_details._topk_forward import _topk_forward
+        from tritonparse.reproducer import utils as reproducer_utils
+
+        input_json_path = os.path.join(
+            os.path.dirname(__file__),
+            "example_output",
+            "repro",
+            "repro_context_20250816192455.json",
+        )
+        grid, args_dict = reproducer_utils.create_args_from_json(input_json_path)
+        print("Generated kernel arguments dictionary:")
+        for name, arg in args_dict.items():
+            print(f"  {name}: {arg}")
+        print(f"Grid: {grid}")
+
+        # Set up test environment
+        temp_dir = tempfile.mkdtemp()
+        temp_dir_logs = os.path.join(temp_dir, "logs")
+        temp_dir_parsed = os.path.join(temp_dir, "parsed_output")
+        os.makedirs(temp_dir_logs, exist_ok=True)
+        os.makedirs(temp_dir_parsed, exist_ok=True)
+        print(f"Temporary directory: {temp_dir}")
+
+        # Initialize logging
+        tritonparse.structured_logging.init(temp_dir_logs, enable_trace_launch=True)
+        try:
+            _topk_forward[tuple(grid)](
+                args_dict["X"],
+                args_dict["stride_xm"],
+                args_dict["Yv"],
+                args_dict["Yi"],
+                args_dict["stride_ym"],
+                args_dict["USE_PROVIDED_INDX"],
+                args_dict["Bits"],
+                args_dict["stride_rm"],
+                args_dict["stride_rn"],
+                args_dict["n_rows"],
+                args_dict["n_expts_tot"],
+                args_dict["S"],
+                args_dict["BLOCK_S"],
+                args_dict["s_blocks"],
+                args_dict["APPLY_SOFTMAX"],
+                args_dict["BLOCK_M"],
+                args_dict["N_EXPTS_PAD"],
+                args_dict["N_EXPTS_ACT"],
+                args_dict["BLOCK_N"],
+            )
+            torch.cuda.synchronize()
+
+            # Read the only ndjson file under temp_dir_logs/logs/
+            ndjson_files = [
+                f for f in os.listdir(temp_dir_logs) if f.endswith(".ndjson")
+            ]
+            assert (
+                len(ndjson_files) == 1
+            ), f"Expected exactly one ndjson in {temp_dir_logs}, found {len(ndjson_files)}: {ndjson_files}"
+
+            ndjson_path = os.path.join(temp_dir_logs, ndjson_files[0])
+            launches = []
+            with open(ndjson_path, "r") as f:
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        event = json.loads(line.strip())
+                        if event.get("event_type") == "launch":
+                            launches.append(event)
+                    except json.JSONDecodeError as e:
+                        self.fail(f"JSON decode error at line {line_num}: {e}")
+
+            assert (
+                len(launches) == 1
+            ), f"Expected exactly one launch event, found {len(launches)}"
+
+            launch = launches[0]
+            extracted_args = launch.get("extracted_args", {})
+            assert "X" in extracted_args, "Missing 'X' in extracted_args"
+            assert (
+                extracted_args["X"].get("type") == "triton_kernels.tensor.Tensor"
+            ), f"X.type is {extracted_args['X'].get('type')}"
 
         finally:
             # Clean up

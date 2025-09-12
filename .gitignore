@@ -54,6 +54,7 @@ parsed_output/
 *.ndjson.gz
 *.json
 !tests/example_output/
+!tests/example_output/repro/**
 !tests/example_output/logs/**
 !tests/example_output/parsed_output/**
 !tests/example_output/parsed_output_complex/**

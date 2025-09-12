@@ -142,7 +142,7 @@ jobs:
                   TRITON_COMMIT: ${{ steps.triton-commit.outputs.commit }}
               run: |
                   bash .ci/install-triton.sh
-
+                  bash .ci/install-triton-kernels.sh
             - name: Install project dependencies
               env:
                   CONDA_ENV: tritonparse
@@ -192,11 +192,11 @@ jobs:
               run: |
                   bash .ci/setup.sh
 
-            - name: Install Triton from pip
+            - name: Install Triton kernels
               env:
                   CONDA_ENV: tritonparse-pip
               run: |
-                  bash .ci/install-triton-pip.sh
+                  bash .ci/install-triton-kernels.sh
 
             - name: Install project dependencies
               env:
