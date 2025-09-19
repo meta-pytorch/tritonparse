@@ -40,7 +40,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Union
 
 
 def parse_line_ranges(lines_arg: str) -> set[int]:
@@ -174,7 +174,7 @@ def load_ndjson(
     except FileNotFoundError:
         print(f"Error: File '{file_path}' not found.", file=sys.stderr)
         raise
-    except Exception as e:
+    except (OSError, UnicodeDecodeError) as e:
         print(f"Error reading file '{file_path}': {e}", file=sys.stderr)
         raise
 
@@ -201,19 +201,21 @@ def load_ndjson(
     return json_objects
 
 
-def save_prettified_json(json_objects: List[Any], output_path: Path) -> None:
+def save_prettified_json(
+    json_objects: Union[List[Any], Any], output_path: Path
+) -> None:
     """
-    Save list of JSON objects to a prettified JSON file.
+    Save JSON data to a prettified JSON file.
 
     Args:
-        json_objects: List of JSON objects to save
+        json_objects: Either a list of JSON objects or a single JSON-serializable object
         output_path: Path where to save the prettified JSON file
     """
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(json_objects, f, indent=2, ensure_ascii=False, sort_keys=True)
         print(f"Successfully converted to prettified JSON: {output_path}")
-    except Exception as e:
+    except OSError as e:
         print(f"Error writing to file '{output_path}': {e}", file=sys.stderr)
         raise
 
