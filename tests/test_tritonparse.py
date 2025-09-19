@@ -706,6 +706,121 @@ class TestTritonparseCUDA(unittest.TestCase):
                 print("✓ Cleaned up temporary directory")
             tritonparse.structured_logging.clear_logging_config()
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
+    def test_reproducer_end_to_end(self):
+        """End-to-end test for reproducer: generate logs, build script, run it."""
+        import subprocess as _subprocess
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        # 1) Prepare temp dirs
+        temp_dir = tempfile.mkdtemp()
+        logs_dir = os.path.join(temp_dir, "logs")
+        out_dir = os.path.join(temp_dir, "repro_output")
+        os.makedirs(logs_dir, exist_ok=True)
+        os.makedirs(out_dir, exist_ok=True)
+
+        # 2) Write a simple module-level Triton kernel to a temp file
+        kernel_dir = os.path.join(temp_dir, "kernels")
+        os.makedirs(kernel_dir, exist_ok=True)
+        kernel_file = os.path.join(kernel_dir, "simple_kernel.py")
+        kernel_src = (
+            "import triton\n"
+            "import triton.language as tl\n"
+            "import torch\n"
+            "\n"
+            "@triton.jit\n"
+            "def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):\n"
+            "    pid = tl.program_id(axis=0)\n"
+            "    block_start = pid * BLOCK_SIZE\n"
+            "    offsets = block_start + tl.arange(0, BLOCK_SIZE)\n"
+            "    mask = offsets < n_elements\n"
+            "    x = tl.load(x_ptr + offsets, mask=mask)\n"
+            "    y = tl.load(y_ptr + offsets, mask=mask)\n"
+            "    tl.store(out_ptr + offsets, x + y, mask=mask)\n"
+        )
+        with open(kernel_file, "w", encoding="utf-8") as f:
+            f.write(kernel_src)
+
+        # 3) Generate logs by running the kernel once
+        tritonparse.structured_logging.init(logs_dir, enable_trace_launch=True)
+        try:
+            if kernel_dir not in _sys.path:
+                _sys.path.insert(0, kernel_dir)
+            import importlib as _importlib
+
+            mod = _importlib.import_module("simple_kernel")
+            device = torch.device("cuda:0")
+            torch.manual_seed(0)
+            n = 256
+            x = torch.randn((n,), device=device, dtype=torch.float32)
+            y = torch.randn((n,), device=device, dtype=torch.float32)
+            out = torch.empty_like(x)
+            BLOCK_SIZE = 64
+            grid = (triton.cdiv(n, BLOCK_SIZE),)
+            mod.add_kernel[grid](x, y, out, n, BLOCK_SIZE)
+            torch.cuda.synchronize()
+        finally:
+            tritonparse.structured_logging.clear_logging_config()
+
+        # 4) Find the NDJSON and compute launch event index
+        ndjson_files = [
+            os.path.join(logs_dir, f)
+            for f in os.listdir(logs_dir)
+            if f.endswith(".ndjson")
+        ]
+        assert ndjson_files, f"No ndjson found in {logs_dir}"
+        ndjson_path = max(ndjson_files, key=os.path.getmtime)
+
+        from tritonparse.tools.prettify_ndjson import load_ndjson as _load_ndjson
+
+        events = _load_ndjson(_Path(ndjson_path), save_irs=True)
+        launch_indices = [
+            i for i, ev in enumerate(events) if ev.get("event_type") == "launch"
+        ]
+        assert launch_indices, "No launch event found in ndjson"
+        line_index = launch_indices[0]
+
+        # 5) Build reproducer
+        from tritonparse.reproducer.orchestrator import reproduce
+
+        reproduce(
+            input_path=ndjson_path,
+            line_index=line_index,
+            out_dir=out_dir,
+            template="example",
+        )
+
+        # 6) Locate generated script and context under out_dir/add_kernel/
+        kernel_out_dir = os.path.join(out_dir, "add_kernel")
+        assert os.path.isdir(
+            kernel_out_dir
+        ), f"Kernel output dir not found: {kernel_out_dir}"
+        gen_scripts = [f for f in os.listdir(kernel_out_dir) if f.endswith(".py")]
+        gen_jsons = [f for f in os.listdir(kernel_out_dir) if f.endswith(".json")]
+        assert gen_scripts, f"No generated script in {kernel_out_dir}"
+        assert gen_jsons, f"No generated context json in {kernel_out_dir}"
+        script_path = os.path.join(kernel_out_dir, sorted(gen_scripts)[-1])
+
+        # 7) Execute generated script and assert success output
+        proc = _subprocess.run(
+            [
+                _sys.executable,
+                script_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("Kernel execution finished.", proc.stdout)
+
+        # Cleanup
+        if should_keep_output():
+            print(f"✓ Preserving temporary directory (TEST_KEEP_OUTPUT=1): {temp_dir}")
+        else:
+            shutil.rmtree(temp_dir)
+            print("✓ Cleaned up temporary directory")
+
 
 if __name__ == "__main__":
     unittest.main()

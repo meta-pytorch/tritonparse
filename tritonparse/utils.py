@@ -16,21 +16,15 @@ from .common import (
 )
 from .source_type import Source, SourceType
 
-# argument parser for OSS
-parser = None
 
-
-def init_parser():
-    global parser
-
-    parser = argparse.ArgumentParser(
-        description="analyze triton structured logs", conflict_handler="resolve"
-    )
-
-    # Add arguments for the parse command
+def _add_parse_args(parser: argparse.ArgumentParser) -> None:
+    """Add common 'parse' subcommand arguments to a parser."""
     parser.add_argument(
         "source",
-        help="Source of torch logs to be analyzed. It is expected to path to a local directory or log",
+        help=(
+            "Source of torch logs to be analyzed. It is expected to path to a local "
+            "directory or log"
+        ),
     )
     parser.add_argument(
         "-o",
@@ -40,7 +34,9 @@ def init_parser():
     )
     parser.add_argument(
         "--overwrite",
-        help="Delete out directory if it already exists. Only does something if --out is set",
+        help=(
+            "Delete out directory if it already exists. Only does something if --out is set"
+        ),
         action="store_true",
     )
     parser.add_argument("-r", "--rank", help="Rank of logs to be analyzed", type=int)
@@ -54,7 +50,6 @@ def init_parser():
         from tritonparse.fb.utils import append_parser
 
         append_parser(parser)
-    return parser
 
 
 def oss_run(
@@ -111,12 +106,6 @@ def oss_run(
     else:
         out_dir = str(Path(parsed_log_dir).absolute())
     print_parsed_files_summary(out_dir)
-
-
-def unified_parse_from_cli():
-    parser = init_parser()
-    args = parser.parse_args()
-    return unified_parse(**vars(args))
 
 
 def unified_parse(
