@@ -2,7 +2,9 @@ import importlib
 import importlib.util
 import json
 import sys
+from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 
 import torch
 
@@ -145,3 +147,24 @@ def _create_arg_from_info(arg_info):
     else:
         print(f"Warning: Unhandled argument type '{arg_type}'. Returning None.")
         return None
+
+
+def determine_output_paths(out_dir: str, kernel_name: str):
+    """
+    Determine output file paths for reproducer script and context data.
+
+    Args:
+        out_dir: Output directory path. If empty, uses default location.
+        kernel_name: Name of the kernel for default directory naming.
+
+    Returns:
+        Tuple of (python_script_path, json_context_path) as Path objects.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    output_directory = Path(out_dir) / kernel_name
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    out_py_path = output_directory / f"repro_{timestamp}.py"
+    temp_json_path = output_directory / f"repro_context_{timestamp}.json"
+
+    return out_py_path, temp_json_path
