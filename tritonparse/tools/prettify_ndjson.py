@@ -40,7 +40,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Union
 
 
 def parse_line_ranges(lines_arg: str) -> set[int]:
@@ -201,12 +201,14 @@ def load_ndjson(
     return json_objects
 
 
-def save_prettified_json(json_objects: List[Any], output_path: Path) -> None:
+def save_prettified_json(
+    json_objects: Union[List[Any], Any], output_path: Path
+) -> None:
     """
-    Save list of JSON objects to a prettified JSON file.
+    Save JSON data to a prettified JSON file.
 
     Args:
-        json_objects: List of JSON objects to save
+        json_objects: Either a list of JSON objects or a single JSON-serializable object
         output_path: Path where to save the prettified JSON file
     """
     try:
