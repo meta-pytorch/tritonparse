@@ -33,6 +33,16 @@ AMDGCN_LOC_PATTERN = re.compile(
 )
 
 
+# alias loc definitions in TTGIR/TTIR
+# Example: #loc16 = loc("pid"(#loc2))
+ALIAS_WITH_NAME_PATTERN = re.compile(
+    r'#loc(\d+)\s*=\s*loc\("([^"]+)"\s*\(\s*#loc(\d+)\s*\)\s*\)'
+)
+
+# Example: #loc20 = loc(#loc16)
+ALIAS_SIMPLE_PATTERN = re.compile(r'#loc(\d+)\s*=\s*loc\(\s*#loc(\d+)\s*\)')
+
+
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     """
     Extracts location definitions from the given IR content.
@@ -61,6 +71,42 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     for loc_id, filename, line, col in LOC_PATTERN.findall(ir_content):
         key = loc_id
         locations[key] = {"file": filename, "line": int(line), "column": int(col)}
+
+    # Handle alias-style loc definitions that reference another #loc
+    # Build alias map first: alias_id -> target_id
+    alias_map: Dict[str, str] = {}
+    for m in ALIAS_WITH_NAME_PATTERN.finditer(ir_content):
+        alias_id, _name, target_id = m.groups()
+        alias_map[alias_id] = target_id
+    for m in ALIAS_SIMPLE_PATTERN.finditer(ir_content):
+        alias_id, target_id = m.groups()
+        alias_map[alias_id] = target_id
+
+    # Resolve aliases to base locations (file/line/column)
+    resolving_stack = set()
+
+    def resolve_alias(current_id: str) -> Dict[str, Any]:
+        # Already a concrete location
+        if current_id in locations:
+            return locations[current_id]
+        # Detect cycles
+        if current_id in resolving_stack:
+            return {}
+        resolving_stack.add(current_id)
+        parent_id = alias_map.get(current_id)
+        result: Dict[str, Any] = {}
+        if parent_id is not None:
+            base = resolve_alias(parent_id)
+            if base:
+                # copy to avoid sharing the same dict by reference
+                result = {"file": base.get("file"), "line": base.get("line"), "column": base.get("column")}
+                locations[current_id] = result
+        resolving_stack.remove(current_id)
+        return result
+
+    for alias_id in list(alias_map.keys()):
+        if alias_id not in locations:
+            resolve_alias(alias_id)
     return locations
 
 
