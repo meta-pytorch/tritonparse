@@ -40,7 +40,7 @@ ALIAS_WITH_NAME_PATTERN = re.compile(
 )
 
 # Example: #loc20 = loc(#loc16)
-ALIAS_SIMPLE_PATTERN = re.compile(r'#loc(\d+)\s*=\s*loc\(\s*#loc(\d+)\s*\)')
+ALIAS_SIMPLE_PATTERN = re.compile(r"#loc(\d+)\s*=\s*loc\(\s*#loc(\d+)\s*\)")
 
 
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
@@ -82,6 +82,28 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
         alias_id, target_id = m.groups()
         alias_map[alias_id] = target_id
 
+    # Build definition line map and alias name map by scanning lines
+    def_line_map: Dict[str, int] = {}
+    alias_name_map: Dict[str, str] = {}
+    main_loc_line: int = 0
+    for i, line in enumerate(ir_content.split("\n"), start=1):
+        if m := ALIAS_WITH_NAME_PATTERN.search(line):
+            alias_id, name, target_id = m.groups()
+            def_line_map[alias_id] = i
+            alias_name_map[alias_id] = name
+            # ensure alias map is populated even if only found in line scan
+            alias_map.setdefault(alias_id, target_id)
+        elif m := ALIAS_SIMPLE_PATTERN.search(line):
+            alias_id, target_id = m.groups()
+            def_line_map[alias_id] = i
+            alias_map.setdefault(alias_id, target_id)
+        if m2 := LOC_PATTERN.search(line):
+            base_id, _fn, _ln, _col = m2.groups()
+            def_line_map[base_id] = i
+        if re.search(r'#loc\s*=\s*loc\("[^"]+":\d+:\d+\)', line):
+            # main #loc = loc("file":line:col) without id
+            main_loc_line = main_loc_line or i
+
     # Resolve aliases to base locations (file/line/column)
     resolving_stack = set()
 
@@ -99,7 +121,11 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
             base = resolve_alias(parent_id)
             if base:
                 # copy to avoid sharing the same dict by reference
-                result = {"file": base.get("file"), "line": base.get("line"), "column": base.get("column")}
+                result = {
+                    "file": base.get("file"),
+                    "line": base.get("line"),
+                    "column": base.get("column"),
+                }
                 locations[current_id] = result
         resolving_stack.remove(current_id)
         return result
@@ -107,6 +133,18 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     for alias_id in list(alias_map.keys()):
         if alias_id not in locations:
             resolve_alias(alias_id)
+
+    # Attach definition line and alias metadata
+    for k, v in def_line_map.items():
+        if k in locations:
+            locations[k]["def_line"] = v
+    for alias_id, target_id in alias_map.items():
+        if alias_id in locations:
+            locations[alias_id]["alias_of"] = target_id
+            if alias_id in alias_name_map:
+                locations[alias_id]["alias_name"] = alias_name_map[alias_id]
+    if main_loc_line and "1" in locations:
+        locations["1"]["def_line"] = main_loc_line
     return locations
 
 

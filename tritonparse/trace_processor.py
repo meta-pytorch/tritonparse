@@ -78,6 +78,29 @@ def generate_source_mappings(
                 f"{ir_type}_line": ln,
             }
 
+    # Always include loc definition lines for highlighting definition sites
+    for loc_id, info in loc_defs.items():
+        def_line = info.get("def_line")
+        if not def_line:
+            continue
+        key = str(def_line)
+        if key in mappings:
+            # do not overwrite existing mapping for code lines
+            continue
+        entry = {
+            "file": info["file"],
+            "line": info["line"],
+            "column": info["column"],
+            f"{ir_type}_line": def_line,
+            "kind": "loc_def",
+            "loc_id": loc_id,
+        }
+        if "alias_of" in info:
+            entry["alias_of"] = info["alias_of"]
+        if "alias_name" in info:
+            entry["alias_name"] = info["alias_name"]
+        mappings[key] = entry
+
     return mappings
 
 
