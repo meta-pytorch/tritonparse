@@ -34,6 +34,10 @@ AMDGCN_LOC_PATTERN = re.compile(
     r".*loc\s+(\d+)\s+(\d+)\s+(\d+)(?:\s+[^;]*)?;\s*(.+?):(\d+):(\d+)"
 )
 
+# the definition of the SASS source mapping pattern.
+# Example: //## File "/path/to/source.py", line 188
+SASS_LOC_PATTERN = re.compile(r'//## File "([^"]+)", line (\d+)')
+
 
 # alias loc definitions in TTGIR/TTIR
 # Example: #loc16 = loc("pid"(#loc2))
@@ -208,6 +212,57 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     return locations
 
 
+    return mappings
+
+
+def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Extract source mappings from SASS content.
+    
+    SASS format:
+        Function:kernel_name
+        	//## File "/path/to/source.py", line 188
+        	//## File ".nv_debug_ptx_txt", line 19    # 跳过这种行
+        	        /*0000*/                   MOV R1, c[0x0][0x28] ;
+    
+    Args:
+        sass_content (str): The content of the SASS file as a string.
+    
+    Returns:
+        Dict[str, Dict[str, Any]]: A dictionary mapping line numbers to their corresponding
+        source file, line numbers, and column numbers.
+    """
+    mappings = {}
+    current_source_info = None
+    
+    lines = sass_content.split('\n')
+    
+    for line_num, line in enumerate(lines, 1):
+        # 跳过 .nv_debug_ptx_txt 相关的行
+        if '.nv_debug_ptx_txt' in line:
+            continue
+            
+        # 检查是否是源码位置注释
+        match = SASS_LOC_PATTERN.match(line.strip())
+        if match:
+            file_path, source_line = match.groups()
+            current_source_info = {
+                "file": file_path,
+                "line": int(source_line),
+                "column": 0,  # SASS 注释中没有列信息
+            }
+        # 检查是否是 SASS 指令行（包含 /*地址*/ 格式）
+        elif current_source_info and re.match(r'.*\/\*[0-9a-fA-F]+\*\/.*', line):
+            mappings[str(line_num)] = {
+                "file": current_source_info["file"],
+                "line": current_source_info["line"], 
+                "column": current_source_info["column"],
+                "sass_line": line_num
+            }
+            
+    return mappings
+
+
 def extract_code_locations(ir_content: str) -> Dict[int, str]:
     """
     Extracts code location mappings from the given IR content.
@@ -236,7 +291,7 @@ def extract_code_locations(ir_content: str) -> Dict[int, str]:
 
 
 def extract_ptx_amdgcn_mappings(
-    content: str, other_mappings: List[Any] = None, ir_type: str = "ptx"
+    content: str, other_mappings: List[Any] | None = None, ir_type: str = "ptx"
 ) -> Dict[str, Dict[str, Any]]:
     """
     Extract mappings from PTX code where `.loc` directives provide source file and line info.

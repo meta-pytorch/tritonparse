@@ -22,7 +22,7 @@ logger = get_logger("SourceMapping")
 
 
 def generate_source_mappings(
-    ir_content: str, ir_type: str, other_mappings: List[Any] = None
+    ir_content: str, ir_type: str, other_mappings: List[Any] | None = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     Generate source mappings from intermediate representation (IR) content to the source file.
@@ -52,6 +52,9 @@ def generate_source_mappings(
         other_mappings = []
     if ir_type == "ptx" or ir_type == "amdgcn":
         return extract_ptx_amdgcn_mappings(ir_content, other_mappings, ir_type)
+    elif ir_type == "sass":
+        from .ir_parser import extract_sass_mappings
+        return extract_sass_mappings(ir_content)
 
     loc_defs = extract_loc_definitions(ir_content)
     logger.debug(f"Found {len(loc_defs)} #loc definitions")
@@ -116,7 +119,7 @@ def process_ir(
     key: str,
     file_content: Dict[str, str],
     file_path: Dict[str, str],
-    other_mappings: List[Any] = None,
+    other_mappings: List[Any] | None = None,
 ):
     ir_content = load_ir_contents(key, file_content, file_path)
     if not ir_content:
@@ -151,17 +154,21 @@ def parse_single_trace_content(trace_content: str) -> str:
         ttgir_key = next((k for k in file_content if k.endswith(".ttgir")), None)
         ptx_key = next((k for k in file_content if k.endswith(".ptx")), None)
         amdgcn_key = next((k for k in file_content if k.endswith(".amdgcn")), None)
+        sass_key = next((k for k in file_content if k.endswith(".sass")), None)
         # Skip if no IR files found
-        if not (ttir_key or ttgir_key or ptx_key or amdgcn_key):
+        if not (ttir_key or ttgir_key or ptx_key or amdgcn_key or sass_key):
             logger.warning("No IR files found in the payload.")
             return trace_content
 
-        # generate ttir->source, ttgir->source, ptx->source
+        # generate ttir->source, ttgir->source, ptx->source, sass->source
         ttir_map = process_ir(ttir_key, file_content, file_path)
         ttgir_map = process_ir(ttgir_key, file_content, file_path)
         ptx_map = process_ir(ptx_key, file_content, file_path, [ttir_map, ttgir_map])
         amdgcn_map = process_ir(
             amdgcn_key, file_content, file_path, [ttir_map, ttgir_map]
+        )
+        sass_map = process_ir(
+            sass_key, file_content, file_path, [ttir_map, ttgir_map]
         )
 
         # Create bidirectional mappings between all IR types
@@ -170,6 +177,7 @@ def parse_single_trace_content(trace_content: str) -> str:
             "ttgir": ttgir_map,
             "ptx": ptx_map,
             "amdgcn": amdgcn_map,
+            "sass": sass_map,
         }
 
         # Create mappings between all pairs of IR types
@@ -199,6 +207,7 @@ def parse_single_trace_content(trace_content: str) -> str:
                 (ttgir_key, ttgir_map),
                 (ptx_key, ptx_map),
                 (amdgcn_key, amdgcn_map),
+                (sass_key, sass_map),
             ]
 
             for key, mapping in ir_keys_and_maps:
@@ -213,6 +222,7 @@ def parse_single_trace_content(trace_content: str) -> str:
             "ttgir": ttgir_map,
             **({"ptx": ptx_map} if ptx_map else {}),
             **({"amdgcn": amdgcn_map} if amdgcn_map else {}),
+            **({"sass": sass_map} if sass_map else {}),
             "python": py_map,
         }
     # NDJSON format requires a newline at the end of each line
