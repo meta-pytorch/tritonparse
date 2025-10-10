@@ -6,6 +6,7 @@ It contains a smallest testing example for a Triton kernel.
 import gzip
 import hashlib
 import importlib
+import importlib.util
 import io
 import json
 import logging
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Union
 
 import torch
+
+# {{IR_OVERRIDE_SETUP_PLACEHOLDER}}
 
 # {{KERNEL_SYSPATH_PLACEHOLDER}}
 

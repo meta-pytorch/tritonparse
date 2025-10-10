@@ -1,5 +1,7 @@
 import argparse
 
+from tritonparse.reproducer.types import KernelImportMode
+
 
 def _add_reproducer_args(parser: argparse.ArgumentParser) -> None:
     """Add common arguments for the reproducer to a parser."""
@@ -27,5 +29,18 @@ def _add_reproducer_args(parser: argparse.ArgumentParser) -> None:
         help=(
             "Template name (builtin, without .py) or a filesystem path to a .py file. "
             "Defaults to 'example'."
+        ),
+    )
+    parser.add_argument(
+        "--kernel-import",
+        type=KernelImportMode,
+        choices=list(KernelImportMode),
+        default=KernelImportMode.DEFAULT,
+        help=(
+            "Kernel import strategy:\n"
+            "  default: Import kernel from original file (current behavior)\n"
+            "  copy: Embed kernel source code directly in reproducer\n"
+            "  override-ttir: Use TTIR from compilation event (bypass Python frontend)\n"
+            "Defaults to 'default'."
         ),
     )

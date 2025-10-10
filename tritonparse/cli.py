@@ -73,6 +73,7 @@ def main():
             line_index=args.line,
             out_dir=args.out_dir,
             template=args.template,
+            kernel_import=args.kernel_import,
         )
     else:
         raise RuntimeError(f"Unknown command: {args.func}")

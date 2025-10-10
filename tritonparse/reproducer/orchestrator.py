@@ -7,6 +7,7 @@ from tritonparse.reproducer.placeholder_replacer import (
     PlaceholderReplacer,
 )
 from tritonparse.reproducer.templates.loader import load_template_code
+from tritonparse.reproducer.types import KernelImportMode
 from tritonparse.reproducer.utils import determine_output_paths
 
 from tritonparse.tools.prettify_ndjson import load_ndjson, save_prettified_json
@@ -19,6 +20,7 @@ def reproduce(
     out_dir: str,
     template: str,
     replacer: Optional[PlaceholderReplacer] = None,
+    kernel_import: KernelImportMode = KernelImportMode.DEFAULT,
 ) -> dict[str, Path]:
     """
     Generate a reproducer script from NDJSON trace file.
@@ -29,6 +31,7 @@ def reproduce(
         out_dir: Output directory for reproducer files.
         template: Template name to use for the reproducer.
         replacer: Optional custom PlaceholderReplacer instance. If None, uses DefaultPlaceholderReplacer.
+        kernel_import: Kernel import mode (DEFAULT or COPY).
     """
     logger.debug(f"Building bundle from {input_path} at line {line_index}")
     events = load_ndjson(Path(input_path))
@@ -43,6 +46,15 @@ def reproduce(
         out_dir, context_bundle.kernel_info.function_name
     )
     save_prettified_json(context_bundle.raw_launch_event, temp_json_path)
+
+    # Save compilation event JSON if using OVERRIDE_TTIR mode
+    comp_json_path = None
+    if kernel_import == KernelImportMode.OVERRIDE_TTIR:
+        comp_json_path = (
+            temp_json_path.parent / f"{temp_json_path.stem}_compilation.json"
+        )
+        save_prettified_json(context_bundle.raw_comp_event, comp_json_path)
+
     logger.debug("Loading reproducer template.")
     template_code = load_template_code(template)
 
@@ -51,7 +63,11 @@ def reproduce(
     if replacer is None:
         replacer = DefaultPlaceholderReplacer()
     final_code = replacer.replace(
-        template_code, context_bundle, temp_json_path=temp_json_path
+        template_code,
+        context_bundle,
+        temp_json_path=temp_json_path,
+        kernel_import=kernel_import,
+        comp_json_filename=comp_json_path.name if comp_json_path else None,
     )
 
     out_py_path.write_text(final_code, encoding="utf-8")
