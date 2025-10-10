@@ -46,6 +46,15 @@ def reproduce(
         out_dir, context_bundle.kernel_info.function_name
     )
     save_prettified_json(context_bundle.raw_launch_event, temp_json_path)
+
+    # Save compilation event JSON if using OVERRIDE_TTIR mode
+    comp_json_path = None
+    if kernel_import == KernelImportMode.OVERRIDE_TTIR:
+        comp_json_path = (
+            temp_json_path.parent / f"{temp_json_path.stem}_compilation.json"
+        )
+        save_prettified_json(context_bundle.raw_comp_event, comp_json_path)
+
     logger.debug("Loading reproducer template.")
     template_code = load_template_code(template)
 
@@ -58,6 +67,7 @@ def reproduce(
         context_bundle,
         temp_json_path=temp_json_path,
         kernel_import=kernel_import,
+        comp_json_filename=comp_json_path.name if comp_json_path else None,
     )
 
     out_py_path.write_text(final_code, encoding="utf-8")

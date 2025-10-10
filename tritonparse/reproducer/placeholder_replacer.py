@@ -77,6 +77,9 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         super().__init__()
         # Register all default handlers
         self.register("{{JSON_FILE_NAME_PLACEHOLDER}}", self._replace_json_filename)
+        self.register(
+            "# {{IR_OVERRIDE_SETUP_PLACEHOLDER}}", self._replace_ir_override_setup
+        )
         self.register("# {{KERNEL_SYSPATH_PLACEHOLDER}}", self._replace_kernel_syspath)
         self.register("# {{KERNEL_IMPORT_PLACEHOLDER}}", self._replace_kernel_import)
         self.register(
@@ -92,6 +95,65 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
             raise ValueError("temp_json_path is required for JSON filename replacement")
         return code.replace("{{JSON_FILE_NAME_PLACEHOLDER}}", temp_json_path.name)
 
+    def _replace_ir_override_setup(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace the IR override setup placeholder."""
+        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
+
+        if kernel_import != KernelImportMode.OVERRIDE_TTIR:
+            return code.replace("# {{IR_OVERRIDE_SETUP_PLACEHOLDER}}", "")
+
+        comp_json_filename = kwargs.get("comp_json_filename")
+        if not comp_json_filename:
+            raise ValueError("comp_json_filename is required for OVERRIDE_TTIR mode")
+
+        setup_code = f'''
+def create_ttir_tempfile():
+    """Extract TTIR from compilation event and create temporary file."""
+    script_dir = Path(__file__).resolve().parent
+    comp_json_file = script_dir / "{comp_json_filename}"
+    
+    with open(comp_json_file, 'r') as f:
+        comp_data = json.load(f)
+    
+    # Extract TTIR content
+    kernel_name = comp_data['payload']['metadata']['name']
+    ttir_key = f"{{kernel_name}}.ttir"
+    ttir_content = comp_data['payload']['file_content'][ttir_key]
+    
+    # Create temporary file
+    temp_file = tempfile.NamedTemporaryFile(
+        mode='w', 
+        suffix='.ttir', 
+        delete=False,
+        prefix=f'{{kernel_name}}_'
+    )
+    temp_file.write(ttir_content)
+    temp_file.close()
+    return temp_file.name
+
+
+# Monkeypatch triton.autotune to use our TTIR
+_ttir_file = create_ttir_tempfile()
+_original_autotune = None
+
+def _patched_autotune(configs, key=None, **kwargs):
+    """Patched autotune that uses our TTIR file."""
+    import triton
+    # Replace configs with our single config using ir_override
+    new_configs = [triton.Config(kwargs={{}}, ir_override=_ttir_file)]
+    # Call original autotune with our config
+    return _original_autotune(new_configs, key=[], **kwargs)
+
+# Apply the monkeypatch before importing the kernel
+import triton
+_original_autotune = triton.autotune
+triton.autotune = _patched_autotune
+'''
+
+        return code.replace("# {{IR_OVERRIDE_SETUP_PLACEHOLDER}}", setup_code)
+
     def _replace_kernel_syspath(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
@@ -105,6 +167,9 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
             comment = (
                 "# Kernel sys.path setup skipped - kernel source code embedded below"
             )
+            return code.replace("# {{KERNEL_SYSPATH_PLACEHOLDER}}", comment)
+        elif kernel_import == KernelImportMode.OVERRIDE_TTIR:
+            comment = "# Kernel sys.path setup skipped - using IR override mode"
             return code.replace("# {{KERNEL_SYSPATH_PLACEHOLDER}}", comment)
         else:
             raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
@@ -146,6 +211,9 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
             embedded_code += f"\n\n# Use kernel function directly\nimported_kernel_function = {func_name}"
 
             return code.replace("# {{KERNEL_IMPORT_PLACEHOLDER}}", embedded_code)
+        elif kernel_import == KernelImportMode.OVERRIDE_TTIR:
+            comment = "# Kernel import skipped - using IR override mode with TTIR"
+            return code.replace("# {{KERNEL_IMPORT_PLACEHOLDER}}", comment)
         else:
             raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
 

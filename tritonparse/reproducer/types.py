@@ -14,6 +14,5 @@ class KernelImportMode(str, Enum):
     COPY = "copy"
     """Embed kernel source code directly in reproducer."""
 
-    # Future modes can be added here:
-    # OVERRIDE_TTIR = "override-ttir"
-    # """Use TTIR from compilation event with monkeypatch."""
+    OVERRIDE_TTIR = "override-ttir"
+    """Use TTIR from compilation event with monkeypatch."""

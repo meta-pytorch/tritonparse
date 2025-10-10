@@ -40,6 +40,7 @@ def _add_reproducer_args(parser: argparse.ArgumentParser) -> None:
             "Kernel import strategy:\n"
             "  default: Import kernel from original file (current behavior)\n"
             "  copy: Embed kernel source code directly in reproducer\n"
+            "  override-ttir: Use TTIR from compilation event (bypass Python frontend)\n"
             "Defaults to 'default'."
         ),
     )
