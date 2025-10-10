@@ -3,6 +3,7 @@ from abc import ABC
 from typing import Any, Dict, Protocol
 
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
+from tritonparse.reproducer.types import KernelImportMode
 from tritonparse.reproducer.utils import (
     _generate_import_statements,
     _generate_invocation_snippet,
@@ -95,15 +96,58 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
         """Replace the kernel sys.path placeholder."""
-        sys_stmt, _ = _generate_import_statements(context_bundle.kernel_info)
-        return code.replace("# {{KERNEL_SYSPATH_PLACEHOLDER}}", sys_stmt)
+        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
+
+        if kernel_import == KernelImportMode.DEFAULT:
+            sys_stmt, _ = _generate_import_statements(context_bundle.kernel_info)
+            return code.replace("# {{KERNEL_SYSPATH_PLACEHOLDER}}", sys_stmt)
+        elif kernel_import == KernelImportMode.COPY:
+            comment = (
+                "# Kernel sys.path setup skipped - kernel source code embedded below"
+            )
+            return code.replace("# {{KERNEL_SYSPATH_PLACEHOLDER}}", comment)
+        else:
+            raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
 
     def _replace_kernel_import(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
         """Replace the kernel import placeholder."""
-        _, import_statement = _generate_import_statements(context_bundle.kernel_info)
-        return code.replace("# {{KERNEL_IMPORT_PLACEHOLDER}}", import_statement)
+        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
+
+        if kernel_import == KernelImportMode.DEFAULT:
+            _, import_statement = _generate_import_statements(
+                context_bundle.kernel_info
+            )
+            return code.replace("# {{KERNEL_IMPORT_PLACEHOLDER}}", import_statement)
+        elif kernel_import == KernelImportMode.COPY:
+            source_code = context_bundle.kernel_info.source_code
+            func_name = context_bundle.kernel_info.function_name
+
+            if not source_code or not source_code.strip():
+                raise ValueError("Kernel source code is empty, cannot use 'copy' mode")
+            if not func_name:
+                raise ValueError(
+                    "Cannot determine kernel function name for 'copy' mode"
+                )
+
+            # Add common imports needed for most Triton kernels
+            import_lines = [
+                "import torch",
+                "import numpy as np",
+                "import triton",
+                "import triton.language as tl",
+                "",
+            ]
+
+            # Combine: imports + kernel source code + alias
+            embedded_code = "\n".join(import_lines)
+            embedded_code += "\n" + source_code
+            embedded_code += f"\n\n# Use kernel function directly\nimported_kernel_function = {func_name}"
+
+            return code.replace("# {{KERNEL_IMPORT_PLACEHOLDER}}", embedded_code)
+        else:
+            raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
 
     def _replace_kernel_invocation(
         self, code: str, context_bundle: ContextBundle, **kwargs
