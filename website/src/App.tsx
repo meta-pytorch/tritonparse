@@ -12,6 +12,7 @@ import CodeView from "./pages/CodeView";
 import FileDiffView from "./pages/FileDiffView";
 import SingleCodeViewer from "./components/SingleCodeViewer";
 import KernelOverview from "./pages/KernelOverview";
+import IRAnalysis from "./pages/IRAnalysis";
 import DataSourceSelector from "./components/DataSourceSelector";
 import WelcomeScreen from "./components/WelcomeScreen";
 import ExternalLink from "./components/ExternalLink";
@@ -409,7 +410,7 @@ function App() {
         </div>
       );
     } else {
-      // Show either overview, IR code, or file diff based on active tab
+      // Show either overview, IR code, IR analysis, or file diff based on active tab
       if (activeTab === "overview") {
         return (
           <KernelOverview
@@ -417,6 +418,14 @@ function App() {
             onViewIR={handleViewSingleIR}
             selectedKernel={selectedKernel}
             onSelectKernel={handleSelectKernel}
+          />
+        );
+      }
+      if (activeTab === "ir_analysis") {
+        return (
+          <IRAnalysis
+            kernels={kernels}
+            selectedKernel={selectedKernel}
           />
         );
       }
@@ -561,6 +570,22 @@ function App() {
               >
                 File Diff
               </button>
+              <button
+                    className={`px-3 py-2 text-sm font-medium rounded-md ${activeTab === "ir_analysis" ? "bg-blue-700 text-white shadow-md" : "bg-blue-100 text-blue-700 hover:bg-blue-200"
+                      }`}
+                    onClick={() => {
+                      if (sess.preview?.active) sess.clearPreview();
+                      setActiveTab("ir_analysis");
+
+                      if (loadedUrl) {
+                        const newUrl = new URL(window.location.href);
+                        newUrl.searchParams.set("view", "ir_analysis");
+                        window.history.replaceState({}, "", newUrl.toString());
+                      }
+                    }}
+                  >
+                    IR Analysis (Beta)
+                  </button>
             </div>
           </div>
         </div>
