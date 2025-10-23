@@ -227,6 +227,23 @@ export interface LogEntry {
 }
 
 /**
+ * AMD BufferOps analysis information
+ */
+export interface AMDBufferOpsInfo {
+    total?: number;
+    loads?: number;
+    stores?: number;
+    atomics?: number;
+}
+
+/**
+ * IR Analysis information
+ */
+export interface IRAnalysisInfo {
+    amdBufferOps?: AMDBufferOpsInfo;
+}
+
+/**
  * Processed kernel data structure for rendering in the UI
  */
 export interface ProcessedKernel {
@@ -239,6 +256,7 @@ export interface ProcessedKernel {
     pythonSourceInfo?: PythonSourceCodeInfo; // Python source code information
     metadata?: KernelMetadata; // Compilation metadata
     launchDiff?: LogEntry; // Aggregated launch event differences
+    irAnalysis?: IRAnalysisInfo; // IR analysis information
 }
 
 /**
