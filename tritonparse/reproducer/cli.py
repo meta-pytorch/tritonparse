@@ -1,3 +1,5 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 import argparse
 
 from tritonparse.reproducer.types import KernelImportMode

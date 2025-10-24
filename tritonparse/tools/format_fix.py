@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 """
 Format fix script for tritonparse project.
 

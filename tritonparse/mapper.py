@@ -1,3 +1,5 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Tuple

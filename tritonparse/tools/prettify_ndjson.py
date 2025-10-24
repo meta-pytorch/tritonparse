@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 """
 Convert an NDJSON file to a prettified JSON file.
 

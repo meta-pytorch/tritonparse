@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 """
 Script to decompress .bin.ndjson files back to regular .ndjson format.
 

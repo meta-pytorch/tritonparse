@@ -1,3 +1,5 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 import logging
 
 from .sourcemap_utils import load_ir_contents

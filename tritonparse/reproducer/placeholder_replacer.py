@@ -1,3 +1,5 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 from abc import ABC
 
 from typing import Any, Dict, Protocol

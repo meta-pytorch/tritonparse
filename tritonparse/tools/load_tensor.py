@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 """
 Simple tensor loading utility for tritonparse saved tensors.
 Usage:

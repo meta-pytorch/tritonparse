@@ -1,3 +1,5 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 """
 Function extractor for reproducer utility functions.
 

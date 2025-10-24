@@ -1,3 +1,4 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
 # We'd like to sperate structured logging module and tritonparse module as much as possible. So, put the shared variables here.
 import os
 

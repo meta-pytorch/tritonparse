@@ -1,3 +1,5 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
+
 from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import List
