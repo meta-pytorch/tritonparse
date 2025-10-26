@@ -52,7 +52,7 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     # The first #loc directive is a special case. It locates at the top of the IR files
     main_match = re.search(r'#loc = loc\("([^"]+)":(\d+):(\d+)\)', ir_content)
     if main_match:
-        locations["1"] = {
+        locations[""] = {
             "file": main_match.group(1),
             "line": int(main_match.group(2)),
             "column": int(main_match.group(3)),
