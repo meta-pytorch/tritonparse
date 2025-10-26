@@ -139,6 +139,66 @@ def clear_all_caches(*kernels):
 class TestTritonparseCPU(unittest.TestCase):
     """CPU-only tests (no CUDA required)"""
 
+    def test_loc_alias_parsing(self):
+        """Test parsing of location aliases including bare #loc references"""
+        from tritonparse.ir_parser import extract_loc_definitions
+        
+        # Test TTIR content with bare #loc aliases (like function parameters)
+        test_ttir = '''#loc = loc("/scratch/test.py":308:0)
+#loc13 = loc("x_ptr"(#loc))
+#loc14 = loc("y_ptr"(#loc))
+#loc15 = loc("n_elements"(#loc))
+module {
+  tt.func public @test_kernel(%x_ptr: !tt.ptr<f32> loc("x_ptr"(#loc))) {
+  } loc(#loc)
+}
+#loc1 = loc("/scratch/test.py":315:12)
+#loc16 = loc("y"(#loc1))
+#loc17 = loc("pid"(#loc3))
+#loc3 = loc("/scratch/test.py":309:24)
+'''
+        
+        locations = extract_loc_definitions(test_ttir)
+        
+        # Verify main #loc is parsed (stored as "" not "1" to avoid conflict with #loc1)
+        assert "" in locations
+        assert locations[""]["file"] == "/scratch/test.py"
+        assert locations[""]["line"] == 308
+        assert locations[""]["column"] == 0
+        
+        # Verify #loc1 is stored separately
+        assert "1" in locations
+        assert locations["1"]["line"] == 315
+        
+        # Verify bare #loc aliases are resolved correctly (pointing to "")
+        assert "13" in locations, "Failed to parse #loc13 = loc(\"x_ptr\"(#loc))"
+        assert locations["13"]["file"] == "/scratch/test.py"
+        assert locations["13"]["line"] == 308
+        assert locations["13"]["column"] == 0
+        assert locations["13"]["alias_name"] == "x_ptr"
+        assert locations["13"]["alias_of"] == ""  # Points to bare #loc
+        
+        assert "14" in locations
+        assert locations["14"]["alias_name"] == "y_ptr"
+        assert locations["14"]["alias_of"] == ""
+        
+        assert "15" in locations
+        assert locations["15"]["alias_name"] == "n_elements"
+        assert locations["15"]["alias_of"] == ""
+        
+        # Verify numbered loc aliases
+        assert "16" in locations
+        assert locations["16"]["file"] == "/scratch/test.py"
+        assert locations["16"]["line"] == 315
+        assert locations["16"]["alias_name"] == "y"
+        assert locations["16"]["alias_of"] == "1"  # Points to #loc1
+        
+        # Verify def_line is recorded
+        assert "def_line" in locations["13"]
+        assert "def_line" in locations["16"]
+        
+        print("✓ All location alias parsing tests passed")
+
     def test_convert(self):
         """Test convert function with various data types"""
         # Test with primitive types

@@ -71,12 +71,18 @@ def generate_source_mappings(
             }
         elif loc_id in loc_defs:
             info = loc_defs[loc_id]
-            mappings[str(ln)] = {
+            entry = {
                 "file": info["file"],
                 "line": info["line"],
                 "column": info["column"],
                 f"{ir_type}_line": ln,
             }
+            # Add alias metadata for UI display
+            if "alias_name" in info:
+                entry["alias_name"] = info["alias_name"]
+            if "loc_id" not in entry:  # Add loc_id for reference
+                entry["loc_id"] = loc_id
+            mappings[str(ln)] = entry
 
     # Always include loc definition lines for highlighting definition sites
     for loc_id, info in loc_defs.items():

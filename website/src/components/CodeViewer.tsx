@@ -5,6 +5,7 @@ import {
   oneDark,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SourceMapping } from "../utils/dataLoader";
+import "./CodeViewer.css";
 
 // Import language support
 import llvm from 'react-syntax-highlighter/dist/esm/languages/prism/llvm';
@@ -537,6 +538,14 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
         wrapLines={true}
         lineProps={(lineNumber) => {
           const isHighlighted = highlightedLines.includes(lineNumber);
+          const mapping = sourceMapping?.[lineNumber];
+          const isLocDef = mapping?.type === "loc_def" || mapping?.kind === "loc_def";
+          
+          // Build className
+          let className = '';
+          if (isHighlighted) className += 'highlighted-line ';
+          if (isLocDef) className += 'loc-definition-line ';
+          
           return {
             style: {
               backgroundColor: isHighlighted
@@ -549,7 +558,10 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
             },
             onClick: () => handleLineClick(lineNumber),
             "data-line-number": lineNumber,
-            className: isHighlighted ? 'highlighted-line' : '',
+            "data-loc-id": mapping?.loc_id,
+            "data-alias-name": mapping?.alias_name,
+            "data-loc-def": isLocDef ? "true" : undefined,
+            className: className.trim(),
           };
         }}
       >
