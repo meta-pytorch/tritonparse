@@ -17,6 +17,12 @@ export interface SourceMapping {
     ttgir_lines?: number[]; // Array of corresponding TTGIR lines
     llir_lines?: number[]; // Array of corresponding LLIR lines
     amdgcn_lines?: number[]; // Array of corresponding AMDGCN lines
+    // New fields for location alias support
+    type?: string; // Type of mapping entry, e.g., "loc_def" for loc definition lines
+    kind?: string; // Deprecated alias for type, kept for backward compatibility
+    loc_id?: string; // The #loc identifier (e.g., "13" for #loc13)
+    alias_name?: string; // Name of the alias (e.g., "x_ptr" in #loc13 = loc("x_ptr"(#loc)))
+    alias_of?: string; // The target #loc this alias points to
 }
 
 /**

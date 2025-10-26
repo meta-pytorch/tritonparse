@@ -1,0 +1,43 @@
+/* Location definition line styles */
+.loc-definition-line {
+    background-color: rgba(255, 215, 0, 0.1) !important;
+    border-left: 3px solid #ffd700 !important;
+}
+
+.loc-definition-line:hover {
+    background-color: rgba(255, 215, 0, 0.2) !important;
+}
+
+/* Alias name badge */
+.alias-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 6px;
+    background: #e3f2fd;
+    border-radius: 3px;
+    font-size: 0.85em;
+    color: #1976d2;
+    font-weight: 500;
+    vertical-align: middle;
+}
+
+.alias-badge:hover {
+    background: #bbdefb;
+}
+
+/* Dark theme adjustments */
+[data-theme="dark"] .alias-badge {
+    background: #1565c0;
+    color: #e3f2fd;
+}
+
+[data-theme="dark"] .alias-badge:hover {
+    background: #1976d2;
+}
+
+/* Loc ID indicator */
+.loc-id-indicator {
+    opacity: 0.6;
+    font-size: 0.8em;
+    margin-left: 4px;
+}
