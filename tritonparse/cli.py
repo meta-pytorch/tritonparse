@@ -70,7 +70,7 @@ def main():
     elif args.func == "reproduce":
         reproduce(
             input_path=args.input,
-            line_index=args.line,
+            line_index=args.line - 1,  # Convert 1-based line number to 0-based index
             out_dir=args.out_dir,
             template=args.template,
             kernel_import=args.kernel_import,

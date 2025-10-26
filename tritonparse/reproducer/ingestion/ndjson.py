@@ -40,7 +40,7 @@ def get_launch_and_compilation_events(
 
     Args:
         events: List of parsed event dictionaries.
-        line_index: Index of the launch event to process.
+        line_index: 0-based index of the launch event to process.
 
     Returns:
         Tuple of (launch_event, compilation_event).
@@ -179,7 +179,7 @@ def build_context_bundle(
 
     Args:
         events: List of parsed event dictionaries.
-        line_index: Index of the launch event to process.
+        line_index: 0-based index of the launch event to process.
 
     Returns:
         ContextBundle containing all information needed to reproduce the kernel launch.

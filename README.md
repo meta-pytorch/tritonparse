@@ -116,7 +116,7 @@ from tritonparse.reproducer.orchestrator import reproduce
 
 result = reproduce(
     input_path="./parsed_output/trace.ndjson.gz",
-    line_index=1,           # Which launch event (1-based)
+    line_index=0,           # 0-based index (first event is 0)
     out_dir="repro_output"
 )
 ```

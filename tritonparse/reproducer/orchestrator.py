@@ -29,7 +29,7 @@ def reproduce(
 
     Args:
         input_path: Path to the NDJSON trace file.
-        line_index: Line index of the launch event to reproduce.
+        line_index: 0-based index of the launch event to reproduce in the events list.
         out_dir: Output directory for reproducer files.
         template: Template name to use for the reproducer.
         replacer: Optional custom PlaceholderReplacer instance. If None, uses DefaultPlaceholderReplacer.
