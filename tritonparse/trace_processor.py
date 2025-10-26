@@ -71,12 +71,37 @@ def generate_source_mappings(
             }
         elif loc_id in loc_defs:
             info = loc_defs[loc_id]
-            mappings[str(ln)] = {
+            entry = {
                 "file": info["file"],
                 "line": info["line"],
                 "column": info["column"],
                 f"{ir_type}_line": ln,
             }
+            # Propagate alias metadata if present
+            if "alias_name" in info:
+                entry["alias_name"] = info["alias_name"]
+            if "alias_of" in info:
+                entry["loc_id"] = loc_id
+            mappings[str(ln)] = entry
+
+    # Add separate entries for loc definition lines
+    for loc_id, info in loc_defs.items():
+        if "def_line" in info:
+            def_ln = info["def_line"]
+            # Only create mapping if this line doesn't already have one
+            if str(def_ln) not in mappings:
+                entry = {
+                    "file": info["file"],
+                    "line": info["line"],
+                    "column": info["column"],
+                    f"{ir_type}_line": def_ln,
+                    "kind": "loc_def",
+                }
+                if "alias_name" in info:
+                    entry["alias_name"] = info["alias_name"]
+                if "alias_of" in info:
+                    entry["loc_id"] = loc_id
+                mappings[str(def_ln)] = entry
 
     return mappings
 

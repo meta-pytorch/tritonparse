@@ -10,7 +10,8 @@ logger = logging.getLogger("SourceMapping")
 
 # the definition of the #loc directive. they are in the bottom of the IR files
 # Example:#loc2 = loc("/tmp/torchinductor_yhao/yp/abcdef.py":20:28)
-LOC_PATTERN = re.compile(r'#loc(\d*) = loc\("([^"]+)":(\d+):(\d+)\)')
+# Note: This should only match numbered locs like #loc1, #loc2, not bare #loc
+LOC_PATTERN = re.compile(r'#loc(\d+) = loc\("([^"]+)":(\d+):(\d+)\)')
 
 # the reference to the #loc directive. they are in the end of lines of the IR files
 # Example: loc(#loc2)
@@ -33,6 +34,17 @@ AMDGCN_LOC_PATTERN = re.compile(
 )
 
 
+# alias loc definitions in TTGIR/TTIR
+# Example: #loc16 = loc("pid"(#loc2))
+# Example: #loc13 = loc("x_ptr"(#loc)) - bare #loc without number
+ALIAS_WITH_NAME_PATTERN = re.compile(
+    r'#loc(\d+)\s*=\s*loc\("([^"]+)"\s*\(\s*#loc(\d*)\s*\)\s*\)'
+)
+
+# Example: #loc20 = loc(#loc16)
+ALIAS_SIMPLE_PATTERN = re.compile(r"#loc(\d+)\s*=\s*loc\(\s*#loc(\d*)\s*\)")
+
+
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     """
     Extracts location definitions from the given IR content.
@@ -50,6 +62,7 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     """
     locations = {}
     # The first #loc directive is a special case. It locates at the top of the IR files
+    # Store it with empty string "" as key to avoid conflict with #loc1
     main_match = re.search(r'#loc = loc\("([^"]+)":(\d+):(\d+)\)', ir_content)
     if main_match:
         locations[""] = {
@@ -61,6 +74,84 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     for loc_id, filename, line, col in LOC_PATTERN.findall(ir_content):
         key = loc_id
         locations[key] = {"file": filename, "line": int(line), "column": int(col)}
+
+    # Handle alias-style loc definitions that reference another #loc
+    # Build alias map first: alias_id -> target_id
+    alias_map: Dict[str, str] = {}
+    for m in ALIAS_WITH_NAME_PATTERN.finditer(ir_content):
+        alias_id, _name, target_id = m.groups()
+        # Empty target_id means bare #loc, map to "" (main loc key)
+        alias_map[alias_id] = target_id or ""
+    for m in ALIAS_SIMPLE_PATTERN.finditer(ir_content):
+        alias_id, target_id = m.groups()
+        # Empty target_id means bare #loc, map to "" (main loc key)
+        alias_map[alias_id] = target_id or ""
+
+    # Build definition line map and alias name map by scanning lines
+    def_line_map: Dict[str, int] = {}
+    alias_name_map: Dict[str, str] = {}
+    main_loc_line: int = 0
+    for i, line in enumerate(ir_content.split("\n"), start=1):
+        if m := ALIAS_WITH_NAME_PATTERN.search(line):
+            alias_id, name, target_id = m.groups()
+            def_line_map[alias_id] = i
+            alias_name_map[alias_id] = name
+            # ensure alias map is populated even if only found in line scan
+            # Empty target_id means bare #loc, map to "" (main loc key)
+            alias_map.setdefault(alias_id, target_id or "")
+        elif m := ALIAS_SIMPLE_PATTERN.search(line):
+            alias_id, target_id = m.groups()
+            def_line_map[alias_id] = i
+            # Empty target_id means bare #loc, map to "" (main loc key)
+            alias_map.setdefault(alias_id, target_id or "")
+        if m2 := LOC_PATTERN.search(line):
+            base_id, _fn, _ln, _col = m2.groups()
+            def_line_map[base_id] = i
+        if re.search(r'#loc\s*=\s*loc\("[^"]+":\d+:\d+\)', line):
+            # main #loc = loc("file":line:col) without id
+            main_loc_line = main_loc_line or i
+
+    # Resolve aliases to base locations (file/line/column)
+    resolving_stack = set()
+
+    def resolve_alias(current_id: str) -> Dict[str, Any]:
+        # Already a concrete location
+        if current_id in locations:
+            return locations[current_id]
+        # Detect cycles
+        if current_id in resolving_stack:
+            return {}
+        resolving_stack.add(current_id)
+        parent_id = alias_map.get(current_id)
+        result: Dict[str, Any] = {}
+        if parent_id is not None:
+            base = resolve_alias(parent_id)
+            if base:
+                # copy to avoid sharing the same dict by reference
+                result = {
+                    "file": base.get("file"),
+                    "line": base.get("line"),
+                    "column": base.get("column"),
+                }
+                locations[current_id] = result
+        resolving_stack.remove(current_id)
+        return result
+
+    for alias_id in list(alias_map.keys()):
+        if alias_id not in locations:
+            resolve_alias(alias_id)
+
+    # Attach definition line and alias metadata
+    for k, v in def_line_map.items():
+        if k in locations:
+            locations[k]["def_line"] = v
+    for alias_id, target_id in alias_map.items():
+        if alias_id in locations:
+            locations[alias_id]["alias_of"] = target_id
+            if alias_id in alias_name_map:
+                locations[alias_id]["alias_name"] = alias_name_map[alias_id]
+    if main_loc_line and "" in locations:
+        locations[""]["def_line"] = main_loc_line
     return locations
 
 

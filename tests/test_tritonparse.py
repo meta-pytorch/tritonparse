@@ -1442,6 +1442,70 @@ class TestTritonparseCUDA(unittest.TestCase):
             # Cleanup test-specific cache
             self.cleanup_test_cache(test_cache_dir, prev_cache_dir)
 
+    def test_loc_alias_parsing(self):
+        """Test parsing of location aliases in TTIR/TTGIR"""
+        from tritonparse.ir_parser import extract_loc_definitions
+
+        # Test case 1: Bare #loc reference (no number)
+        ir_with_bare_loc = """
+module {
+  #loc = loc("/tmp/test.py":10:5)
+  #loc13 = loc("x_ptr"(#loc))
+  func @kernel(%arg0: !tt.ptr<f32> loc(#loc13)) {
+    return loc(#loc)
+  }
+}
+"""
+        locs = extract_loc_definitions(ir_with_bare_loc)
+        # Main #loc should be stored with "" key
+        assert "" in locs, "Main #loc not found"
+        assert locs[""]["file"] == "/tmp/test.py"
+        assert locs[""]["line"] == 10
+        # Alias #loc13 should resolve to same location
+        assert "13" in locs, "#loc13 not found"
+        assert locs["13"]["file"] == "/tmp/test.py"
+        assert locs["13"]["line"] == 10
+        assert locs["13"]["alias_name"] == "x_ptr"
+        assert locs["13"]["alias_of"] == ""
+
+        # Test case 2: Named alias with numbered reference
+        ir_with_numbered_alias = """
+#loc = loc("/tmp/test.py":5:0)
+#loc2 = loc("/tmp/test.py":20:28)
+#loc16 = loc("pid"(#loc2))
+%0 = tt.get_program_id x : i32 loc(#loc16)
+"""
+        locs = extract_loc_definitions(ir_with_numbered_alias)
+        assert "2" in locs
+        assert locs["2"]["line"] == 20
+        assert "16" in locs
+        assert locs["16"]["file"] == "/tmp/test.py"
+        assert locs["16"]["line"] == 20
+        assert locs["16"]["alias_name"] == "pid"
+        assert locs["16"]["alias_of"] == "2"
+
+        # Test case 3: Simple alias (no name)
+        ir_with_simple_alias = """
+#loc = loc("/tmp/test.py":1:1)
+#loc1 = loc("/tmp/test.py":15:10)
+#loc20 = loc(#loc1)
+%1 = arith.constant 0 : i32 loc(#loc20)
+"""
+        locs = extract_loc_definitions(ir_with_simple_alias)
+        assert "1" in locs
+        assert "20" in locs
+        assert locs["20"]["file"] == "/tmp/test.py"
+        assert locs["20"]["line"] == 15
+        assert locs["20"]["alias_of"] == "1"
+        assert "alias_name" not in locs["20"]
+
+        # Test case 4: Definition line tracking
+        assert "def_line" in locs[""]
+        assert "def_line" in locs["1"]
+        assert "def_line" in locs["20"]
+
+        print("✓ All loc alias parsing tests passed")
+
 
 if __name__ == "__main__":
     unittest.main()
