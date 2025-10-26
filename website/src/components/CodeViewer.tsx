@@ -6,6 +6,8 @@ import {
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SourceMapping } from "../utils/dataLoader";
 import "./CodeViewer.css";
+import "./CodeViewer.css";
+import "./CodeViewer.css";
 
 // Import language support
 import llvm from 'react-syntax-highlighter/dist/esm/languages/prism/llvm';
@@ -208,6 +210,7 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
   highlightedLines = [],
   onLineClick,
   viewerId,
+  sourceMapping,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lines = splitIntoLines(code);
@@ -240,6 +243,33 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
           {lines.map((line, index) => {
             const lineNumber = index + 1;
             const isHighlighted = highlightedLines.includes(lineNumber);
+            const mapping = sourceMapping?.[lineNumber];
+            const isLocDef = mapping?.type === "loc_def" || mapping?.kind === "loc_def";
+            
+            // Build className
+            let className = '';
+            if (isHighlighted) className += 'highlighted-line ';
+            if (isLocDef) className += 'loc-definition-line ';
+            
+            // Build tooltip
+            let title = '';
+            if (mapping?.alias_name) {
+              const locId = mapping.loc_id || '';
+              const aliasOf = mapping.alias_of || '';
+              title = `Alias: ${mapping.alias_name}`;
+              if (locId) title += ` (#loc${locId})`;
+              if (aliasOf) title += ` → #loc${aliasOf}`;
+              if (mapping.file) {
+                const fileName = mapping.file.split('/').pop();
+                title += ` → ${fileName}:${mapping.line}:${mapping.column}`;
+              }
+            } else if (isLocDef && mapping?.loc_id) {
+              title = `Location definition: #loc${mapping.loc_id}`;
+              if (mapping.file) {
+                const fileName = mapping.file.split('/').pop();
+                title += ` → ${fileName}:${mapping.line}:${mapping.column}`;
+              }
+            }
 
             return (
               <div
@@ -256,7 +286,11 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
                 }}
                 onClick={() => handleLineClick(lineNumber)}
                 data-line-number={lineNumber}
-                className={isHighlighted ? 'highlighted-line' : ''}
+                data-loc-id={mapping?.loc_id}
+                data-alias-name={mapping?.alias_name}
+                data-loc-def={isLocDef ? "true" : undefined}
+                className={className.trim()}
+                title={title || undefined}
               >
                 <span style={{
                   position: "absolute",
@@ -291,6 +325,7 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
   highlightedLines = [],
   onLineClick,
   viewerId,
+  sourceMapping,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
@@ -422,6 +457,8 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
             lineProps={(lineNumber) => {
               // Adjust line number based on visible range
               const actualLine = lineNumber + visibleRange.start;
+              const mapping = sourceMapping?.[actualLine];
+              const isLocDef = mapping?.type === "loc_def" || mapping?.kind === "loc_def";
 
               // Create styles for the line
               const style: React.CSSProperties = {
@@ -429,23 +466,54 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
                 cursor: onLineClick ? "pointer" : "text",
               };
 
+              // Build className
+              let className = '';
+              
               // Apply background color if this line should be highlighted
               const isHighlighted = highlightedLines.includes(actualLine);
               if (isHighlighted) {
+                className += 'highlighted-line ';
                 // Use a more vibrant highlight color with better contrast
                 style.backgroundColor = theme === "light"
                   ? "rgba(255, 215, 0, 0.4)" // More golden yellow for light theme
                   : "rgba(255, 215, 0, 0.3)"; // Similar but slightly dimmer for dark theme
                 style.borderLeft = "3px solid orange"; // Add left border for better visibility
                 style.paddingLeft = "6px"; // Add some padding to offset the border
-
+              }
+              
+              if (isLocDef) {
+                className += 'loc-definition-line ';
+              }
+              
+              // Build tooltip
+              let title = '';
+              if (mapping?.alias_name) {
+                const locId = mapping.loc_id || '';
+                const aliasOf = mapping.alias_of || '';
+                title = `Alias: ${mapping.alias_name}`;
+                if (locId) title += ` (#loc${locId})`;
+                if (aliasOf) title += ` → #loc${aliasOf}`;
+                if (mapping.file) {
+                  const fileName = mapping.file.split('/').pop();
+                  title += ` → ${fileName}:${mapping.line}:${mapping.column}`;
+                }
+              } else if (isLocDef && mapping?.loc_id) {
+                title = `Location definition: #loc${mapping.loc_id}`;
+                if (mapping.file) {
+                  const fileName = mapping.file.split('/').pop();
+                  title += ` → ${fileName}:${mapping.line}:${mapping.column}`;
+                }
               }
 
               return {
                 style,
                 onClick: () => handleLineClick(actualLine),
                 'data-line-number': actualLine,
-                className: isHighlighted ? 'highlighted-line' : '',
+                'data-loc-id': mapping?.loc_id,
+                'data-alias-name': mapping?.alias_name,
+                'data-loc-def': isLocDef ? 'true' : undefined,
+                className: className.trim(),
+                title: title || undefined,
               };
             }}
             customStyle={{
@@ -475,6 +543,7 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
   highlightedLines = [],
   onLineClick,
   viewerId,
+  sourceMapping,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -546,6 +615,26 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
           if (isHighlighted) className += 'highlighted-line ';
           if (isLocDef) className += 'loc-definition-line ';
           
+          // Build tooltip text
+          let title = '';
+          if (mapping?.alias_name) {
+            const locId = mapping.loc_id || '';
+            const aliasOf = mapping.alias_of || '';
+            title = `Alias: ${mapping.alias_name}`;
+            if (locId) title += ` (#loc${locId})`;
+            if (aliasOf) title += ` → #loc${aliasOf}`;
+            if (mapping.file) {
+              const fileName = mapping.file.split('/').pop();
+              title += ` → ${fileName}:${mapping.line}:${mapping.column}`;
+            }
+          } else if (isLocDef && mapping?.loc_id) {
+            title = `Location definition: #loc${mapping.loc_id}`;
+            if (mapping.file) {
+              const fileName = mapping.file.split('/').pop();
+              title += ` → ${fileName}:${mapping.line}:${mapping.column}`;
+            }
+          }
+          
           return {
             style: {
               backgroundColor: isHighlighted
@@ -562,6 +651,7 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
             "data-alias-name": mapping?.alias_name,
             "data-loc-def": isLocDef ? "true" : undefined,
             className: className.trim(),
+            title: title || undefined,
           };
         }}
       >
