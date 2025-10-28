@@ -4,6 +4,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
+from tritonbench.utils.triton_op import (
+    BenchmarkOperator,
+    register_benchmark,
+    REGISTERED_X_VALS,
+)
 
 
 imported_kernel_function: Optional[Callable[[Tuple[int], Dict[str, Any]], None]] = None
@@ -26,7 +31,7 @@ def _get_launch_kernel_args() -> Tuple[Tuple[int], Dict[str, Any]]:
     script_dir = Path(__file__).resolve().parent  # noqa: F821
     json_file = script_dir / REPRO_CONTEXT_FILE_NAME
 
-    grid, args_dict = create_args_from_json_file(json_file)  # noqa: F841,F821 from codegen
+    grid, args_dict = create_args_from_json_file(json_file)  # noqa: F821, F841
 
     print("Recorded kernel arguments dictionary:")
     for name, arg in args_dict.items():
@@ -55,12 +60,6 @@ def _launch_kernel(grid: tuple[int], args_dict: dict[str, Any]):
         print(f"Error: {e}")
         print("Failed to launch kernel!")
 
-
-from tritonbench.utils.triton_op import (
-    BenchmarkOperator,
-    register_benchmark,
-    REGISTERED_X_VALS,
-)
 
 # HACK: @register_x_val doesn't allow us to pass `operator_name`` as a parameter
 tensor_args = {k: v for k, v in args_dict.items() if isinstance(v, torch.Tensor)}

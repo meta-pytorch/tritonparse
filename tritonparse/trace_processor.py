@@ -77,6 +77,11 @@ def generate_source_mappings(
                 "column": info["column"],
                 f"{ir_type}_line": ln,
             }
+            # Propagate callsite metadata if present
+            if info.get("is_callsite"):
+                entry["is_callsite"] = True
+                entry["callsite_callee"] = info["callsite_callee"]
+                entry["callsite_caller"] = info["callsite_caller"]
             # Propagate alias metadata if present
             if "alias_name" in info:
                 entry["alias_name"] = info["alias_name"]

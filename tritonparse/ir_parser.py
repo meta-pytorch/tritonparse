@@ -44,6 +44,14 @@ ALIAS_WITH_NAME_PATTERN = re.compile(
 # Example: #loc20 = loc(#loc16)
 ALIAS_SIMPLE_PATTERN = re.compile(r"#loc(\d+)\s*=\s*loc\(\s*#loc(\d*)\s*\)")
 
+# Callsite loc definitions in TTIR/TTGIR
+# Example: #loc220 = loc(callsite(#loc57 at #loc190))
+# Captures: loc_id, callee_loc_id, caller_loc_id
+# Note: Uses (\d*) to match optional numbers (for bare #loc references)
+CALLSITE_PATTERN = re.compile(
+    r"#loc(\d+)\s*=\s*loc\(\s*callsite\(\s*#loc(\d*)\s+at\s+#loc(\d*)\s*\)\s*\)"
+)
+
 
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     """
@@ -141,6 +149,50 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     for alias_id, target_id in alias_map.items():
         if alias_id not in locations:
             resolve_alias(alias_id)
+
+    # Collect callsite definitions
+    callsite_defs = []
+    for i, line in enumerate(ir_content.split("\n"), start=1):
+        if m := CALLSITE_PATTERN.search(line):
+            loc_id, callee_id, caller_id = m.groups()
+            # Empty strings map to main loc key ""
+            callsite_defs.append((loc_id, callee_id or "", caller_id or "", i))
+
+    # Resolve callsite definitions
+    # A callsite inherits the location from its callee (the code being called)
+    # and stores a reference to its caller (the code doing the calling)
+    for loc_id, callee_id, caller_id, def_line in callsite_defs:
+        if loc_id not in locations:  # Avoid overwriting existing definitions
+            if callee_id in locations:
+                # Inherit location info from callee
+                callee_info = locations[callee_id]
+                locations[loc_id] = {
+                    "file": callee_info["file"],
+                    "line": callee_info["line"],
+                    "column": callee_info["column"],
+                    "def_line": def_line,
+                    "is_callsite": True,
+                    "callsite_callee": callee_id,
+                    "callsite_caller": caller_id,
+                }
+            else:
+                logger.warning(
+                    f"Callsite #loc{loc_id} references undefined callee #loc{callee_id}"
+                )
+                # Note: We don't add this callsite to locations since callee is missing
+
+    # Verify caller references (warning only, don't block)
+    for loc_id, _callee_id, caller_id, _def_line in callsite_defs:
+        if loc_id in locations and caller_id and caller_id not in locations:
+            logger.warning(
+                f"Callsite #loc{loc_id} references undefined caller #loc{caller_id}"
+            )
+
+    # Attach definition line and alias metadata
+    for k, v in def_line_map.items():
+        if k in locations:
+            locations[k]["def_line"] = v
+    for alias_id, target_id in alias_map.items():
         if alias_id in locations:
             locations[alias_id]["alias_of"] = target_id
             if alias_id in alias_name_map:

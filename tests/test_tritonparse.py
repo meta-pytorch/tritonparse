@@ -139,6 +139,63 @@ def clear_all_caches(*kernels):
 class TestTritonparseCPU(unittest.TestCase):
     """CPU-only tests (no CUDA required)"""
 
+    def test_callsite_parsing(self):
+        """Test parsing of callsite locations in TTIR/TTGIR"""
+        from tritonparse.ir_parser import extract_loc_definitions
+        from tritonparse.trace_processor import generate_source_mappings
+
+        # Test MLIR callsite location definitions
+        ir_with_callsite = """
+module {
+  #loc7 = loc("/tmp/test.py":1091:8)
+  #loc57 = loc("/tmp/test.py":421:16)
+  #loc58 = loc("/tmp/test.py":853:16)
+  #loc190 = loc(callsite(#loc58 at #loc7))
+  #loc220 = loc(callsite(#loc57 at #loc190))
+  %0 = tt.load %ptr loc(#loc220)
+}
+"""
+        # Extract loc definitions
+        locs = extract_loc_definitions(ir_with_callsite)
+
+        # Verify loc220 (nested callsite)
+        self.assertIn("220", locs)
+        self.assertEqual(locs["220"]["file"], "/tmp/test.py")
+        self.assertEqual(locs["220"]["line"], 421)  # Inherited from callee loc57
+        self.assertEqual(locs["220"]["column"], 16)
+        self.assertTrue(locs["220"].get("is_callsite"))
+        self.assertEqual(locs["220"]["callsite_callee"], "57")
+        self.assertEqual(locs["220"]["callsite_caller"], "190")
+
+        # Verify loc190 (simple callsite)
+        self.assertIn("190", locs)
+        self.assertEqual(locs["190"]["line"], 853)  # Inherited from callee loc58
+        self.assertTrue(locs["190"].get("is_callsite"))
+        self.assertEqual(locs["190"]["callsite_callee"], "58")
+        self.assertEqual(locs["190"]["callsite_caller"], "7")
+
+        # Test source mappings generation
+        mappings = generate_source_mappings(ir_with_callsite, "ttir")
+
+        # Find the line with tt.load
+        line_with_load = None
+        for line_num, content in enumerate(ir_with_callsite.split("\n"), start=1):
+            if "tt.load" in content:
+                line_with_load = str(line_num)
+                break
+
+        self.assertIsNotNone(line_with_load)
+        self.assertIn(line_with_load, mappings)
+
+        mapping = mappings[line_with_load]
+        self.assertEqual(mapping["file"], "/tmp/test.py")
+        self.assertEqual(mapping["line"], 421)  # From loc220 -> loc57
+        self.assertTrue(mapping.get("is_callsite"))
+        self.assertEqual(mapping["callsite_callee"], "57")
+        self.assertEqual(mapping["callsite_caller"], "190")
+
+        print("✓ Callsite parsing tests passed")
+
     def test_convert(self):
         """Test convert function with various data types"""
         # Test with primitive types
