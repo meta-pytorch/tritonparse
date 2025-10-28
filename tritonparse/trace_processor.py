@@ -102,6 +102,7 @@ def generate_source_mappings(
                 entry["alias_name"] = info["alias_name"]
             if "alias_of" in info:
                 entry["loc_id"] = loc_id
+                entry["alias_of"] = info["alias_of"]
             mappings[str(def_ln)] = entry
 
     return mappings

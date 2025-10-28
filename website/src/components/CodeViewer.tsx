@@ -5,6 +5,8 @@ import {
   oneDark,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SourceMapping } from "../utils/dataLoader";
+import { Tooltip } from 'react-tooltip';
+import 'react-tooltip/dist/react-tooltip.css';
 import "./CodeViewer.css";
 
 // Import language support
@@ -232,13 +234,13 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
       data-viewer-id={viewerId}
       data-highlighted-lines={highlightedLines.join(',')}
     >
-      <pre style={{
-        margin: 0,
-        padding: "0.5em",
-        fontFamily: "Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace"
-      }}>
-        <code>
-          {lines.map((line, index) => {
+        <pre style={{
+          margin: 0,
+          padding: "0.5em",
+          fontFamily: "Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace"
+        }}>
+          <code>
+            {lines.map((line, index) => {
             const lineNumber = index + 1;
             const isHighlighted = highlightedLines.includes(lineNumber);
             const mapping = sourceMapping?.[lineNumber.toString()];
@@ -273,7 +275,8 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
                 onClick={() => handleLineClick(lineNumber)}
                 data-line-number={lineNumber}
                 className={`${isHighlighted ? 'highlighted-line' : ''} ${isLocDef ? 'loc-definition-line' : ''}`}
-                title={tooltipText}
+                data-tooltip-id={tooltipText ? "code-tooltip" : undefined}
+                data-tooltip-content={tooltipText || undefined}
                 data-loc-id={mapping?.loc_id}
                 data-alias-name={mapping?.alias_name}
                 data-loc-def={isLocDef ? "true" : undefined}
@@ -482,7 +485,8 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
                 onClick: () => handleLineClick(actualLine),
                 'data-line-number': actualLine,
                 className: `${isHighlighted ? 'highlighted-line' : ''} ${isLocDef ? 'loc-definition-line' : ''}`,
-                title: tooltipText,
+                'data-tooltip-id': tooltipText ? "code-tooltip" : undefined,
+                'data-tooltip-content': tooltipText || undefined,
                 'data-loc-id': mapping?.loc_id,
                 'data-alias-name': mapping?.alias_name,
                 'data-loc-def': isLocDef ? "true" : undefined,
@@ -608,7 +612,8 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
             onClick: () => handleLineClick(lineNumber),
             "data-line-number": lineNumber,
             className: `${isHighlighted ? 'highlighted-line' : ''} ${isLocDef ? 'loc-definition-line' : ''}`,
-            title: tooltipText,
+            "data-tooltip-id": tooltipText ? "code-tooltip" : undefined,
+            "data-tooltip-content": tooltipText || undefined,
             "data-loc-id": mapping?.loc_id,
             "data-alias-name": mapping?.alias_name,
             "data-loc-def": isLocDef ? "true" : undefined,
@@ -654,27 +659,35 @@ const CodeViewer: React.FC<CodeViewerProps> = (props) => {
   // Check if there's any code at all
   if (!props.code) {
     return (
-      <div className="code-viewer" style={{
-        height: props.height || "100%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: props.theme === "light" ? "#fff" : "#1E1E1E",
-        color: props.theme === "light" ? "#333" : "#eee",
-      }}>
-        No code to display
-      </div>
+      <>
+        <Tooltip id="code-tooltip" place="top" />
+        <div className="code-viewer" style={{
+          height: props.height || "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: props.theme === "light" ? "#fff" : "#1E1E1E",
+          color: props.theme === "light" ? "#333" : "#eee",
+        }}>
+          No code to display
+        </div>
+      </>
     );
   }
 
   // Use optimized viewer for large files
-  if (props.code.length > EXTREMELY_LARGE_FILE_THRESHOLD) {
-    return <BasicCodeViewer {...props} />;
-  } else if (props.code.length > LARGE_FILE_THRESHOLD) {
-    return <LargeFileViewer {...props} />;
-  } else {
-    return <StandardCodeViewer {...props} />;
-  }
+  return (
+    <>
+      <Tooltip id="code-tooltip" place="top" />
+      {props.code.length > EXTREMELY_LARGE_FILE_THRESHOLD ? (
+        <BasicCodeViewer {...props} />
+      ) : props.code.length > LARGE_FILE_THRESHOLD ? (
+        <LargeFileViewer {...props} />
+      ) : (
+        <StandardCodeViewer {...props} />
+      )}
+    </>
+  );
 };
 
 // Use React.memo to prevent unnecessary re-renders
