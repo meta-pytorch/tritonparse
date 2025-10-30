@@ -176,6 +176,7 @@ export interface CompilationMetadata {
 export interface IRAnalysisData {
     // Mapping from IR stage -> <IO type -> count>
     io_counts?: Record<string, Record<string, number>>;
+    loop_schedules?: [Record<string, [string]>];
 }
 
 /**
