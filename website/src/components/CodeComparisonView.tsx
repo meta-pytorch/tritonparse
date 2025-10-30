@@ -1,4 +1,6 @@
-import React, { useState, useCallback } from "react";
+// (c) Meta Platforms, Inc. and affiliates.
+
+import React, { useCallback, useMemo, useRef } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
@@ -14,26 +16,62 @@ import { getDisplayLanguage } from "./TritonIRs";
  * Props for a single code panel
  */
 interface PanelProps {
-    code?: IRFile;     // IR file with source mapping
-    content?: string;  // Direct content (alternative to code)
-    language?: string; // Language for syntax highlighting
-    title?: string;    // Title for the panel
+    code?: IRFile;
+    content?: string;
+    language?: string;
+    title?: string;
 }
 
 /**
  * Props for the CodeComparisonView component
  */
 interface CodeComparisonViewProps {
-    leftPanel: PanelProps;  // Left panel properties
-    rightPanel: PanelProps; // Right panel properties
-    py_code_info?: PythonSourceCodeInfo; // Python source code information
-    showPythonSource?: boolean; // Flag to show/hide Python source panel
-    pythonMapping?: Record<string, SourceMapping>; // Python source code to all IR file mappings
+    leftPanel: PanelProps;
+    rightPanel: PanelProps;
+    py_code_info?: PythonSourceCodeInfo;
+    showPythonSource?: boolean;
+    pythonMapping?: Record<string, SourceMapping>;
+}
+
+/**
+ * Unified highlight state interface
+ */
+interface HighlightState {
+    left: number[];
+    right: number[];
+    python: number[];
+}
+
+/**
+ * Panel data interface for cached computations
+ */
+interface PanelData {
+    title: string;
+    content: string;
+    sourceMapping: Record<string, SourceMapping>;
+    displayLanguage: string;
+}
+
+/**
+ * Python info interface for cached computations
+ */
+interface PythonInfo {
+    code: string;
+    file_path: string;
+    start_line: number;
+    isFullFileMode: boolean;
+    function_start_line?: number;
+    function_end_line?: number;
 }
 
 /**
  * CodeComparisonView component that renders two or three code panels side by side
  * with optional line highlighting and synchronization between panels
+ *
+ * Performance optimizations:
+ * - Single state object for all highlights (reduces renders from 3 to 1)
+ * - useMemo for panel data (avoids unnecessary object recreations)
+ * - Pure functions with empty dependencies (functions never recreated)
  */
 const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     leftPanel,
@@ -42,112 +80,171 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     showPythonSource = false,
     pythonMapping,
 }) => {
-    // Track which lines are highlighted in each panel
-    const [leftHighlightedLines, setLeftHighlightedLines] = useState<number[]>(
-        []
-    );
-    const [rightHighlightedLines, setRightHighlightedLines] = useState<
-        number[]
-    >([]);
-    const [pythonHighlightedLines, setPythonHighlightedLines] = useState<
-        number[]
-    >([]);
-    /**
-     * Process panel properties to get content, source mapping and display language
-     * @param panel Panel properties
-     * @param defaultTitle Default title to use if panel title is undefined
-     * @returns Processed panel data
-     */
-    const processPanelProps = (panel: PanelProps, defaultTitle: string) => {
-        const title = panel.title || defaultTitle;
-        const content = panel.content || (panel.code ? panel.code.content : "");
-        const sourceMapping = panel.code?.source_mapping || {};
-        const displayLanguage = getDisplayLanguage(title);
-
-        return { title, content, sourceMapping, displayLanguage };
-    };
-    // Process panel properties
-    const leftPanel_data = processPanelProps(leftPanel, "TTGIR");
-    const rightPanel_data = processPanelProps(rightPanel, "PTX");
-
-    // Get Python source code info
-    const py_code = py_code_info?.code || "";
-    const py_file_path = py_code_info?.file_path || "";
-    const py_start_line = py_code_info?.start_line || 0;
+    // ==================== State Management ====================
 
     /**
-     * Find Python lines that correspond to the source location in the IR file
-     * @param sourceMapping Source mapping from IR file
-     * @param lineNumber Line number in the IR file
-     * @returns Array of Python line numbers that correspond to the source location
+     * CSS class toggle optimization: Use Ref instead of State
+     * Avoids component re-renders by implementing highlights via direct DOM manipulation
      */
-    const findPythonLines = useCallback(
-        (
-            sourceMapping: Record<string, SourceMapping>,
-            lineNumber: number
-        ): number[] => {
-            if (!sourceMapping || !py_code_info || !py_code) return [];
-
-            const lineKey = lineNumber.toString();
-            const mapping = sourceMapping[lineKey];
-
-            if (!mapping) return [];
-
-            // If we have a direct line mapping to Python source
-            if (mapping.file && mapping.line) {
-                // Check if the file path in the mapping matches the Python source file
-                if (mapping.file.includes(py_file_path)) {
-                    // Adjust for the start line in Python source
-                    // The source line in the mapping is absolute, but our display is relative to start_line
-                    const adjustedLine = Number(mapping.line) - py_start_line + 1;
-                    // Get the actual line content to verify
-                    const pythonLines = py_code.split("\n");
-                    if (
-                        adjustedLine >= 1 &&
-                        adjustedLine <= pythonLines.length
-                    ) {
-                        // Return the adjusted line as a number
-                        return [Number(adjustedLine)];
-                    } else {
-                        console.error(
-                            `Adjusted line ${adjustedLine} is out of range (1-${pythonLines.length})`
-                        );
-                    }
-                }
-            }
-
-            return [];
-        },
-        [py_code_info, py_code]
-    );
+    const highlightedLinesRef = useRef<HighlightState>({
+        left: [],
+        right: [],
+        python: []
+    });
 
     /**
-     * Handles finding and highlighting mapped lines when a line is clicked in either panel
-     * @param sourceMappings - Source mapping information for the source panel
-     * @param targetMappings - Source mapping information for the target panel
-     * @param lineNumber - The line number that was clicked
-     * @param setTargetHighlightedLines - Function to set highlighted lines in target panel
-     * @param targetTitle - The title of the target panel (to determine which mapping array to use)
+     * Smart scrolling: only scroll container when element is not visible
+     * Never scrolls the entire page, only scrolls the code container
+     * @param container Scroll container (CodeViewer)
+     * @param element Target element (code line)
      */
-    const handleMappedLinesFound = useCallback(
-        (
-            sourceMappings: Record<string, SourceMapping>,
-            lineNumber: number,
-            setTargetHighlightedLines: (lines: number[]) => void,
-            targetTitle: string
-        ) => {
-            const lineKey = lineNumber.toString();
-            // Skip if no source mapping exists for this line
-            if (!sourceMappings[lineKey]) {
-                setTargetHighlightedLines([]); // Ensure we clear highlights when no mapping exists
+    const scrollToElementIfNeeded = useCallback((container: HTMLElement, element: HTMLElement) => {
+        const containerRect = container.getBoundingClientRect();
+        const elementRect = element.getBoundingClientRect();
+
+        // Ensure container has valid dimensions
+        if (containerRect.height === 0) return;
+
+        // Calculate element position relative to container
+        const elementTop = elementRect.top - containerRect.top;
+        const elementBottom = elementRect.bottom - containerRect.top;
+
+        // Container visible height
+        const containerHeight = containerRect.height;
+
+        // Check if element is within visible range (with 20px margin)
+        const margin = 20;
+        const isVisible =
+            elementTop >= margin &&
+            elementBottom <= containerHeight - margin;
+
+        if (isVisible) {
+            // Element is already visible, no scrolling needed
+            return;
+        }
+
+        // Element is not visible, scroll container (not the page)
+        if (elementTop < margin) {
+            // Element is above viewport: scroll up to show it at top (with margin)
+            container.scrollTop += elementTop - margin;
+        } else if (elementBottom > containerHeight - margin) {
+            // Element is below viewport: scroll down to show it at bottom (with margin)
+            container.scrollTop += elementBottom - containerHeight + margin;
+        }
+    }, []);
+
+    /**
+     * Direct DOM manipulation to update highlights
+     * Uses requestAnimationFrame to ensure DOM elements are rendered before updating
+     * @param viewerId Panel ID ('left', 'right', 'python')
+     * @param lineNumbers Array of line numbers to highlight
+     */
+    const updateHighlights = useCallback((
+        viewerId: 'left' | 'right' | 'python',
+        lineNumbers: number[]
+    ) => {
+        // Use requestAnimationFrame to ensure CodeViewer components have rendered
+        requestAnimationFrame(() => {
+            const container = document.querySelector(`[data-viewer-id="${viewerId}"]`) as HTMLElement;
+            if (!container) {
+                // CodeViewer not yet rendered, skip update
                 return;
             }
 
+            // Remove old highlights
+            const oldLines = highlightedLinesRef.current[viewerId];
+            oldLines.forEach(lineNum => {
+                const element = container.querySelector(
+                    `[data-line-number="${lineNum}"]`
+                );
+                element?.classList.remove('highlighted-line');
+            });
+
+            // Add new highlights
+            lineNumbers.forEach(lineNum => {
+                const element = container.querySelector(
+                    `[data-line-number="${lineNum}"]`
+                );
+                element?.classList.add('highlighted-line');
+            });
+
+            // Update ref (does not trigger re-render)
+            highlightedLinesRef.current[viewerId] = lineNumbers;
+
+            // Smart scrolling: only scroll when necessary, only scroll container
+            if (lineNumbers.length > 0) {
+                const firstLine = Math.min(...lineNumbers);
+                const element = container.querySelector(
+                    `[data-line-number="${firstLine}"]`
+                ) as HTMLElement;
+
+                if (element) {
+                    scrollToElementIfNeeded(container, element);
+                }
+            }
+        });
+    }, [scrollToElementIfNeeded]);
+
+    // ==================== Memoized Computations ====================
+
+    /**
+     * Memoized left panel data
+     * Only recomputes when actual panel props change
+     */
+    const leftPanel_data = useMemo<PanelData>(() => ({
+        title: leftPanel.title || "TTGIR",
+        content: leftPanel.content || leftPanel.code?.content || "",
+        sourceMapping: leftPanel.code?.source_mapping || {},
+        displayLanguage: getDisplayLanguage(leftPanel.title || "TTGIR")
+    }), [leftPanel.title, leftPanel.content, leftPanel.code]);
+
+    /**
+     * Memoized right panel data
+     * Only recomputes when actual panel props change
+     */
+    const rightPanel_data = useMemo<PanelData>(() => ({
+        title: rightPanel.title || "PTX",
+        content: rightPanel.content || rightPanel.code?.content || "",
+        sourceMapping: rightPanel.code?.source_mapping || {},
+        displayLanguage: getDisplayLanguage(rightPanel.title || "PTX")
+    }), [rightPanel.title, rightPanel.content, rightPanel.code]);
+
+    /**
+     * Memoized Python source info
+     * Extracts and caches all Python-related data
+     */
+    const pythonInfo = useMemo<PythonInfo>(() => ({
+        code: py_code_info?.code || "",
+        file_path: py_code_info?.file_path || "",
+        start_line: py_code_info?.start_line || 1,
+        isFullFileMode: py_code_info?.start_line === 1 &&
+                       py_code_info?.function_start_line !== undefined,
+        function_start_line: py_code_info?.function_start_line,
+        function_end_line: py_code_info?.function_end_line,
+    }), [py_code_info]);
+
+    // ==================== Pure Utility Functions ====================
+
+    /**
+     * Pure function: Calculate mapped lines from source to target IR
+     * No external dependencies - only uses parameters
+     * @param sourceMappings Source mapping record
+     * @param lineNumber Line number in source
+     * @param targetTitle Target panel title (to determine IR type)
+     * @returns Array of mapped line numbers
+     */
+    const calculateMappedLines = useCallback(
+        (
+            sourceMappings: Record<string, SourceMapping>,
+            lineNumber: number,
+            targetTitle: string
+        ): number[] => {
+            const lineKey = lineNumber.toString();
+            if (!sourceMappings[lineKey]) return [];
+
             const sourceMapping = sourceMappings[lineKey];
-            // Initialize array to hold matched lines
-            let mappedLines: number[] = [];
             const targetIRType = getIRType(targetTitle);
-            // Define the possible IR types and their corresponding property names
+
             const irTypesToCheck = [
                 { type: "ttgir", property: "ttgir_lines" },
                 { type: "ttir", property: "ttir_lines" },
@@ -156,264 +253,314 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 { type: "amdgcn", property: "amdgcn_lines" }
             ];
 
-            // Loop through IR types to find matching lines
-            let found = false;
             for (const { type, property } of irTypesToCheck) {
-                if (targetIRType === type && sourceMapping[property as keyof SourceMapping] !== undefined) {
-                    mappedLines = sourceMapping[property as keyof SourceMapping] as number[];
-                    found = true;
-                    break;
+                if (targetIRType === type &&
+                    sourceMapping[property as keyof SourceMapping] !== undefined) {
+                    const lines = sourceMapping[property as keyof SourceMapping] as number[];
+                    return lines.map(line =>
+                        typeof line === "string" ? parseInt(line, 10) : line
+                    );
                 }
             }
 
-            // If no matching IR type was found
-            if (!found) {
-                setTargetHighlightedLines([]);
-                return;
-            }
-
-            if (mappedLines && mappedLines.length > 0) {
-                // ensure all line numbers are numbers (not strings)
-                const numericMappedLines = mappedLines.map((line) => {
-                    if (typeof line === "string") {
-                        return parseInt(line, 10);
-                    }
-                    return line;
-                });
-
-                // Force array to ensure it's not undefined or null and ensure numeric values
-                setTargetHighlightedLines(numericMappedLines.map(Number));
-
-            } else {
-                setTargetHighlightedLines([]);
-            }
+            return [];
         },
-        [leftPanel_data.content, rightPanel_data.content]
+        [] // Empty deps - pure function, never recreated
     );
 
     /**
-     * Handles clicking on a line in either the left or right code panel
-     * Highlights the line in the source panel and attempts to find and
-     * highlight corresponding lines in the target panel and Python panel
-     * @param lineNumber - The line number that was clicked
-     * @param panel - Which panel was clicked ('left' or 'right')
+     * Pure function: Calculate Python lines from IR source mapping
+     * No external dependencies - all info passed via parameters
+     * @param sourceMapping Source mapping record
+     * @param lineNumber Line number in IR
+     * @param pythonInfo Python file information
+     * @returns Array of Python line numbers
+     */
+    const calculatePythonLines = useCallback(
+        (
+            sourceMapping: Record<string, SourceMapping>,
+            lineNumber: number,
+            pythonInfo: PythonInfo
+        ): number[] => {
+            if (!sourceMapping || !pythonInfo.code) return [];
+
+            const lineKey = lineNumber.toString();
+            const mapping = sourceMapping[lineKey];
+            if (!mapping || !mapping.file || !mapping.line) return [];
+
+            // Check if file path matches
+            if (!mapping.file.includes(pythonInfo.file_path)) return [];
+
+            const absoluteLine = Number(mapping.line);
+
+            if (pythonInfo.isFullFileMode) {
+                // Full file mode: use absolute line numbers directly
+                return [absoluteLine];
+            } else {
+                // Function mode: convert absolute to relative line numbers
+                const adjustedLine = absoluteLine - pythonInfo.start_line + 1;
+                const pythonLines = pythonInfo.code.split("\n");
+
+                if (adjustedLine >= 1 && adjustedLine <= pythonLines.length) {
+                    return [adjustedLine];
+                } else {
+                    console.error(
+                        `Adjusted line ${adjustedLine} is out of range (1-${pythonLines.length})`
+                    );
+                }
+            }
+
+            return [];
+        },
+        [] // Empty deps - pure function, never recreated
+    );
+
+    // ==================== Event Handlers ====================
+
+    /**
+     * Handle line click in left or right panel
+     * Calculates all required highlights in one go, then updates state once
+     * @param lineNumber Line number clicked
+     * @param panel Which panel was clicked ('left' or 'right')
      */
     const handlePanelLineClick = useCallback(
         (lineNumber: number, panel: 'left' | 'right') => {
-            // Determine source and target based on which panel was clicked
             const isLeftPanel = panel === 'left';
-            const sourceMapping = isLeftPanel ? leftPanel_data.sourceMapping : rightPanel_data.sourceMapping;
-            const targetTitle = isLeftPanel ? rightPanel_data.title || "PTX" : leftPanel_data.title || "TTGIR";
-            
-            // Set highlight on the source panel first
-            if (isLeftPanel) {
-                setLeftHighlightedLines([lineNumber]);
-            } else {
-                setRightHighlightedLines([lineNumber]);
-            }
 
-            // Find corresponding lines in target panel using source mappings
-            if (leftPanel.code && rightPanel.code) {
-                const setTargetHighlightedLines = isLeftPanel ? setRightHighlightedLines : setLeftHighlightedLines;
-                handleMappedLinesFound(
-                    sourceMapping,
+            // Get source and target panel data
+            const sourceData = isLeftPanel ? leftPanel_data : rightPanel_data;
+            const targetData = isLeftPanel ? rightPanel_data : leftPanel_data;
+
+            // Step 1: Calculate target panel's mapped lines
+            const targetLines = calculateMappedLines(
+                sourceData.sourceMapping,
+                lineNumber,
+                targetData.title
+            );
+
+            // Step 2: Calculate Python panel's mapped lines
+            const pythonLines = showPythonSource && py_code_info
+                ? calculatePythonLines(
+                    sourceData.sourceMapping,
                     lineNumber,
-                    setTargetHighlightedLines,
-                    targetTitle
-                );
+                    pythonInfo
+                )
+                : [];
 
-            } else {
-                // Clear target panel highlights if no mapping exists
-                if (isLeftPanel) {
-                    setRightHighlightedLines([]);
-                } else {
-                    setLeftHighlightedLines([]);
-                }
-            }
-
-            // Find corresponding Python lines if Python source is shown
-            if (showPythonSource && py_code_info) {
-                const pythonLines = findPythonLines(
-                    sourceMapping,
-                    lineNumber
-                );
-                if (pythonLines.length > 0) {
-                    setPythonHighlightedLines(pythonLines);
-                } else {
-                    setPythonHighlightedLines([]);
-                }
-            }
-
+            // Step 3: Update highlights via direct DOM manipulation (no re-render)
+            updateHighlights('left', isLeftPanel ? [lineNumber] : targetLines);
+            updateHighlights('right', isLeftPanel ? targetLines : [lineNumber]);
+            updateHighlights('python', pythonLines);
         },
         [
-            leftPanel.code,
-            rightPanel.code,
-            leftPanel_data.title,
-            rightPanel_data.title,
-            leftPanel_data.sourceMapping,
-            rightPanel_data.sourceMapping,
-            handleMappedLinesFound,
+            leftPanel_data,
+            rightPanel_data,
+            calculateMappedLines,
+            calculatePythonLines,
             showPythonSource,
             py_code_info,
-            findPythonLines
+            pythonInfo
         ]
     );
 
-    // Use curried functions to maintain the existing API for component props
+    /**
+     * Handle line click in Python panel
+     * Finds corresponding lines in both IR panels
+     * @param lineNumber Line number clicked in Python panel
+     */
+    const handlePythonLineClick = useCallback(
+        (lineNumber: number) => {
+            if (!pythonMapping) {
+                return;
+            }
+
+            // Convert display line number to absolute line number
+            const absoluteLineNumber = pythonInfo.isFullFileMode
+                ? lineNumber
+                : lineNumber + pythonInfo.start_line - 1;
+
+            const mapping = pythonMapping[absoluteLineNumber.toString()];
+            if (!mapping) {
+                return;
+            }
+
+            // Find corresponding lines in left panel
+            const leftLines = calculateMappedLines(
+                { [absoluteLineNumber.toString()]: mapping },
+                absoluteLineNumber,
+                leftPanel_data.title
+            );
+
+            // Find corresponding lines in right panel
+            const rightLines = calculateMappedLines(
+                { [absoluteLineNumber.toString()]: mapping },
+                absoluteLineNumber,
+                rightPanel_data.title
+            );
+
+            // Update highlights via direct DOM manipulation (no re-render)
+            updateHighlights('left', leftLines);
+            updateHighlights('right', rightLines);
+            updateHighlights('python', [lineNumber]);
+        },
+        [
+            pythonMapping,
+            pythonInfo,
+            calculateMappedLines,
+            leftPanel_data.title,
+            rightPanel_data.title
+        ]
+    );
+
+    /**
+     * Curried function for left panel line clicks
+     */
     const handleLeftLineClick = useCallback(
         (lineNumber: number) => handlePanelLineClick(lineNumber, 'left'),
         [handlePanelLineClick]
     );
 
+    /**
+     * Curried function for right panel line clicks
+     */
     const handleRightLineClick = useCallback(
         (lineNumber: number) => handlePanelLineClick(lineNumber, 'right'),
         [handlePanelLineClick]
     );
 
-    /**
-     * Handles clicking on a line in the Python source panel
-     * Maps Python line to IR lines in both panels
-     * @param lineNumber - The line number that was clicked in the Python panel
-     */
-    const handlePythonLineClick = useCallback(
-        (lineNumber: number) => {
-            setPythonHighlightedLines([lineNumber]);
+    // ==================== Render ====================
 
-            // compute the actual line number in the Python source code
-            // Notice: lineNumber is 1-based, but py_start_line is 0-based
-            // pythonLineNumber is 0-based
-            const pythonLineNumber = lineNumber + py_start_line - 1 ;
-
-            const highlightLines = (title: string, panel: 'left' | 'right') => {
-                if (pythonMapping && pythonMapping[pythonLineNumber]) {
-                    // get ir_type from title
-                    const irType = getIRType(title);
-                    const irLines = pythonMapping[pythonLineNumber][`${irType}_lines` as keyof SourceMapping] as number[] || [];
-
-                    if (panel === 'left') {
-                        // Ensure all values are numbers
-                        setLeftHighlightedLines(irLines.map(Number));
-                    } else {
-                        // Ensure all values are numbers
-                        setRightHighlightedLines(irLines.map(Number));
-                    }
-                } else {
-                    panel === 'left' ? setLeftHighlightedLines([]) : setRightHighlightedLines([]);
-                }
-            };
-
-            highlightLines(leftPanel_data.title, 'left');
-            highlightLines(rightPanel_data.title, 'right');
-
-        },
-        [pythonMapping, py_start_line, leftPanel_data.title, rightPanel_data.title]
-    );
-
-
-    /**
-     * A reusable code panel component
-     */
-    const CodePanel = React.memo<{
-        title: string;
-        displayLanguage: string;
-        code: string;
-        language: string;
-        highlightedLines: number[];
-        onLineClick: (lineNumber: number) => void;
-        viewerId: string;
-        otherViewerId?: string;
-    }>(({
-        title,
-        displayLanguage,
-        code,
-        language,
-        highlightedLines,
-        onLineClick,
-        viewerId,
-        otherViewerId
-    }) => (
-        <div className="h-full">
-            <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                <span>{title}</span>
-                <div className="flex items-center gap-2">
-                    <span className="text-sm bg-blue-700 px-2 py-1 rounded">
-                        {displayLanguage}
-                    </span>
-                    <CopyCodeButton 
-                        code={code}
-                        className="text-sm bg-blue-700 px-2 py-1 rounded" 
-                    />
-                </div>
-            </div>
-            <CodeViewer
-                code={code}
-                language={language}
-                height="calc(100% - 40px)"
-                highlightedLines={highlightedLines}
-                onLineClick={onLineClick}
-                theme="light"
-                fontSize={14}
-                viewerId={viewerId}
-                otherViewerId={otherViewerId}
-            />
-        </div>
-    ));
-
-    // Render two or three panels based on whether Python source is available
     return (
-        <div className="h-[calc(100vh-12rem)] bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
-            {/* Resizable panel layout */}
-            <PanelGroup direction="horizontal">
-                {/* Left panel */}
-                <Panel defaultSize={showPythonSource ? 33 : 50} minSize={20}>
-                    <CodePanel
-                        title={leftPanel_data.title}
-                        displayLanguage={leftPanel_data.displayLanguage}
-                        code={leftPanel_data.content}
-                        language={leftPanel.language || "plaintext"}
-                        highlightedLines={leftHighlightedLines}
-                        onLineClick={handleLeftLineClick}
-                        viewerId="left-panel"
-                        otherViewerId="right-panel"
-                    />
-                </Panel>
-
-                {/* Resize handle between panels */}
-                <PanelResizeHandle className="w-2 bg-gray-200 hover:bg-gray-300 transition-colors" />
-
-                {/* Right panel */}
-                <Panel defaultSize={showPythonSource ? 33 : 50} minSize={20}>
-                    <CodePanel
-                        title={rightPanel_data.title}
-                        displayLanguage={rightPanel_data.displayLanguage}
-                        code={rightPanel_data.content}
-                        language={rightPanel.language || "plaintext"}
-                        highlightedLines={rightHighlightedLines}
-                        onLineClick={handleRightLineClick}
-                        viewerId="right-panel"
-                        otherViewerId="left-panel"
-                    />
-                </Panel>
-                {/* Python source panel (only shown if Python source is available) */}
-                {showPythonSource && (
-                    <>
-                        <PanelResizeHandle className="w-2 bg-gray-200 hover:bg-gray-300 transition-colors" />
-                        <Panel defaultSize={33} minSize={20}>
-                            <CodePanel
-                                title="Python Source"
-                                displayLanguage={getDisplayLanguage("python")}
-                                code={py_code}
-                                language="python"
-                                highlightedLines={pythonHighlightedLines}
-                                onLineClick={handlePythonLineClick}
-                                viewerId="python-panel"
+        <PanelGroup direction="horizontal" style={{ height: '100%' }}>
+            {/* Left Panel */}
+            <Panel defaultSize={33} minSize={20}>
+                <div style={{
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    position: "relative"
+                }}>
+                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
+                        <span>{leftPanel_data.title}</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm bg-blue-700 px-2 py-1 rounded">
+                                {leftPanel_data.displayLanguage}
+                            </span>
+                            <CopyCodeButton
+                                code={leftPanel_data.content}
+                                className="text-sm bg-blue-700 px-2 py-1 rounded"
                             />
-                        </Panel>
-                    </>
-                )}
-            </PanelGroup>
-        </div>
+                        </div>
+                    </div>
+                    <div style={{ flex: 1, overflow: "hidden" }}>
+                        <CodeViewer
+                            code={leftPanel_data.content}
+                            language={leftPanel_data.displayLanguage}
+                            height="100%"
+                            highlightedLines={[]}
+                            onLineClick={handleLeftLineClick}
+                            viewerId="left"
+                            sourceMapping={leftPanel_data.sourceMapping}
+                        />
+                    </div>
+                </div>
+            </Panel>
+
+            <PanelResizeHandle style={{
+                width: "4px",
+                backgroundColor: "#ddd",
+                cursor: "col-resize"
+            }} />
+
+            {/* Right Panel */}
+            <Panel defaultSize={33} minSize={20}>
+                <div style={{
+                    height: "100%",
+                    display: "flex",
+                    flexDirection: "column",
+                    position: "relative"
+                }}>
+                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
+                        <span>{rightPanel_data.title}</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm bg-blue-700 px-2 py-1 rounded">
+                                {rightPanel_data.displayLanguage}
+                            </span>
+                            <CopyCodeButton
+                                code={rightPanel_data.content}
+                                className="text-sm bg-blue-700 px-2 py-1 rounded"
+                            />
+                        </div>
+                    </div>
+                    <div style={{ flex: 1, overflow: "hidden" }}>
+                        <CodeViewer
+                            code={rightPanel_data.content}
+                            language={rightPanel_data.displayLanguage}
+                            height="100%"
+                            highlightedLines={[]}
+                            onLineClick={handleRightLineClick}
+                            viewerId="right"
+                            sourceMapping={rightPanel_data.sourceMapping}
+                        />
+                    </div>
+                </div>
+            </Panel>
+
+            {/* Python Source Panel (Optional) */}
+            {showPythonSource && py_code_info && (
+                <>
+                    <PanelResizeHandle style={{
+                        width: "4px",
+                        backgroundColor: "#ddd",
+                        cursor: "col-resize"
+                    }} />
+                    <Panel defaultSize={34} minSize={20}>
+                        <div style={{
+                            height: "100%",
+                            display: "flex",
+                            flexDirection: "column",
+                            position: "relative"
+                        }}>
+                            <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
+                                <span>
+                                    {pythonInfo.isFullFileMode
+                                        ? "Python Source (Full File)"
+                                        : "Python Source"}
+                                </span>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm bg-blue-700 px-2 py-1 rounded">
+                                        python
+                                    </span>
+                                    <CopyCodeButton
+                                        code={pythonInfo.code}
+                                        className="text-sm bg-blue-700 px-2 py-1 rounded"
+                                    />
+                                </div>
+                            </div>
+                            <div style={{ flex: 1, overflow: "hidden" }}>
+                                <CodeViewer
+                                    code={pythonInfo.code}
+                                    language="python"
+                                    height="100%"
+                                    highlightedLines={[]}
+                                    onLineClick={handlePythonLineClick}
+                                    viewerId="python"
+                                    sourceMapping={pythonMapping}
+                                    functionStartLine={pythonInfo.function_start_line}
+                                    functionEndLine={pythonInfo.function_end_line}
+                                    initialScrollToLine={
+                                        pythonInfo.isFullFileMode
+                                            ? pythonInfo.function_start_line
+                                            : undefined
+                                    }
+                                />
+                            </div>
+                        </div>
+                    </Panel>
+                </>
+            )}
+        </PanelGroup>
     );
 };
 
-export default CodeComparisonView;
+export default React.memo(CodeComparisonView);
