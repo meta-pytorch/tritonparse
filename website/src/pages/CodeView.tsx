@@ -232,7 +232,7 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
 
       {/* Side-by-side comparison of selected IR files */}
       {leftIR && rightIR ? (
-        <>
+        <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
           <CodeComparisonView
             leftPanel={{
               code: {
@@ -254,7 +254,7 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
             showPythonSource={showPythonSource && hasPythonSource}
             pythonMapping={kernel.sourceMappings?.["python"] || {}}
           />
-        </>
+        </div>
       ) : (
         <div className="p-8 text-center text-gray-600">
           Select IR files to compare

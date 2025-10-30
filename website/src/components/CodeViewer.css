@@ -1,13 +1,3 @@
-/* Location definition line styles */
-.loc-definition-line {
-    background-color: rgba(255, 215, 0, 0.1) !important;
-    border-left: 3px solid #ffd700 !important;
-}
-
-.loc-definition-line:hover {
-    background-color: rgba(255, 215, 0, 0.2) !important;
-}
-
 /* Alias name badge */
 .alias-badge {
     display: inline-block;
@@ -40,4 +30,66 @@
     opacity: 0.6;
     font-size: 0.8em;
     margin-left: 4px;
+}
+
+/* Function range highlighting styles */
+.function-range {
+    background-color: rgba(255, 235, 59, 0.08);
+    border-left: 3px solid #ffc107;
+}
+
+.function-range-start {
+    border-top: 2px solid #ffc107;
+}
+
+.function-range-end {
+    border-bottom: 2px solid #ffc107;
+}
+
+/* Highlighted line - highest priority */
+.highlighted-line {
+    background-color: rgba(255, 215, 0, 0.4) !important;
+    border-left: 3px solid orange !important;
+}
+
+/* When a line is both highlighted and in function range - highlight takes precedence for bg and border */
+.highlighted-line.function-range {
+    /* Background and left border are from .highlighted-line due to !important */
+    /* But we preserve the top/bottom borders from function range markers */
+}
+
+.highlighted-line.function-range-start {
+    border-top: 2px solid orange !important;
+}
+
+.highlighted-line.function-range-end {
+    border-bottom: 2px solid orange !important;
+}
+
+/* Function marker for the function definition line */
+.function-marker {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: #fff3cd;
+    border-left: 3px solid #ffc107;
+    font-size: 12px;
+    color: #856404;
+    font-weight: 500;
+    margin-left: 8px;
+}
+
+.function-marker .function-icon {
+    font-size: 14px;
+}
+
+/* Dark theme adjustments for function range */
+[data-theme="dark"] .function-range {
+    background-color: rgba(255, 235, 59, 0.12);
+}
+
+[data-theme="dark"] .function-marker {
+    background: #4a4229;
+    color: #ffd54f;
 }

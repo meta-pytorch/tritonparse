@@ -212,6 +212,9 @@ export interface PythonSourceCodeInfo {
     start_line: number;
     end_line?: number; // End line number (inclusive)
     code?: string;
+    // Optional: When displaying full file, marks the function range for highlighting/scrolling
+    function_start_line?: number; // Function definition start line (only in full file mode)
+    function_end_line?: number; // Function definition end line (only in full file mode)
 }
 
 /**

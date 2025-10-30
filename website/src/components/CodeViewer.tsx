@@ -36,7 +36,6 @@ const useScrollManagement = (
   containerRef: React.RefObject<HTMLDivElement | null>,
   highlightedLines: number[],
   viewerId: string | undefined,
-  fontSize: number,
   customScrollToLine?: (lineNumber: number) => void
 ) => {
   const isRestoringScrollRef = useRef<boolean>(false);
@@ -83,7 +82,7 @@ const useScrollManagement = (
 
     const isHighlightChange =
       prevLines.length > 0 || currentLines.length > 0; // Either had highlights before or has now
-    
+
     // Check if this is truly a NEW highlight change (lines actually changed)
     const linesChanged = JSON.stringify(prevLines) !== JSON.stringify(currentLines);
 
@@ -105,10 +104,21 @@ const useScrollManagement = (
         customScrollToLine(firstHighlightedLine);
         resetScrollFlag(100);
       } else {
-        // Use direct scroll positioning (for standard files)
-        const lineHeight = Math.ceil(fontSize * 1.5);
-        const targetScrollPosition = Math.max(0, (firstHighlightedLine - 1) * lineHeight);
-        performDirectScroll(container, targetScrollPosition);
+        // ✅ Use scrollIntoView for accurate scrolling without calculating line height
+        requestAnimationFrame(() => {
+          const targetLine = container.querySelector(
+            `[data-line-number="${firstHighlightedLine}"]`
+          );
+
+          if (targetLine) {
+            targetLine.scrollIntoView({
+              behavior: 'auto',
+              block: 'start',
+              inline: 'nearest'
+            });
+          }
+          resetScrollFlag(10);
+        });
       }
     } else {
       // If clearing highlights, restore the saved scroll position
@@ -122,7 +132,7 @@ const useScrollManagement = (
 
     // Update previous highlights
     previousHighlightedLinesRef.current = [...currentLines];
-  }, [highlightedLines, scrollKey, fontSize, customScrollToLine, resetScrollFlag, performDirectScroll]);
+  }, [highlightedLines, scrollKey, customScrollToLine, resetScrollFlag, performDirectScroll]);
 
   return {
     saveScrollPosition
@@ -144,6 +154,10 @@ interface CodeViewerProps {
   otherViewerId?: string; // Identifier for the paired viewer (for mapping)
   sourceMapping?: Record<string, SourceMapping>; // Source mapping information
   onMappedLinesFound?: (mappedLines: number[]) => void; // Callback when mapped lines are found
+  functionStartLine?: number; // Function definition start line (for highlighting in full file mode)
+  functionEndLine?: number; // Function definition end line (for highlighting in full file mode)
+  initialScrollToLine?: number; // Line number to scroll to on initial render
+  onScrollComplete?: () => void; // Callback fired when initial scroll completes
 }
 
 /**
@@ -208,16 +222,49 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
   highlightedLines = [],
   onLineClick,
   viewerId,
-  sourceMapping,
+  initialScrollToLine,
+  functionStartLine,
+  functionEndLine,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lines = splitIntoLines(code);
+  const hasScrolledRef = useRef(false);
 
   const handleLineClick = useCallback((lineNumber: number) => {
     if (onLineClick) {
       onLineClick(lineNumber);
     }
   }, [onLineClick, viewerId]);
+
+  // Initial scroll effect - use scrollIntoView for accuracy
+  useEffect(() => {
+    if (!initialScrollToLine || hasScrolledRef.current) {
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Delay to ensure DOM is rendered
+    const timer = setTimeout(() => {
+      const targetLine = container.querySelector(
+        `[data-line-number="${initialScrollToLine}"]`
+      );
+
+      if (targetLine) {
+        targetLine.scrollIntoView({
+          behavior: 'auto',
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+
+      hasScrolledRef.current = true;
+      // Note: onScrollComplete is intentionally not called to avoid triggering parent re-renders
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [initialScrollToLine]);
 
   return (
     <div
@@ -241,21 +288,24 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
           {lines.map((line, index) => {
             const lineNumber = index + 1;
             const isHighlighted = highlightedLines.includes(lineNumber);
-            const mapping = sourceMapping?.[lineNumber.toString()];
-            const isLocDef = mapping?.type === "loc_def" || mapping?.kind === "loc_def";
-            
-            // Build tooltip text for loc definitions
-            let tooltipText = "";
-            if (isLocDef && mapping) {
-              tooltipText = `Location definition`;
-              if (mapping.alias_name) {
-                tooltipText += `: ${mapping.alias_name}`;
-              }
-              if (mapping.alias_of !== undefined) {
-                const targetKey = mapping.alias_of === "" ? "#loc" : `#loc${mapping.alias_of}`;
-                tooltipText += ` → ${targetKey}`;
-              }
-            }
+
+            // Check if line is in function range
+            const isInFunctionRange =
+              functionStartLine !== undefined &&
+              functionEndLine !== undefined &&
+              lineNumber >= functionStartLine &&
+              lineNumber <= functionEndLine;
+
+            const isFunctionStart = lineNumber === functionStartLine;
+            const isFunctionEnd = lineNumber === functionEndLine;
+
+            // Build class names
+            const classNames = [
+              isHighlighted ? 'highlighted-line' : '',
+              isInFunctionRange ? 'function-range' : '',
+              isFunctionStart ? 'function-range-start' : '',
+              isFunctionEnd ? 'function-range-end' : ''
+            ].filter(Boolean).join(' ');
 
             return (
               <div
@@ -264,19 +314,11 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
                   paddingLeft: "3.8em",
                   position: "relative",
                   whiteSpace: "pre-wrap",
-                  backgroundColor: isHighlighted
-                    ? "rgba(255, 215, 0, 0.4)" // More golden yellow
-                    : "transparent",
-                  borderLeft: isHighlighted ? "3px solid orange" : "none",
                   cursor: onLineClick ? "pointer" : "text"
                 }}
                 onClick={() => handleLineClick(lineNumber)}
                 data-line-number={lineNumber}
-                className={`${isHighlighted ? 'highlighted-line' : ''} ${isLocDef ? 'loc-definition-line' : ''}`}
-                title={tooltipText}
-                data-loc-id={mapping?.loc_id}
-                data-alias-name={mapping?.alias_name}
-                data-loc-def={isLocDef ? "true" : undefined}
+                className={classNames}
               >
                 <span style={{
                   position: "absolute",
@@ -311,12 +353,16 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
   highlightedLines = [],
   onLineClick,
   viewerId,
-  sourceMapping,
+  initialScrollToLine,
+  onScrollComplete,
+  functionStartLine,
+  functionEndLine,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 50 });
   const lines = splitIntoLines(code);
   const lineHeight = Math.ceil(fontSize * 1.5); // Approximate line height based on font size
+  const hasScrolledRef = useRef(false);
 
   // Function to scroll to a specific line
   const scrollToLine = useCallback((lineNumber: number) => {
@@ -338,9 +384,33 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
     containerRef,
     highlightedLines,
     viewerId,
-    fontSize,
     scrollToLine // Pass custom scroll function for large files
   );
+
+  // Initial scroll effect for large files
+  // Note: LargeFileViewer uses virtual scrolling, so we use calculated position
+  // instead of scrollIntoView (target line may not be rendered yet)
+  useEffect(() => {
+    if (!initialScrollToLine || hasScrolledRef.current) {
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Delay to ensure DOM is rendered
+    const timer = setTimeout(() => {
+      // For virtual scrolling, we must use calculated position
+      // because the target line might not be rendered yet
+      const targetScrollTop = (initialScrollToLine - 1) * lineHeight;
+      container.scrollTop = Math.max(0, targetScrollTop);
+
+      hasScrolledRef.current = true;
+      onScrollComplete?.();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [initialScrollToLine, lineHeight, onScrollComplete]);
 
   // Use useCallback to memoize the scroll handler
   const updateVisibleLines = useCallback(() => {
@@ -443,49 +513,37 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
             lineProps={(lineNumber) => {
               // Adjust line number based on visible range
               const actualLine = lineNumber + visibleRange.start;
-              const mapping = sourceMapping?.[actualLine.toString()];
-              const isLocDef = mapping?.type === "loc_def" || mapping?.kind === "loc_def";
+              const isHighlighted = highlightedLines.includes(actualLine);
 
-              // Create styles for the line
+              // Check if line is in function range
+              const isInFunctionRange =
+                functionStartLine !== undefined &&
+                functionEndLine !== undefined &&
+                actualLine >= functionStartLine &&
+                actualLine <= functionEndLine;
+
+              const isFunctionStart = actualLine === functionStartLine;
+              const isFunctionEnd = actualLine === functionEndLine;
+
+              // Create styles for the line (no colors - handled by CSS classes)
               const style: React.CSSProperties = {
                 display: "block",
                 cursor: onLineClick ? "pointer" : "text",
               };
 
-              // Apply background color if this line should be highlighted
-              const isHighlighted = highlightedLines.includes(actualLine);
-              if (isHighlighted) {
-                // Use a more vibrant highlight color with better contrast
-                style.backgroundColor = theme === "light"
-                  ? "rgba(255, 215, 0, 0.4)" // More golden yellow for light theme
-                  : "rgba(255, 215, 0, 0.3)"; // Similar but slightly dimmer for dark theme
-                style.borderLeft = "3px solid orange"; // Add left border for better visibility
-                style.paddingLeft = "6px"; // Add some padding to offset the border
-
-              }
-
-              // Build tooltip text for loc definitions
-              let tooltipText = "";
-              if (isLocDef && mapping) {
-                tooltipText = `Location definition`;
-                if (mapping.alias_name) {
-                  tooltipText += `: ${mapping.alias_name}`;
-                }
-                if (mapping.alias_of !== undefined) {
-                  const targetKey = mapping.alias_of === "" ? "#loc" : `#loc${mapping.alias_of}`;
-                  tooltipText += ` → ${targetKey}`;
-                }
-              }
+              // Build class names
+              const classNames = [
+                isHighlighted ? 'highlighted-line' : '',
+                isInFunctionRange ? 'function-range' : '',
+                isFunctionStart ? 'function-range-start' : '',
+                isFunctionEnd ? 'function-range-end' : ''
+              ].filter(Boolean).join(' ');
 
               return {
                 style,
                 onClick: () => handleLineClick(actualLine),
                 'data-line-number': actualLine,
-                className: `${isHighlighted ? 'highlighted-line' : ''} ${isLocDef ? 'loc-definition-line' : ''}`,
-                title: tooltipText,
-                'data-loc-id': mapping?.loc_id,
-                'data-alias-name': mapping?.alias_name,
-                'data-loc-def': isLocDef ? "true" : undefined,
+                className: classNames,
               };
             }}
             customStyle={{
@@ -505,6 +563,7 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
 
 /**
  * Standard code viewer for smaller files
+ * CSS class toggle optimization: Render once, highlights via direct DOM manipulation
  */
 const StandardCodeViewer: React.FC<CodeViewerProps> = ({
   code,
@@ -512,39 +571,55 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
   height = "100%",
   theme = "light",
   fontSize = 14,
-  highlightedLines = [],
   onLineClick,
   viewerId,
-  sourceMapping,
+  initialScrollToLine,
+  onScrollComplete,
+  functionStartLine,
+  functionEndLine,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
 
-  // Use the common scroll management hook (no custom scroll function for standard viewer)
-  const { saveScrollPosition } = useScrollManagement(
-    containerRef,
-    highlightedLines,
-    viewerId,
-    fontSize
-  );
-
-  // Map the language to the appropriate highlighter language
-  const highlighterLanguage = mapLanguageToHighlighter(language);
-
-  // Save scroll position on scroll
+  // Initial scroll effect - use scrollIntoView for accuracy
   useEffect(() => {
+    if (!initialScrollToLine || hasScrolledRef.current) {
+      return;
+    }
+
     const container = containerRef.current;
     if (!container) return;
 
-    container.addEventListener('scroll', saveScrollPosition, { passive: true });
-    return () => container.removeEventListener('scroll', saveScrollPosition);
-  }, [saveScrollPosition]);
+    // Delay to ensure DOM is rendered
+    const timer = setTimeout(() => {
+      const targetLine = container.querySelector(
+        `[data-line-number="${initialScrollToLine}"]`
+      );
 
-  // Enhanced line click handler that processes source mapping
+      if (targetLine) {
+        targetLine.scrollIntoView({
+          behavior: 'auto',
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+
+      hasScrolledRef.current = true;
+      onScrollComplete?.();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [initialScrollToLine, onScrollComplete]);
+
+  // Enhanced line click handler
   const handleLineClick = useCallback((lineNumber: number) => {
     if (onLineClick) {
       onLineClick(lineNumber);
     }
-  }, [onLineClick, viewerId]);
+  }, [onLineClick]);
+
+  // Map the language to the appropriate highlighter language
+  const highlighterLanguage = mapLanguageToHighlighter(language);
 
   return (
     <div
@@ -552,67 +627,50 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
       style={{
         height,
         overflowY: "auto",
-        fontSize: `${fontSize}px`,
-        backgroundColor: theme === "light" ? "#fff" : "#1E1E1E"
+        fontSize: `${fontSize}px`
       }}
-      className={`code-viewer ${highlightedLines.length > 0 ? 'has-highlights' : ''}`}
+      className="code-viewer"
       data-viewer-id={viewerId}
-      data-highlighted-lines={highlightedLines.join(',')}
     >
       <SyntaxHighlighter
         language={highlighterLanguage}
         style={theme === "light" ? oneLight : oneDark}
-        customStyle={{
-          margin: 0,
-          padding: "0.5em",
-          fontSize: `${fontSize}px`,
-          backgroundColor: "transparent",
-          overflow: "visible",
-        }}
-        showLineNumbers={true}
-        lineNumberStyle={{
-          userSelect: "none",
-          opacity: 0.5,
-          fontSize: `${fontSize}px`,
-          color: theme === "light" ? "#666" : "#aaa"
-        }}
-        wrapLines={true}
+        showLineNumbers
+        wrapLines
         lineProps={(lineNumber) => {
-          const isHighlighted = highlightedLines.includes(lineNumber);
-          const mapping = sourceMapping?.[lineNumber.toString()];
-          const isLocDef = mapping?.type === "loc_def" || mapping?.kind === "loc_def";
-          
-          // Build tooltip text for loc definitions
-          let tooltipText = "";
-          if (isLocDef && mapping) {
-            tooltipText = `Location definition`;
-            if (mapping.alias_name) {
-              tooltipText += `: ${mapping.alias_name}`;
-            }
-            if (mapping.alias_of !== undefined) {
-              const targetKey = mapping.alias_of === "" ? "#loc" : `#loc${mapping.alias_of}`;
-              tooltipText += ` → ${targetKey}`;
-            }
-          }
-          
+          // Check if line is in function range
+          const isInFunctionRange =
+            functionStartLine !== undefined &&
+            functionEndLine !== undefined &&
+            lineNumber >= functionStartLine &&
+            lineNumber <= functionEndLine;
+
+          const isFunctionStart = lineNumber === functionStartLine;
+          const isFunctionEnd = lineNumber === functionEndLine;
+
+          // Build class names (excludes highlighted-line, controlled by external DOM manipulation)
+          const classNames = [
+            isInFunctionRange ? 'function-range' : '',
+            isFunctionStart ? 'function-range-start' : '',
+            isFunctionEnd ? 'function-range-end' : ''
+          ].filter(Boolean).join(' ');
+
           return {
             style: {
-              backgroundColor: isHighlighted
-                ? "rgba(255, 215, 0, 0.4)" // Golden yellow highlight
-                : "transparent",
-              borderLeft: isHighlighted ? "3px solid orange" : "none",
-              cursor: onLineClick ? "pointer" : "text",
               display: "block",
-              width: "100%",
+              cursor: onLineClick ? "pointer" : "text",
             },
             onClick: () => handleLineClick(lineNumber),
-            "data-line-number": lineNumber,
-            className: `${isHighlighted ? 'highlighted-line' : ''} ${isLocDef ? 'loc-definition-line' : ''}`,
-            title: tooltipText,
-            "data-loc-id": mapping?.loc_id,
-            "data-alias-name": mapping?.alias_name,
-            "data-loc-def": isLocDef ? "true" : undefined,
+            'data-line-number': lineNumber,
+            'data-viewer-id': viewerId,
+            className: classNames,
           };
+        }}
+        customStyle={{
+          margin: 0,
+          fontSize: "inherit",
+          backgroundColor: theme === "light" ? "#fff" : "#1E1E1E",
+          padding: "0.5em",
         }}
       >
         {code}
