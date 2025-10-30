@@ -48,6 +48,14 @@ TRITON_TRACE_LAUNCH = os.getenv("TRITON_TRACE_LAUNCH", None) in ["1", "true", "T
 TRITONPARSE_MORE_TENSOR_INFORMATION = os.getenv(
     "TRITONPARSE_MORE_TENSOR_INFORMATION", None
 ) in ["1", "true", "True"]
+# Enable full Python source file extraction instead of just the function definition
+TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
+    "1",
+    "true",
+    "True",
+]
+# Maximum file size for full source extraction (default 10MB)
+TRITON_MAX_SOURCE_SIZE = int(os.getenv("TRITON_MAX_SOURCE_SIZE", str(10 * 1024 * 1024)))
 # Inductor compiled kernel's launch tracing needs this flag to be set.
 # If TRITON_TRACE_LAUNCH is enabled, also enable TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK
 TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = (
@@ -727,6 +735,17 @@ def extract_python_source_info(trace_data: Dict[str, Any], source):
     from the provided source object (typically an ASTSource or IRSource instance).
     It adds file path, line numbers, and the actual source code to the trace_data.
 
+    By default, only the function definition is extracted. Set TRITON_FULL_PYTHON_SOURCE=1
+    to extract the entire Python source file.
+    @TODO: we should enable it by default in next diff and track the compilation time regression
+
+    Environment Variables:
+        TRITON_FULL_PYTHON_SOURCE: If set to "1", extract the full Python file
+                                   instead of just the function definition.
+        TRITON_MAX_SOURCE_SIZE: Maximum file size in bytes for full source extraction
+                               (default: 10MB). Files larger than this will fall back
+                               to function-only mode.
+
     Args:
         trace_data (Dict[str, Any]): Dictionary to store extracted information
         source (Union[ASTSource, IRSource]): Source object containing kernel function information
@@ -738,23 +757,77 @@ def extract_python_source_info(trace_data: Dict[str, Any], source):
     if isinstance(source, IRSource):
         return
 
-    # Get the original Python source code for the kernel
+    # Get the function reference
+    if isinstance(fn := source.fn, JITFunction):
+        fn_ref = fn.fn
+    else:
+        fn_ref = source.fn
+
+    python_source_file = inspect.getfile(fn_ref)
+
+    # Get function range information
     if (
         isinstance(fn := source.fn, JITFunction)
         and hasattr(fn, "starting_line_number")
         and hasattr(fn, "raw_src")
     ):
-        start_line_number = fn.starting_line_number
+        function_start_line = fn.starting_line_number
         source_lines = fn.raw_src
     else:
-        source_lines, start_line_number = inspect.getsourcelines(fn.fn)
+        source_lines, function_start_line = inspect.getsourcelines(fn_ref)
 
-    python_source_file = inspect.getfile(fn.fn)
-    end_line_number = start_line_number + len(source_lines)
+    function_end_line = function_start_line + len(source_lines) - 1
+
+    if TRITON_FULL_PYTHON_SOURCE:
+        # Full file mode: read the entire Python file
+        try:
+            # Check file size before reading
+            file_size = os.path.getsize(python_source_file)
+        except OSError as e:
+            log.warning(
+                f"Failed to check file size for {python_source_file}: {e}. "
+                f"Falling back to function-only mode."
+            )
+            use_full_source = False
+        else:
+            if file_size > TRITON_MAX_SOURCE_SIZE:
+                log.warning(
+                    f"Source file {python_source_file} is too large ({file_size} bytes, "
+                    f"limit: {TRITON_MAX_SOURCE_SIZE} bytes). Falling back to function-only mode."
+                )
+                use_full_source = False
+            else:
+                use_full_source = True
+
+        if use_full_source:
+            try:
+                with open(python_source_file, "r", encoding="utf-8") as f:
+                    file_content = f.read()
+
+                # Calculate total lines
+                total_lines = len(file_content.split("\n"))
+
+                trace_data["python_source"] = {
+                    "file_path": python_source_file,
+                    "start_line": 1,
+                    "end_line": total_lines,
+                    "code": file_content,
+                    # Add function range for frontend highlighting and scrolling
+                    "function_start_line": function_start_line,
+                    "function_end_line": function_end_line,
+                }
+                return
+            except (OSError, UnicodeDecodeError) as e:
+                log.warning(
+                    f"Failed to read full source file {python_source_file}: {e}. "
+                    f"Falling back to function-only mode."
+                )
+
+    # Default behavior: only extract function definition
     trace_data["python_source"] = {
         "file_path": python_source_file,
-        "start_line": start_line_number,
-        "end_line": end_line_number,
+        "start_line": function_start_line,
+        "end_line": function_end_line,
         "code": "".join(source_lines),
     }
 
@@ -910,7 +983,7 @@ class TritonTraceHandler(logging.StreamHandler):
                 )
             elif not os.access(TRACE_LOG_DIR, os.W_OK):
                 log.info(
-                    "TritonTraceHandler: disabled because %s is not writeable",
+                    "TritonTraceHandler: disabled because %s is not writable",
                     TRACE_LOG_DIR,
                 )
             else:
