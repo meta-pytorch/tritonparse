@@ -291,18 +291,18 @@ def find_loop_pipelining(
     epilogue_lines = [line for _, line in epilogue_ops]
 
     # Log the pipelining results
-    logger.info(
+    logger.debug(
         f"Loop pipelining results (TTIR lines {ttir_loop_start}-{ttir_loop_end}):"
     )
-    logger.info(f"  Prologue ({len(prologue_lines)} ops):")
+    logger.debug(f"  Prologue ({len(prologue_lines)} ops):")
     for line in prologue_lines:
-        logger.info(f"    {line}")
-    logger.info(f"  Loop Body ({len(loop_body_lines)} ops):")
+        logger.debug(f"    {line}")
+    logger.debug(f"  Loop Body ({len(loop_body_lines)} ops):")
     for line in loop_body_lines:
-        logger.info(f"    {line}")
-    logger.info(f"  Epilogue ({len(epilogue_lines)} ops):")
+        logger.debug(f"    {line}")
+    logger.debug(f"  Epilogue ({len(epilogue_lines)} ops):")
     for line in epilogue_lines:
-        logger.info(f"    {line}")
+        logger.debug(f"    {line}")
 
     return {
         "prologue": prologue_lines,
