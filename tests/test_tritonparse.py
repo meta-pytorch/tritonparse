@@ -24,7 +24,6 @@ import tritonparse.context_manager
 import tritonparse.structured_logging
 import tritonparse.utils
 from triton import knobs  # @manual=//triton:triton
-
 from triton.compiler import ASTSource, IRSource  # @manual=//triton:triton
 from triton.knobs import CompileTimes  # @manual=//triton:triton
 from tritonparse.common import is_fbcode

@@ -9,7 +9,6 @@ from typing import Any, Dict, List
 
 from .event_diff import _generate_launch_diff
 from .ir_analysis import _generate_ir_analysis
-
 from .ir_parser import (
     extract_code_locations,
     extract_loc_definitions,

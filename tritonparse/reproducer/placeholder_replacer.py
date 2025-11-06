@@ -1,7 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from abc import ABC
-
 from typing import Any, Dict, Protocol
 
 from tritonparse.reproducer.function_extractor import extract_utility_functions

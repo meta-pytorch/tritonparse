@@ -10,7 +10,6 @@ from functools import lru_cache
 from pathlib import Path
 
 import torch
-
 from tritonparse.tools.load_tensor import load_tensor
 from tritonparse.tp_logger import logger
 

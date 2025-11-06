@@ -11,7 +11,6 @@ from tritonparse.reproducer.placeholder_replacer import (
 from tritonparse.reproducer.templates.loader import load_template_code
 from tritonparse.reproducer.types import KernelImportMode
 from tritonparse.reproducer.utils import determine_output_paths
-
 from tritonparse.tools.prettify_ndjson import load_ndjson, save_prettified_json
 from tritonparse.tp_logger import logger
 

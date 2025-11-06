@@ -1,7 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import gzip
-
 import importlib
 import importlib.util
 import json
