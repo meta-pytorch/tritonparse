@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-11-03
+
+### TritonParse Release Notes (last 24 commits)
+
+- **Date range**: 2025-10-14 — 2025-11-03
+- **Scope**: IR Analysis enhancements (beta), Reproducer template extensions, code viewer improvements, bug fixes.
+
+### Highlights
+
+- **📊 IR Analysis (Beta)**: New analysis capabilities for visualizing Software Pipelining (SWP), BufferOps statistics, and loop schedules in Triton IR. **Note: This is a beta feature.**
+- **🏷️ Variable Location Tracking**: Complete location alias tracking system for mapping IR locations back to source code with frontend visualization.
+- **🔧 TritonBench Template**: New reproducer template for easy TritonBench integration and kernel benchmarking.
+- **🎨 Code Viewer Enhancements**: Full Python source extraction, function highlighting, and performance optimizations.
+- **🔄 Reproducer Refactoring**: AST-based function extraction eliminates code duplication and simplifies template maintenance.
+
+### Changes by area
+
+#### 📊 **IR Analysis (Beta)**
+- **Software Pipelining (SWP) visualization** (PR #189):
+  - Analyzes inner `scf.for` loops and identifies prologue, loop_body, and epilogue stages
+  - Tracks `tt.load` and `tt.dot` operations through TTIR → TTGIR → Python source mappings
+  - Frontend displays simplified source code with SWP stage information
+  - **Limitations**: Does not support Warp Specialization or Blackwell operators yet
+- **BufferOps backend information** (PR #181):
+  - Statistical analysis of buffer operations (tt.load/store, amdgpu.buffer_load/store, global_load/store) at TTGIR and AMDGCN levels
+  - Useful for AMD GPU backend optimization analysis
+- **Web frontend IR Analysis page** (PR #184):
+  - New dedicated page at `/ir-analysis` route with integrated display for loop schedules and BufferOps statistics
+
+#### 🏷️ **Variable Location Tracking**
+Complete three-part implementation (PR #186, #187, #188):
+- Fixed #loc storage key conflict in IR parser
+- Added location alias parsing support in `ir_parser.py` and `trace_processor.py`
+- Frontend visualization with CSS styling and interactive location display in Code Viewer
+
+#### 🔄 **Reproducer System**
+- **TritonBench template support** (commit 3493ac8):
+  - New template: `tritonparse/reproducer/templates/tritonbench.py`
+  - CLI option: `--template tritonbench` for TritonBench-compatible reproducers
+  - Integrates with TritonBench's `BenchmarkOperator` and benchmark harness
+- **AST-based refactoring** (PR #178):
+  - New module: `tritonparse/reproducer/function_extractor.py` using Python AST
+  - Simplified `example.py` template from ~370 lines to ~20 lines
+- **Bug fixes**:
+  - Fixed 1-based to 0-based line number conversion (PR #185)
+  - Corrected output key typo: `repo_*` → `repro_*` (PR #175)
+  - CUDA device normalization to `cuda:0` format (PR #177)
+
+#### 📝 **Callsite Location Support**
+- **TTIR/TTGIR callsite location** (PR #190):
+  - Extended IR parser to extract callsite location information
+  - Better debugging with call graph information and test coverage
+
+#### 💻 **Code Viewer & Frontend**
+- **Full Python source extraction** (commit 2976887):
+  - Enhanced `structured_logging.py` to extract complete Python source files
+- **Full file display with function highlighting** (commit 220d5a4):
+  - CodeViewer now supports displaying entire source files with function-level highlighting
+- **CodeComparisonView performance optimization** (commit c17e584):
+  - Significant rendering performance improvements for large files
+  - Reduced re-renders and improved memory efficiency
+
+#### 🌐 **Website & Maintenance**
+- **Dependency updates** (PR #179): Added automation script `website/scripts/update_deps.sh`
+- **Copyright updates** (PR #183): Updated copyright headers across source files
+
+### Compatibility notes
+
+- **No breaking changes**: All updates are backward compatible with v0.3.0.
+- **IR Analysis (Beta)**: New optional feature accessible through web UI.
+- **TritonBench template**: Optional, does not impact existing reproducer generation.
+
+### Upgrade guidance
+
+1. **Using IR Analysis (Beta)**:
+   - Open web UI and navigate to IR Analysis page after parsing
+   - View SWP stage information (prologue/loop_body/epilogue) and BufferOps statistics
+   - Note: Beta feature with some limitations on advanced pipelining patterns
+
+2. **Generating TritonBench reproducers**:
+   ```bash
+   tritonparseoss reproduce trace.ndjson.gz --line <N> --template tritonbench --out-dir <output>
+   ```
+
+3. **Code viewer enhancements**: Automatically enabled with full source display and function highlighting
+
 ## [0.3.0] - 2025-10-14
 
 ### TritonParse Release Notes (last 44 commits)
