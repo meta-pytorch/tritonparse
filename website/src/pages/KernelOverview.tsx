@@ -246,6 +246,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                 {/* All short metadata fields */}
                 {Object.entries(kernel.metadata)
                   .filter(([_key, value]) => !isLongValue(value))
+                  .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
                   .map(([key, value]) => {
                     return (
                       <MetadataItem
@@ -270,6 +271,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                 <div className="space-y-3 border-t border-gray-200 pt-4">
                   {Object.entries(kernel.metadata)
                     .filter(([_key, value]) => isLongValue(value))
+                    .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
                     .map(([key, value]) => (
                       <div key={key} className="w-full">
                         <span className="text-sm font-medium text-gray-500 block mb-1">
@@ -395,8 +397,8 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                       ))
                     ) : (
                       <pre className="font-mono text-sm text-gray-700 whitespace-pre-wrap break-all">
-                        {typeof kernel.launchDiff.sames.stack === 'string' 
-                          ? kernel.launchDiff.sames.stack 
+                        {typeof kernel.launchDiff.sames.stack === 'string'
+                          ? kernel.launchDiff.sames.stack
                           : JSON.stringify(kernel.launchDiff.sames.stack, null, 2)}
                       </pre>
                     )}
