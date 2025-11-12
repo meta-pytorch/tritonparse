@@ -1335,7 +1335,27 @@ def extract_arg_info(arg_dict):
 
 
 def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
-    # Extract detailed argument information
+    # Check if we're in CUDA graph capture mode - if so, skip detailed argument extraction
+    # to avoid CUDA errors (cudaErrorStreamCaptureUnsupported)
+    is_capturing = False
+    if TORCH_INSTALLED:
+        try:
+            is_capturing = torch.cuda.is_current_stream_capturing()
+        except (AttributeError, RuntimeError):
+            pass
+
+    if is_capturing:
+        # During CUDA graph capture, return minimal metadata without argument extraction
+        return {
+            "launch_metadata_tritonparse": (
+                grid,
+                metadata._asdict(),
+                {"_note": "argument extraction skipped during CUDA graph capture"},
+                {},
+            )
+        }
+
+    # Extract detailed argument information (only when NOT capturing)
     extracted_args = extract_arg_info(arg_dict)
     extracted_inductor_args = extract_arg_info(inductor_args) if inductor_args else {}
     return {
