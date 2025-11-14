@@ -333,6 +333,7 @@ def determine_output_paths(out_dir: str, kernel_name: str, template: str):
     Args:
         out_dir: Output directory path. If empty, uses default location.
         kernel_name: Name of the kernel for default directory naming.
+        template: Template name or path. If a path, extracts the filename.
 
     Returns:
         Tuple of (python_script_path, json_context_path) as Path objects.
@@ -341,9 +342,14 @@ def determine_output_paths(out_dir: str, kernel_name: str, template: str):
     output_directory = Path(out_dir) / kernel_name
     output_directory.mkdir(parents=True, exist_ok=True)
 
+    # Extract template name from path if needed
+    template_name = (
+        Path(template).stem if "/" in template or "\\" in template else template
+    )
+
     filename_parts = ["repro"]
     if template != "example":
-        filename_parts.append(template.replace(".", "_"))
+        filename_parts.append(template_name)
     filename_parts.append(timestamp)
     filename = "_".join(filename_parts) + ".py"
     out_py_path = output_directory / filename
