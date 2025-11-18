@@ -59,7 +59,7 @@ class PlaceholderReplacer(ABC):
             The code with all placeholders replaced
         """
         code = template_code
-        for placeholder, handler in self.handlers.items():
+        for handler in self.handlers.values():
             code = handler(code, context_bundle, **kwargs)
         return code
 
