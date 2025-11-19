@@ -1,5 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
+import ast
 import importlib
 import importlib.util
 import json
@@ -403,51 +404,74 @@ def _generate_import_statements(kernel_info) -> tuple[str, str]:
 
 def _parse_kernel_signature(kernel_source_code: str) -> tuple[list[str], list[str]]:
     """
-    Parses a Triton kernel's source code to distinguish positional args
+    Parses a Triton kernel's source code using AST to distinguish positional args
     from keyword args (those with default values).
+
+    This implementation uses Python's ast module for robust parsing that handles:
+    - Return type annotations (e.g., -> None)
+    - Complex type annotations (e.g., Callable[[dict[str, int]], list[Tensor]])
+    - Decorators (e.g., @triton.jit)
+    - Keyword-only arguments (after *)
+    - All Python syntax variations
+
+    Args:
+        kernel_source_code: Python source code containing the kernel function
+
+    Returns:
+        tuple[list[str], list[str]]: (positional_args, keyword_args)
+
+    Raises:
+        ValueError: If parsing fails or no function definition is found
     """
-    signature_lines = []
-    in_signature = False
-    for line in kernel_source_code.splitlines():
-        # Mark beginning of signature when function definition is found
-        if line.strip().startswith("def "):
-            in_signature = True
-        if in_signature:
-            # Strip comments and leading/trailing whitespace
-            clean_line = line.split("#")[0].strip()
-            signature_lines.append(clean_line)
-            # Stop capturing after the signature ends
-            if "):" in line:
+    try:
+        # Parse source code into AST
+        tree = ast.parse(kernel_source_code)
+
+        # Find the first function definition
+        func_def = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                func_def = node
                 break
 
-    full_signature = "".join(signature_lines)
-    # Extract content between the first '(' and the last '):'
-    try:
-        params_str = full_signature[
-            full_signature.find("(") + 1 : full_signature.rfind("):")
-        ]
-    except IndexError as exc:
-        raise ValueError("Could not parse kernel signature.") from exc
+        if not func_def:
+            raise ValueError("No function definition found in source code")
 
-    # Clean up and split the parameters string
-    params = [p.strip() for p in params_str.replace("\n", "").split(",") if p.strip()]
+        positional_args = []
+        keyword_args = []
 
-    positional_args = []
-    keyword_args = []
+        # Extract function arguments
+        args = func_def.args
 
-    for param in params:
-        if "=" in param:
-            # Keyword arguments have a default value
-            arg_name = param.split("=")[0].strip()
-            keyword_args.append(arg_name)
-        else:
-            # Positional arguments do not have a default value
-            arg_name = param.split(":")[0].strip()
-            positional_args.append(arg_name)
+        # Calculate number of positional arguments
+        # defaults are right-aligned with args, so:
+        # num_positional = total_args - num_defaults
+        num_defaults = len(args.defaults)
+        num_args = len(args.args)
+        num_positional = num_args - num_defaults
 
-    logger.debug("Parsed positional args: %s", positional_args)
-    logger.debug("Parsed keyword args: %s", keyword_args)
-    return positional_args, keyword_args
+        # Classify regular arguments
+        for i, arg in enumerate(args.args):
+            arg_name = arg.arg
+            if i < num_positional:
+                positional_args.append(arg_name)
+            else:
+                keyword_args.append(arg_name)
+
+        # Handle keyword-only arguments (after *)
+        for arg in args.kwonlyargs:
+            keyword_args.append(arg.arg)
+
+        logger.debug("Parsed positional args: %s", positional_args)
+        logger.debug("Parsed keyword args: %s", keyword_args)
+        return positional_args, keyword_args
+
+    except SyntaxError as e:
+        raise ValueError(
+            f"Invalid Python syntax in kernel source at line {e.lineno}: {e.msg}"
+        ) from e
+    except Exception as e:
+        raise ValueError(f"Failed to parse kernel signature: {e}") from e
 
 
 def _generate_invocation_snippet(
