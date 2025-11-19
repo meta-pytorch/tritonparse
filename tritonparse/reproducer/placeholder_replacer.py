@@ -5,6 +5,11 @@ from typing import Any, Dict, Protocol
 
 from tritonparse.reproducer.function_extractor import extract_utility_functions
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
+
+from tritonparse.reproducer.templates.utils import (
+    _disable_triton_autotune,
+    get_function_source,
+)
 from tritonparse.reproducer.types import KernelImportMode
 from tritonparse.reproducer.utils import (
     _generate_import_statements,
@@ -207,7 +212,11 @@ triton.autotune = _patched_autotune
             _, import_statement = _generate_import_statements(
                 context_bundle.kernel_info
             )
-            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, import_statement)
+
+            final_stmt = "\n".join(
+                [import_statement, ""] + get_function_source(_disable_triton_autotune)
+            )
+            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, final_stmt)
         elif kernel_import == KernelImportMode.COPY:
             source_code = context_bundle.kernel_info.source_code
             func_name = context_bundle.kernel_info.function_name
@@ -226,7 +235,7 @@ triton.autotune = _patched_autotune
                 "import triton",
                 "import triton.language as tl",
                 "",
-            ]
+            ] + get_function_source(_disable_triton_autotune)
 
             # Combine: imports + kernel source code + alias
             embedded_code = "\n".join(import_lines)
