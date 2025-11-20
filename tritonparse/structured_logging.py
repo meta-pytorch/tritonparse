@@ -966,15 +966,21 @@ class TritonTraceHandler(logging.StreamHandler):
                 should_set_root_dir = False
             # TODO: change to tritonparse knob
             # The following check is necessary because the possible version mismatch between torch and tritonparse
-            elif (
-                hasattr(torch, "_utils_internal")
-                and hasattr(torch._utils_internal, "justknobs_check")
-                and not torch._utils_internal.justknobs_check("pytorch/trace:enable")
+            elif hasattr(torch, "_utils_internal") and hasattr(
+                torch._utils_internal, "justknobs_check"
             ):
-                log.info(
-                    "TritonTraceHandler: disabled because justknobs_check('pytorch/trace:enable') returned False"
-                )
-                should_set_root_dir = False
+                try:
+                    if not torch._utils_internal.justknobs_check(
+                        "pytorch/trace:enable"
+                    ):
+                        log.info(
+                            "TritonTraceHandler: disabled because justknobs_check('pytorch/trace:enable') returned False"
+                        )
+                        should_set_root_dir = False
+                except Exception:
+                    # JustKnobs may fail in test environments where Configerator is unavailable.
+                    # Silently continue with default behavior (should_set_root_dir remains True).
+                    pass
         if should_set_root_dir:
             if not os.path.exists(TRACE_LOG_DIR):
                 log.info(
