@@ -11,6 +11,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import torch
+import triton.language as tl
+
 from tritonparse.tools.load_tensor import load_tensor
 from tritonparse.tp_logger import logger
 
@@ -18,6 +20,32 @@ TRITON_KERNELS_CUSTOM_TYPES = (
     importlib.util.find_spec("triton_kernels") is not None
     and importlib.util.find_spec("triton_kernels.tensor") is not None
 )
+
+# Mapping from dtype string representation to Triton dtype objects
+TRITON_DTYPE_MAP = {
+    # Signed integers
+    "int8": tl.int8,
+    "int16": tl.int16,
+    "int32": tl.int32,
+    "int64": tl.int64,
+    # Unsigned integers
+    "int1": tl.int1,
+    "uint8": tl.uint8,
+    "uint16": tl.uint16,
+    "uint32": tl.uint32,
+    "uint64": tl.uint64,
+    # Standard floating point types
+    "fp16": tl.float16,
+    "bf16": tl.bfloat16,
+    "fp32": tl.float32,
+    "fp64": tl.float64,
+    # FP8 variants
+    "fp8e4b15": tl.float8e4b15,
+    "fp8e4nv": tl.float8e4nv,
+    "fp8e4b8": tl.float8e4b8,
+    "fp8e5": tl.float8e5,
+    "fp8e5b16": tl.float8e5b16,
+}
 
 
 @lru_cache(maxsize=1)
@@ -322,6 +350,14 @@ def _create_arg_from_info(arg_info):
             )
         Tensor, Storage, StridedLayout = _get_triton_tensor_types()
         return StridedLayout(shape=arg_info.get("initial_shape"))
+
+    elif arg_type == "dtype":
+        dtype_repr = arg_info.get("repr")
+        if dtype_repr in TRITON_DTYPE_MAP:
+            return TRITON_DTYPE_MAP[dtype_repr]
+        else:
+            raise NotImplementedError(f"Unsupported Triton dtype: {dtype_repr}")
+
     else:
         print(f"Warning: Unhandled argument type '{arg_type}'. Returning None.")
         return None

@@ -58,6 +58,11 @@ def extract_utility_functions() -> str:
     if constant:
         extracted_parts.append(constant)
 
+    # Extract TRITON_DTYPE_MAP constant
+    dtype_map = _extract_assignment(utils_tree, utils_lines, "TRITON_DTYPE_MAP")
+    if dtype_map:
+        extracted_parts.append(dtype_map)
+
     # Extract load_tensor functions
     extracted_parts.extend(
         _extract_functions(
@@ -218,5 +223,6 @@ def _generate_imports() -> str:
         "from typing import Union",
         "",
         "import torch",
+        "import triton.language as tl",
     ]
     return "\n".join(imports)
