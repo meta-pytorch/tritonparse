@@ -1,9 +1,12 @@
 # (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
+
+logger = logging.getLogger(__name__)
 from tritonbench.utils.triton_op import (
     BenchmarkOperator,
     register_benchmark,

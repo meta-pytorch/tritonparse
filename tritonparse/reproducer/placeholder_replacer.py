@@ -5,7 +5,6 @@ from typing import Any, Dict, Protocol
 
 from tritonparse.reproducer.function_extractor import extract_utility_functions
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
-
 from tritonparse.reproducer.templates.utils import (
     _disable_triton_autotune,
     get_function_source,
