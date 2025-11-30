@@ -102,8 +102,9 @@ tritonparse.utils.unified_parse("./logs/", out="./parsed_output")
 Extract any kernel into a standalone, executable Python script for debugging or testing:
 
 ```bash
-# Generate reproducer from first launch event
-tritonparseoss reproduce ./parsed_output/trace.ndjson.gz --line 2 --out-dir repro_output
+# Generate reproducer for the first launch event
+# (--line is 0-based: line 0 is compilation event, line 1 is first launch event)
+tritonparseoss reproduce ./parsed_output/trace.ndjson.gz --line 1 --out-dir repro_output
 
 # Run the generated reproducer
 cd repro_output/<kernel_name>/

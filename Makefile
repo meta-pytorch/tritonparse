@@ -55,4 +55,4 @@ clean:
 
 install-dev:
 	@echo "Installing development dependencies..."
-	pip install black usort ruff coverage
+	pip install -U black usort ruff coverage
