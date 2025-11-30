@@ -39,10 +39,17 @@ Usage:
 """
 
 import argparse
+import gzip
 import json
 import sys
 from pathlib import Path
 from typing import Any, List, Union
+
+
+def _is_gzip_file(file_path: Path) -> bool:
+    """Check if file is gzip compressed (.gz or .bin.ndjson)."""
+    path_str = str(file_path)
+    return path_str.endswith(".gz") or path_str.endswith(".bin.ndjson")
 
 
 def parse_line_ranges(lines_arg: str) -> set[int]:
@@ -106,6 +113,9 @@ def load_ndjson(
     """
     Load NDJSON file and return list of JSON objects.
 
+    Supports uncompressed (.ndjson), gzip compressed (.ndjson.gz),
+    and gzip member concatenation (.bin.ndjson) formats.
+
     Args:
         file_path: Path to the NDJSON file
         not_save_irs: Whether to NOT save file_content and python_source for compilation events
@@ -122,8 +132,13 @@ def load_ndjson(
     filtered_compilation_events = 0
     total_lines_processed = 0
 
+    # Determine if file is gzip compressed
+    is_compressed = _is_gzip_file(file_path)
+    opener = gzip.open if is_compressed else open
+    mode = "rt" if is_compressed else "r"
+
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with opener(file_path, mode, encoding="utf-8") as f:
             # enumerate(f, 1) starts line numbering from 1 (1-based indexing)
             for line_num, line in enumerate(f, 1):
                 line = line.strip()

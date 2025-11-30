@@ -307,6 +307,35 @@ module {
 
         print("✓ All loc alias parsing tests passed")
 
+    def test_load_ndjson_gzip_support(self):
+        """Test that load_ndjson can load .ndjson.gz files."""
+        from pathlib import Path
+
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        # Use existing .ndjson.gz test file
+        gz_file = (
+            Path(__file__).parent
+            / "example_output/parsed_output_complex/dedicated_log_triton_trace_findhao__mapped.ndjson.gz"
+        )
+
+        # Verify file exists
+        self.assertTrue(gz_file.exists(), f"Test file not found: {gz_file}")
+
+        # Load and verify
+        events = load_ndjson(gz_file)
+        self.assertIsInstance(events, list)
+        self.assertGreater(len(events), 0, "Should load at least one event")
+
+        # Verify we have expected event types
+        event_types = {e.get("event_type") for e in events if isinstance(e, dict)}
+        self.assertTrue(
+            "compilation" in event_types or "launch" in event_types,
+            f"Expected compilation or launch events, got: {event_types}",
+        )
+
+        print(f"✓ Successfully loaded {len(events)} events from .ndjson.gz file")
+
 
 class TestTritonparseCUDA(unittest.TestCase):
     """CUDA tests (require GPU)"""
