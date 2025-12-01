@@ -30,7 +30,7 @@ def main():
         epilog=(
             "Examples:\n"
             f"  {prog_name} parse /path/to/logs --out parsed_output\n"
-            f"  {prog_name} reproduce /path/to/trace.ndjson --line 2 --out-dir repro_output\n"
+            f"  {prog_name} reproduce /path/to/trace.ndjson --line 1 --out-dir repro_output\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -77,7 +77,7 @@ def main():
 
         reproduce(
             input_path=args.input,
-            line_index=args.line - 1,  # Convert 1-based line number to 0-based index
+            line_index=args.line,
             out_dir=args.out_dir,
             template=args.template,
             kernel_import=args.kernel_import,

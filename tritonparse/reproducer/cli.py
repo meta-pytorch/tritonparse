@@ -11,10 +11,10 @@ def _add_reproducer_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--line",
         type=int,
-        default=1,
+        default=0,
         help=(
-            "The line number (1-based) of the launch event in the input file to reproduce. "
-            "Defaults to 1."
+            "The line index (0-based) of the launch event in the input file to reproduce. "
+            "Defaults to 0 (first launch event)."
         ),
     )
     parser.add_argument(
