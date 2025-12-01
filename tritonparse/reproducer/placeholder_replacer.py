@@ -1,7 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from abc import ABC
-from typing import Any, Dict, Protocol
+from typing import Any, Dict, Optional, Protocol
 
 from tritonparse.reproducer.function_extractor import extract_utility_functions
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
@@ -15,6 +15,8 @@ from tritonparse.reproducer.utils import (
     _generate_invocation_snippet,
     _parse_kernel_signature,
 )
+
+from tritonparse.tp_logger import logger
 
 
 class HandlerProtocol(Protocol):
@@ -227,12 +229,28 @@ triton.autotune = _patched_autotune
                     "Cannot determine kernel function name for 'copy' mode"
                 )
 
+            if kernel_import == KernelImportMode.COPY:
+                dependent_source_map = get_dependent_source_map(
+                    context_bundle.kernel_info.function_name,
+                    context_bundle.kernel_info.file_path,
+                )
+                # Only add dependent functions if extraction was successful
+                if dependent_source_map:
+                    # Add separator and dependent functions
+                    dependent_code = (
+                        "\n\n# Dependent functions extracted from source file\n\n"
+                    )
+                    dependent_code += "\n\n".join(dependent_source_map.values())
+                    source_code += "\n\n" + dependent_code
+                    logger.debug("Appended dependent functions to kernel source code")
+
             # Add common imports needed for most Triton kernels
             import_lines = [
                 "import torch",
                 "import numpy as np",
                 "import triton",
                 "import triton.language as tl",
+                "from typing import List, Tuple",
                 "",
             ] + get_function_source(_disable_triton_autotune)
 
@@ -263,3 +281,53 @@ triton.autotune = _patched_autotune
         pos_args, kw_args = _parse_kernel_signature(source_code)
         invocation_snippet = _generate_invocation_snippet(pos_args, kw_args)
         return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
+
+
+def get_dependent_source_map(
+    function_name: str, file_path: str
+) -> Optional[dict[str, str]]:
+    from pathlib import Path
+
+    from tritonparse.tp_logger import logger
+
+    source_path = Path(file_path)
+    if not source_path.exists():
+        return None
+
+    from tritonparse.reproducer.ast_analyzer import CallGraph
+
+    try:
+        import ast
+
+        full_source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(full_source, filename=str(file_path))
+
+        # Use CallGraph with transitive closure to find all dependencies
+        call_graph = CallGraph(
+            filename=str(file_path),
+            module_name="<source>",
+            include_decorators=False,
+            backends=[function_name],  # Track calls from this function
+            transitive_closure=True,  # Enable transitive closure
+            callee_prefix_filters=["triton.", "tl.", "torch."],  # Filter library calls
+        )
+        call_graph.visit(tree)
+
+        logger.debug(
+            f"CallGraph found {len(call_graph.edges)} edges, "
+            f"{len(call_graph.local_functions)} local functions"
+        )
+
+        # Get all dependent functions using the new method
+        dependent_source_map = call_graph.get_dependent_functions_source_code()
+
+        logger.info(
+            f"Extracted {len(dependent_source_map)} dependent functions transitively"
+        )
+
+        return dependent_source_map
+
+    except Exception as e:
+        # If AST analysis fails, continue without dependent functions
+        logger.warning(f"Failed to extract dependent functions: {e}", exc_info=True)
+        return None
