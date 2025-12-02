@@ -336,6 +336,152 @@ module {
 
         print(f"✓ Successfully loaded {len(events)} events from .ndjson.gz file")
 
+    def test_list_kernels_empty(self):
+        """Test listing kernels from empty events list."""
+        from tritonparse.info.kernel_query import list_kernels
+
+        events = []
+        result = list_kernels(events)
+        self.assertEqual(result, [])
+
+    def test_list_kernels_single(self):
+        """Test listing kernels with single kernel and multiple launches."""
+        from pathlib import Path
+
+        from tritonparse.info.kernel_query import list_kernels
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        # Load real test data
+        gz_file = (
+            Path(__file__).parent
+            / "example_output/parsed_output_complex/dedicated_log_triton_trace_findhao__mapped.ndjson.gz"
+        )
+        events = load_ndjson(gz_file)
+
+        # Filter to only fused_op_kernel launches (4 launches)
+        filtered_events = []
+        for event in events:
+            if event.get("event_type") == "launch":
+                kernel_name = event.get("compilation_metadata", {}).get("name")
+                if kernel_name == "fused_op_kernel":
+                    filtered_events.append(event)
+            else:
+                # Keep non-launch events to test filtering
+                filtered_events.append(event)
+
+        result = list_kernels(filtered_events)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "fused_op_kernel")
+        self.assertEqual(result[0].total_launches, 4)
+
+    def test_list_kernels_multiple(self):
+        """Test listing kernels with multiple different kernels."""
+        from pathlib import Path
+
+        from tritonparse.info.kernel_query import list_kernels
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        # Load real test data
+        gz_file = (
+            Path(__file__).parent
+            / "example_output/parsed_output_complex/dedicated_log_triton_trace_findhao__mapped.ndjson.gz"
+        )
+        events = load_ndjson(gz_file)
+
+        result = list_kernels(events)
+        self.assertEqual(len(result), 2)
+
+        # Check that results are sorted by name
+        names = [k.name for k in result]
+        self.assertEqual(names, ["fused_op_kernel", "matmul_kernel"])
+
+        # Check launch counts
+        kernel_dict = {k.name: k for k in result}
+        self.assertEqual(kernel_dict["matmul_kernel"].total_launches, 1553)
+        self.assertEqual(kernel_dict["fused_op_kernel"].total_launches, 4)
+
+    def test_find_launch_index_valid(self):
+        """Test finding valid kernel name and launch_id."""
+        from pathlib import Path
+
+        from tritonparse.info.kernel_query import find_launch_index_by_kernel
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        # Load real test data
+        gz_file = (
+            Path(__file__).parent
+            / "example_output/parsed_output_complex/dedicated_log_triton_trace_findhao__mapped.ndjson.gz"
+        )
+        events = load_ndjson(gz_file)
+
+        # Test first launch of fused_op_kernel (launch_id=0)
+        index = find_launch_index_by_kernel(events, "fused_op_kernel", 0)
+        self.assertEqual(events[index].get("event_type"), "launch")
+        self.assertEqual(
+            events[index].get("compilation_metadata", {}).get("name"),
+            "fused_op_kernel",
+        )
+
+        # Test second launch of fused_op_kernel (launch_id=1)
+        index = find_launch_index_by_kernel(events, "fused_op_kernel", 1)
+        self.assertEqual(events[index].get("event_type"), "launch")
+        self.assertEqual(
+            events[index].get("compilation_metadata", {}).get("name"),
+            "fused_op_kernel",
+        )
+
+        # Test first launch of matmul_kernel (launch_id=0)
+        index = find_launch_index_by_kernel(events, "matmul_kernel", 0)
+        self.assertEqual(events[index].get("event_type"), "launch")
+        self.assertEqual(
+            events[index].get("compilation_metadata", {}).get("name"),
+            "matmul_kernel",
+        )
+
+    def test_find_launch_index_kernel_not_found(self):
+        """Test that ValueError is raised when kernel not found."""
+        from pathlib import Path
+
+        from tritonparse.info.kernel_query import find_launch_index_by_kernel
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        # Load real test data
+        gz_file = (
+            Path(__file__).parent
+            / "example_output/parsed_output_complex/dedicated_log_triton_trace_findhao__mapped.ndjson.gz"
+        )
+        events = load_ndjson(gz_file)
+
+        with self.assertRaises(ValueError) as cm:
+            find_launch_index_by_kernel(events, "nonexistent_kernel", 0)
+
+        error_msg = str(cm.exception)
+        self.assertIn("not found", error_msg)
+        self.assertIn("nonexistent_kernel", error_msg)
+
+    def test_find_launch_index_out_of_range(self):
+        """Test that ValueError is raised when launch_id is out of range."""
+        from pathlib import Path
+
+        from tritonparse.info.kernel_query import find_launch_index_by_kernel
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        # Load real test data
+        gz_file = (
+            Path(__file__).parent
+            / "example_output/parsed_output_complex/dedicated_log_triton_trace_findhao__mapped.ndjson.gz"
+        )
+        events = load_ndjson(gz_file)
+
+        # fused_op_kernel has only 4 launches (0-3), test with launch_id=10
+        with self.assertRaises(ValueError) as cm:
+            find_launch_index_by_kernel(events, "fused_op_kernel", 10)
+
+        error_msg = str(cm.exception)
+        self.assertIn("has only 4 launches", error_msg)
+        self.assertIn("--launch-id 10", error_msg)
+        self.assertIn("Valid range: 0 to 3", error_msg)
+
 
 class TestTritonparseCUDA(unittest.TestCase):
     """CUDA tests (require GPU)"""
