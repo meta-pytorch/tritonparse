@@ -15,7 +15,6 @@ from tritonparse.reproducer.utils import (
     _generate_invocation_snippet,
     _parse_kernel_signature,
 )
-
 from tritonparse.tp_logger import logger
 
 
