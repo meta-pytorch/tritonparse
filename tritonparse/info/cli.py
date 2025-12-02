@@ -13,7 +13,6 @@ from typing import Optional
 
 from tritonparse.info.kernel_query import (
     find_similar_kernels,
-    list_kernels,
     list_kernels_fast,
     list_launches_for_kernel,
 )
@@ -95,7 +94,9 @@ def info_command(input_path: str, kernel_name: Optional[str] = None) -> None:
                 similar = find_similar_kernels(events, kernel_name, n=3)
                 if similar:
                     print("\nDid you mean one of these?")
-                    all_kernels = list_kernels_fast(events)  # Use fast path for consistency
+                    all_kernels = list_kernels_fast(
+                        events
+                    )  # Use fast path for consistency
                     kernel_dict = {k.name: k for k in all_kernels}
                     for name in similar:
                         count = kernel_dict[name].total_launches
