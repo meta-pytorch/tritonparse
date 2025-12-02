@@ -300,9 +300,7 @@ def parse_single_file(
             elif event_type == "launch":
                 kernel_hash = parsed_json.get("compilation_metadata", {}).get("hash")
                 if kernel_hash:
-                    kernels_by_hash[kernel_hash]["launches"].append(
-                        (parsed_json, i + 1)
-                    )
+                    kernels_by_hash[kernel_hash]["launches"].append((parsed_json, i))
 
     # Organize lines for final output, keyed by output file path
     all_output_lines = defaultdict(list)

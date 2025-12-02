@@ -57,7 +57,7 @@ const StackDiffViewer: React.FC<{ stackDiff: any }> = ({ stackDiff }) => {
          <div className="space-y-2">
           {stackDiff.values.map((item: any, index: number) => {
             const launchRanges = item.launches
-              .map((r: any) => (r.start === r.end ? `${r.start + 1}` : `${r.start + 1}-${r.end + 1}`))
+              .map((r: any) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
               .join(", ");
             
             return (

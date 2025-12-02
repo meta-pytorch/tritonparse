@@ -33,8 +33,8 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ diffs }) => {
             const launchRanges = item.launches
               .map((r: any) =>
                 r.start === r.end
-                  ? `${r.start + 1}`
-                  : `${r.start + 1}-${r.end + 1}`
+                  ? `${r.start}`
+                  : `${r.start}-${r.end}`
               )
               .join(", ");
             return (

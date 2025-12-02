@@ -12,7 +12,7 @@ const DistributionCell: React.FC<{ data: any }> = ({ data }) => {
             <ul className="list-none m-0 p-0 space-y-1">
                 {data.values.map((item: any, index: number) => {
                     const launchRanges = item.launches
-                        .map((r: any) => (r.start === r.end ? `${r.start + 1}` : `${r.start + 1}-${r.end + 1}`))
+                        .map((r: any) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
                         .join(', ');
                     return (
                         <li key={index}>
