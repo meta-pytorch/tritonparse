@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
+from tritonparse.info.kernel_query import find_launch_index_by_kernel
 from tritonparse.reproducer.ingestion.ndjson import build_context_bundle
 from tritonparse.reproducer.placeholder_replacer import (
     DefaultPlaceholderReplacer,
@@ -20,23 +21,43 @@ def reproduce(
     line_index: int,
     out_dir: str,
     template: str,
+    kernel_name: Optional[str] = None,
+    launch_id: int = 0,
     replacer: Optional[PlaceholderReplacer] = None,
     kernel_import: KernelImportMode = KernelImportMode.DEFAULT,
 ) -> dict[str, str]:
     """
     Generate a reproducer script from NDJSON trace file.
 
+    Must provide either line_index OR (kernel_name + launch_id), not both.
+    If kernel_name is provided, the line_index parameter will be ignored and
+    recalculated from the kernel lookup.
+
     Args:
-        input_path: Path to the NDJSON trace file.
-        line_index: 0-based index of the launch event to reproduce in the events list.
+        input_path: Path to ndjson file. Supports uncompressed (.ndjson),
+            gzip compressed (.ndjson.gz), and gzip member concatenation (.bin.ndjson) formats.
+        line_index: 0-based index in events list. Ignored if kernel_name is provided.
         out_dir: Output directory for reproducer files.
         template: Template name to use for the reproducer.
+        kernel_name: Exact kernel name to match (case-sensitive). If provided, line_index will be recalculated.
+        launch_id: 0-based launch index for the kernel (default: 0, first launch).
         replacer: Optional custom PlaceholderReplacer instance. If None, uses DefaultPlaceholderReplacer.
         kernel_import: Kernel import mode (DEFAULT or COPY).
     """
-    logger.debug(f"Building bundle from {input_path} at line {line_index}")
     events = load_ndjson(Path(input_path))
     logger.debug(f"Loaded {len(events)} events")
+
+    # If kernel_name is provided, lookup the actual line_index (overrides the parameter)
+    if kernel_name is not None:
+        logger.debug(
+            f"Looking up kernel '{kernel_name}' launch_id={launch_id} in {input_path}"
+        )
+        line_index = find_launch_index_by_kernel(events, kernel_name, launch_id)
+        logger.debug(
+            f"Found kernel '{kernel_name}' launch_id={launch_id} at line {line_index}"
+        )
+
+    logger.debug(f"Building bundle from {input_path} at line {line_index}")
 
     # Build context bundle from the specified launch event
     context_bundle = build_context_bundle(events, line_index)

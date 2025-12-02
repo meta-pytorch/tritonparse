@@ -14,7 +14,26 @@ def _add_reproducer_args(parser: argparse.ArgumentParser) -> None:
         default=0,
         help=(
             "The line index (0-based) of the launch event in the input file to reproduce. "
-            "Defaults to 0 (first launch event)."
+            "Defaults to 0 (first launch event). Mutually exclusive with --kernel/--launch-id."
+        ),
+    )
+    parser.add_argument(
+        "--kernel",
+        type=str,
+        default=None,
+        help=(
+            "Kernel name (exact match, case-sensitive) to reproduce. "
+            "Use with --launch-id to specify which launch of the kernel. "
+            "Mutually exclusive with --line."
+        ),
+    )
+    parser.add_argument(
+        "--launch-id",
+        type=int,
+        default=0,
+        help=(
+            "0-based launch index for the kernel specified by --kernel. "
+            "Defaults to 0 (first launch). Only used when --kernel is provided."
         ),
     )
     parser.add_argument(
