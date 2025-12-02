@@ -105,4 +105,3 @@ def find_launch_index_by_kernel(
             f"Kernel '{kernel_name}' has only {count} launches, "
             f"but --launch-id {launch_id} was requested. Valid range: 0 to {count - 1}"
         )
-
