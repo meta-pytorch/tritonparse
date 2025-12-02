@@ -614,6 +614,114 @@ module {
         finally:
             self.cleanup_temp_reproduce_dir(temp_dir)
 
+    def test_info_kernel_query_functions(self):
+        """Test info module kernel query functions."""
+        from tritonparse.info.kernel_query import (
+            find_similar_kernels,
+            list_kernels,
+            list_kernels_fast,
+            list_launches_for_kernel,
+        )
+        from tritonparse.tools.prettify_ndjson import load_ndjson
+
+        gz_file = self._get_test_ndjson_file()
+        events = load_ndjson(gz_file)
+
+        # Test list_launches_for_kernel
+        launches = list_launches_for_kernel(events, "fused_op_kernel")
+        self.assertGreater(len(launches), 0)
+        self.assertEqual(launches[0].launch_id, 0)
+        self.assertIsInstance(launches[0].grid, list)
+
+        # Test list_launches_for_kernel with non-existent kernel
+        with self.assertRaises(ValueError) as cm:
+            list_launches_for_kernel(events, "nonexistent_kernel")
+        self.assertIn("not found", str(cm.exception))
+
+        # Test find_similar_kernels
+        similar = find_similar_kernels(events, "fused_op", n=3)
+        self.assertGreater(len(similar), 0)
+        self.assertIn("fused_op_kernel", similar)
+
+        similar = find_similar_kernels(events, "fused_op_kernel", n=3)
+        self.assertIn("fused_op_kernel", similar)
+
+        similar = find_similar_kernels(events, "xyz_abc_123", n=3)
+        self.assertEqual(len(similar), 0)
+
+        # Test list_kernels_fast (should use launch_diff and match list_kernels)
+        kernels_fast = list_kernels_fast(events)
+        self.assertGreater(len(kernels_fast), 0)
+
+        kernels_slow = list_kernels(events)
+        fast_dict = {k.name: k.total_launches for k in kernels_fast}
+        slow_dict = {k.name: k.total_launches for k in kernels_slow}
+        self.assertEqual(fast_dict, slow_dict)
+
+    def test_info_list_kernels(self):
+        """Integration test: info command lists all kernels."""
+        import sys
+        from io import StringIO
+
+        from tritonparse.info.cli import info_command
+
+        gz_file = self._get_test_ndjson_file()
+
+        # Capture stdout
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = StringIO()
+
+        try:
+            info_command(str(gz_file), kernel_name=None)
+            output = captured_output.getvalue()
+            self.assertIn("Kernels in", output)
+            self.assertIn("launches", output)
+        finally:
+            sys.stdout = old_stdout
+
+    def test_info_kernel_launches(self):
+        """Integration test: info command lists launches for specific kernel."""
+        import sys
+        from io import StringIO
+
+        from tritonparse.info.cli import info_command
+
+        gz_file = self._get_test_ndjson_file()
+
+        # Capture stdout
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = StringIO()
+
+        try:
+            info_command(str(gz_file), kernel_name="fused_op_kernel")
+            output = captured_output.getvalue()
+            self.assertIn("Launches for 'fused_op_kernel'", output)
+            self.assertIn("id=", output)
+            self.assertIn("line", output)
+        finally:
+            sys.stdout = old_stdout
+
+    def test_info_kernel_not_found(self):
+        """Integration test: info command handles kernel not found."""
+        import sys
+        from io import StringIO
+
+        from tritonparse.info.cli import info_command
+
+        gz_file = self._get_test_ndjson_file()
+
+        # Capture stdout
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = StringIO()
+
+        try:
+            with self.assertRaises(ValueError):
+                info_command(str(gz_file), kernel_name="nonexistent_kernel")
+            output = captured_output.getvalue()
+            self.assertIn("not found", output)
+        finally:
+            sys.stdout = old_stdout
+
 
 class TestTritonparseCUDA(unittest.TestCase):
     """CUDA tests (require GPU)"""
