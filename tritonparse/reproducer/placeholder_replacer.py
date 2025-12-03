@@ -305,7 +305,6 @@ def get_dependent_source_map(
         call_graph = CallGraph(
             filename=str(file_path),
             module_name="<source>",
-            include_decorators=False,
             backends=[function_name],  # Track calls from this function
             transitive_closure=True,  # Enable transitive closure
             callee_prefix_filters=["triton.", "tl.", "torch."],  # Filter library calls

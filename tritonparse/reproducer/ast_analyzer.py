@@ -61,14 +61,12 @@ class CallGraph(ast.NodeVisitor):
         self,
         filename: str = "<string>",
         module_name: str = "<module>",
-        include_decorators: bool = False,
         backends: Optional[List[str]] = None,
         transitive_closure: bool = True,
         callee_prefix_filters: Optional[List[str]] = None,
         callee_name_filters: Optional[List[str]] = None,
     ):
         self.filename = filename
-        self.include_decorators = include_decorators
 
         self.edges: List[Edge] = []
         self.decorator_edges: List[Edge] = []
@@ -192,16 +190,6 @@ class CallGraph(ast.NodeVisitor):
         callee_name = callee.split(".")[-1] if "." in callee else callee
         if callee_name in self.callee_name_filters:
             return
-
-        # In transitive closure mode, filter out object method calls
-        # Only record calls to actual defined functions in local_functions
-        if self.transitive_closure:
-            # Resolve the callee to check if it's a defined function
-            qualified_callee = self._resolve_name(callee)
-            # Skip if this is an object method call (not in local_functions)
-            # This filters out calls like desc_k.load, start_n.to, acc.to, etc.
-            if qualified_callee not in self.local_functions:
-                return
 
         # Determine if the caller should be tracked based on the transitive_closure flag
         if self.transitive_closure:
@@ -350,7 +338,7 @@ class CallGraph(ast.NodeVisitor):
         return result
 
     def get_dependent_functions_source_code(self) -> Dict[str, str]:
-        """Return source code for all dependent functions.
+        """Return source code for all dependent functions with source location comments.
 
         Extracts the source code of all functions that are transitively
         called from the backend functions. Useful for creating standalone
@@ -359,6 +347,8 @@ class CallGraph(ast.NodeVisitor):
         Returns:
             Dictionary mapping function qualified names to their source code.
             Only includes functions that are defined in the analyzed file.
+            Each function's source code is prefixed with a comment indicating
+            the source file and line numbers.
         """
         dependent_funcs = self.get_dependent_functions()
         result: Dict[str, str] = {}
@@ -389,7 +379,11 @@ class CallGraph(ast.NodeVisitor):
                 if start_line is not None and end_line is not None:
                     # Convert to 0-indexed and extract source lines
                     func_source = "".join(source_lines[start_line - 1 : end_line])
-                    result[func_name] = func_source
+                    # Add source location comment
+                    source_comment = (
+                        f"# Source: {self.filename}:{start_line}-{end_line}\n"
+                    )
+                    result[func_name] = source_comment + func_source
 
         return result
 
