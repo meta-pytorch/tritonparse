@@ -10,7 +10,7 @@ from tritonparse.reproducer.placeholder_replacer import (
 )
 from tritonparse.reproducer.templates.loader import load_template_code
 from tritonparse.reproducer.types import KernelImportMode
-from tritonparse.reproducer.utils import determine_output_paths
+from tritonparse.reproducer.utils import determine_output_paths, format_python_code
 from tritonparse.tools.prettify_ndjson import load_ndjson, save_prettified_json
 from tritonparse.tp_logger import logger
 
@@ -70,6 +70,9 @@ def reproduce(
         kernel_import=kernel_import,
         comp_json_filename=comp_json_path.name if comp_json_path else None,
     )
+
+    # Format the generated code
+    final_code = format_python_code(final_code)
 
     out_py_path.write_text(final_code, encoding="utf-8")
 

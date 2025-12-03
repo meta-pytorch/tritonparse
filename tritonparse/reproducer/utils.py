@@ -528,3 +528,53 @@ def _generate_invocation_snippet(
 
     # Create the single-line call
     return f"imported_kernel_function[tuple(grid)]({', '.join(all_args)})"
+
+
+def format_python_code(code: str) -> str:
+    """
+    Format Python code using black and organize imports using isort if available.
+
+    Args:
+        code: Python code string to format.
+
+    Returns:
+        Formatted code with organized imports if tools are available,
+        otherwise returns original code.
+    """
+    # Step 1: Organize imports using isort if available
+    try:
+        import isort
+
+        # Configure isort to move imports to the top more aggressively
+        code = isort.code(
+            code,
+            float_to_top=True,  # Move imports to the top
+            remove_redundant_aliases=True,  # Remove redundant aliases like 'import torch as torch'
+            force_single_line=False,
+            line_length=88,
+            profile="black",  # Compatible with black formatter
+            treat_comments_as_code=[],  # Don't treat comments as code barriers
+            treat_all_comments_as_code=False,  # Allow imports to move past comments
+        )
+        logger.debug("Successfully organized imports")
+    except ImportError:
+        logger.debug("isort library not available, import organization will be skipped")
+    except Exception as e:
+        logger.warning(f"Failed to organize imports: {e}")
+
+    # Step 2: Format code using black if available
+    try:
+        import black
+
+        formatted_code = black.format_str(code, mode=black.Mode())
+        logger.debug("Successfully formatted generated code")
+        return formatted_code
+    except ImportError:
+        logger.debug("black library not available, code formatting will be skipped")
+        return code
+    except black.InvalidInput as e:
+        logger.warning(f"Failed to format generated code: {e}")
+        return code
+    except Exception as e:
+        logger.warning(f"Unexpected error while formatting code: {e}")
+        return code
