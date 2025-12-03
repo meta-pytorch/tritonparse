@@ -68,6 +68,10 @@ def main():
         }
         unified_parse(**parse_args)
     elif args.func == "reproduce":
+        # Check mutual exclusivity between --line and --kernel/--launch-id
+        if args.kernel and args.line != 0:
+            repro_parser.error("--line and --kernel/--launch-id are mutually exclusive")
+
         replacer = None
         if args.use_fbcode:
             from tritonparse.fb.reproducer.replacer import FBCodePlaceholderReplacer
@@ -77,9 +81,11 @@ def main():
 
         reproduce(
             input_path=args.input,
-            line_index=args.line,
+            line_index=args.line if not args.kernel else 0,
             out_dir=args.out_dir,
             template=args.template,
+            kernel_name=args.kernel,
+            launch_id=args.launch_id if args.kernel else 0,
             kernel_import=args.kernel_import,
             replacer=replacer,
         )
