@@ -312,7 +312,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                   <h4 className="text-md font-semibold mb-2 text-gray-800">
                     Launch Locations in Original Trace{" "}
                     <span className="text-sm font-normal text-gray-500">
-                      (1-based line numbers)
+                      (0-based line numbers)
                     </span>
                   </h4>
                   <div className="font-mono text-sm bg-gray-100 p-2 rounded">
