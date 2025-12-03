@@ -11,14 +11,20 @@ This module provides core query functions for kernel information:
 
 from tritonparse.info.kernel_query import (
     find_launch_index_by_kernel,
+    find_similar_kernels,
     KernelSummary,
     LaunchInfo,
     list_kernels,
+    list_kernels_fast,
+    list_launches_for_kernel,
 )
 
 __all__ = [
     "KernelSummary",
     "LaunchInfo",
     "list_kernels",
+    "list_kernels_fast",
+    "list_launches_for_kernel",
     "find_launch_index_by_kernel",
+    "find_similar_kernels",
 ]

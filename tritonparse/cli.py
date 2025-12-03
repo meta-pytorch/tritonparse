@@ -4,6 +4,7 @@ import argparse
 from importlib.metadata import PackageNotFoundError, version
 
 from .common import is_fbcode
+from .info.cli import _add_info_args, info_command
 from .reproducer.cli import _add_reproducer_args
 from .reproducer.orchestrator import reproduce
 from .utils import _add_parse_args, unified_parse
@@ -31,6 +32,8 @@ def main():
             "Examples:\n"
             f"  {prog_name} parse /path/to/logs --out parsed_output\n"
             f"  {prog_name} reproduce /path/to/trace.ndjson --line 1 --out-dir repro_output\n"
+            f"  {prog_name} info /path/to/trace.ndjson\n"
+            f"  {prog_name} info /path/to/trace.ndjson --kernel matmul_kernel\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -59,6 +62,14 @@ def main():
     )
     _add_reproducer_args(repro_parser)
     repro_parser.set_defaults(func="reproduce")
+
+    # info subcommand
+    info_parser = subparsers.add_parser(
+        "info",
+        help="Query kernel information from trace file",
+    )
+    _add_info_args(info_parser)
+    info_parser.set_defaults(func="info")
 
     args = parser.parse_args()
 
@@ -89,6 +100,8 @@ def main():
             kernel_import=args.kernel_import,
             replacer=replacer,
         )
+    elif args.func == "info":
+        info_command(input_path=args.input, kernel_name=args.kernel)
     else:
         raise RuntimeError(f"Unknown command: {args.func}")
 
