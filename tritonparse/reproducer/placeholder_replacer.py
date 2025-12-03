@@ -141,19 +141,19 @@ def create_ttir_tempfile():
     """Extract TTIR from compilation event and create temporary file."""
     script_dir = Path(__file__).resolve().parent
     comp_json_file = script_dir / "{comp_json_filename}"
-    
+
     with open(comp_json_file, 'r') as f:
         comp_data = json.load(f)
-    
+
     # Extract TTIR content
     kernel_name = comp_data['payload']['metadata']['name']
     ttir_key = f"{{kernel_name}}.ttir"
     ttir_content = comp_data['payload']['file_content'][ttir_key]
-    
+
     # Create temporary file
     temp_file = tempfile.NamedTemporaryFile(
-        mode='w', 
-        suffix='.ttir', 
+        mode='w',
+        suffix='.ttir',
         delete=False,
         prefix=f'{{kernel_name}}_'
     )
@@ -235,7 +235,7 @@ triton.autotune = _patched_autotune
                 )
                 # Only add dependent functions if extraction was successful
                 if dependent_source_map:
-                    # Add separator and dependent functions
+                    # Add separator, import statements, and dependent functions
                     dependent_code = (
                         "\n\n# Dependent functions extracted from source file\n\n"
                     )
@@ -285,6 +285,14 @@ triton.autotune = _patched_autotune
 def get_dependent_source_map(
     function_name: str, file_path: str
 ) -> Optional[dict[str, str]]:
+    """
+    Extract dependent functions and their required imports.
+
+    Returns:
+        A tuple of (functions_dict, import_statements_list) or None if extraction fails.
+        - functions_dict: Maps qualified function names to their source code
+        - import_statements_list: List of formatted import statements needed by dependent functions
+    """
     from pathlib import Path
 
     from tritonparse.tp_logger import logger
@@ -293,37 +301,33 @@ def get_dependent_source_map(
     if not source_path.exists():
         return None
 
-    from tritonparse.reproducer.ast_analyzer import CallGraph
-
     try:
-        import ast
-
-        full_source = source_path.read_text(encoding="utf-8")
-        tree = ast.parse(full_source, filename=str(file_path))
-
-        # Use CallGraph with transitive closure to find all dependencies
-        call_graph = CallGraph(
-            filename=str(file_path),
-            module_name="<source>",
-            backends=[function_name],  # Track calls from this function
-            transitive_closure=True,  # Enable transitive closure
-            callee_prefix_filters=["triton.", "tl.", "torch."],  # Filter library calls
-        )
-        call_graph.visit(tree)
-
-        logger.debug(
-            f"CallGraph found {len(call_graph.edges)} edges, "
-            f"{len(call_graph.local_functions)} local functions"
+        # Use MultiFileCallGraphAnalyzer for multi-file analysis
+        from tritonparse.reproducer.multi_file_analyzer import (
+            MultiFileCallGraphAnalyzer,
         )
 
-        # Get all dependent functions using the new method
-        dependent_source_map = call_graph.get_dependent_functions_source_code()
+        analyzer = MultiFileCallGraphAnalyzer(
+            entry_file=file_path,
+            entry_function=function_name,
+        )
+        result = analyzer.analyze()
 
         logger.info(
-            f"Extracted {len(dependent_source_map)} dependent functions transitively"
+            f"Extracted {result.stats.total_functions_found} dependent functions "
+            f"from {result.stats.total_files_analyzed} files with "
+            f"{result.stats.total_imports} imports"
         )
 
-        return dependent_source_map
+        # Print dependent functions' short names
+        logger.info("\nDependent functions (short names):")
+        for func_name in sorted(result.function_short_names.keys()):
+            short_name = result.function_short_names[func_name]
+            logger.info(
+                "  - %s. %s", short_name, result.functions[func_name].splitlines()[0]
+            )
+
+        return result.functions
 
     except Exception as e:
         # If AST analysis fails, continue without dependent functions
