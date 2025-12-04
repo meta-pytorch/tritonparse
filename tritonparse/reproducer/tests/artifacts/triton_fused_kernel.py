@@ -14,7 +14,6 @@ if __name__ == "__main__":
 import torch
 import triton
 import triton.language as tl
-
 from tritonparse.reproducer.tests.artifacts.triton_preprocess import scale_kernel
 
 

@@ -242,9 +242,11 @@ class MultiFileCallGraphAnalyzer:
 
         for resolved_path, imported_names in imports_by_file.items():
             already_pending = any(
-                pending_item[0] == resolved_path
-                if isinstance(pending_item, tuple)
-                else pending_item == resolved_path
+                (
+                    pending_item[0] == resolved_path
+                    if isinstance(pending_item, tuple)
+                    else pending_item == resolved_path
+                )
                 for pending_item in self.pending_files
             )
             if not already_pending:
