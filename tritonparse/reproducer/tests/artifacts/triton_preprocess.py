@@ -4,7 +4,6 @@
 
 import triton
 import triton.language as tl
-
 from tritonparse.reproducer.tests.artifacts.triton_utils import add_values
 
 
