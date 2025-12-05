@@ -3,6 +3,11 @@
 import argparse
 from importlib.metadata import PackageNotFoundError, version
 
+from .bisect.cli import (
+    _add_bisect_args,
+    _validate_args as _validate_bisect_args,
+    bisect_command,
+)
 from .common import is_fbcode
 from .info.cli import _add_info_args, info_command
 from .reproducer.cli import _add_reproducer_args
@@ -71,6 +76,24 @@ def main():
     _add_info_args(info_parser)
     info_parser.set_defaults(func="info")
 
+    # bisect subcommand
+    bisect_parser = subparsers.add_parser(
+        "bisect",
+        help="Bisect Triton/LLVM commits to find regressions",
+        description=(
+            "Bisect Triton and LLVM commits to find regression-causing changes.\n\n"
+            "Modes:\n"
+            "  Default (no flags): Triton bisect only\n"
+            "  --commits-csv:      Full workflow (Triton -> LLVM if needed)\n"
+            "  --llvm-only:        LLVM bisect only\n"
+            "  --resume:           Resume from saved state\n"
+            "  --status:           Show bisect status"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_bisect_args(bisect_parser)
+    bisect_parser.set_defaults(func="bisect")
+
     args = parser.parse_args()
 
     if args.func == "parse":
@@ -102,6 +125,10 @@ def main():
         )
     elif args.func == "info":
         info_command(input_path=args.input, kernel_name=args.kernel)
+    elif args.func == "bisect":
+        _validate_bisect_args(args, bisect_parser)
+        exit_code = bisect_command(args)
+        raise SystemExit(exit_code)
     else:
         raise RuntimeError(f"Unknown command: {args.func}")
 
