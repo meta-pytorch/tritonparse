@@ -216,11 +216,11 @@ def bisect_command(args: argparse.Namespace) -> int:
 
 def _handle_status(args: argparse.Namespace) -> int:
     """Handle --status mode: show current bisect status."""
+    from tritonparse.bisect.state import StateManager
+
     state_path = args.state or "./bisect_logs/state.json"
 
     try:
-        from tritonparse.bisect.state import StateManager
-
         state = StateManager.load(state_path)
         StateManager.print_status(state)
         return 0
@@ -228,10 +228,6 @@ def _handle_status(args: argparse.Namespace) -> int:
         print(f"No state file found at: {state_path}")
         print("No bisect in progress.")
         return 0
-    except ImportError:
-        # state.py not yet implemented (PR7)
-        print("Status feature not yet implemented (requires PR7)")
-        return 1
     except Exception as e:
         print(f"Error loading state: {e}")
         return 1
@@ -239,21 +235,17 @@ def _handle_status(args: argparse.Namespace) -> int:
 
 def _handle_resume(args: argparse.Namespace) -> int:
     """Handle --resume mode: resume from saved state."""
+    from tritonparse.bisect.workflow import BisectWorkflow
+
     state_path = args.state or "./bisect_logs/state.json"
 
     try:
-        from tritonparse.bisect.workflow import BisectWorkflow
-
         workflow = BisectWorkflow.resume(state_path)
         result = workflow.run()
         _print_result(result)
         return 0
     except FileNotFoundError:
         print(f"State file not found: {state_path}")
-        return 1
-    except ImportError:
-        # workflow.py not yet implemented (PR7)
-        print("Resume feature not yet implemented (requires PR7)")
         return 1
     except Exception as e:
         print(f"Error resuming bisect: {e}")
@@ -262,36 +254,38 @@ def _handle_resume(args: argparse.Namespace) -> int:
 
 def _handle_llvm_only(args: argparse.Namespace) -> int:
     """Handle --llvm-only mode: bisect only LLVM commits."""
-    try:
-        from tritonparse.bisect.llvm_bisector import LLVMBisector
+    from pathlib import Path
 
+    from tritonparse.bisect.executor import ShellExecutor
+    from tritonparse.bisect.llvm_bisector import LLVMBisector
+
+    try:
         logger = _create_logger(args.log_dir)
+        executor = ShellExecutor(logger)
 
         bisector = LLVMBisector(
-            triton_dir=args.triton_dir,
-            test_script=args.test_script,
-            conda_env=args.conda_env,
+            triton_dir=Path(args.triton_dir),
+            test_script=Path(args.test_script),
+            executor=executor,
             logger=logger,
+            conda_env=args.conda_env,
             build_command=args.build_command,
         )
 
         culprit = bisector.run(
+            good_commit=args.good_llvm,
+            bad_commit=args.bad_llvm,
             triton_commit=args.triton_commit,
-            good_llvm=args.good_llvm,
-            bad_llvm=args.bad_llvm,
         )
 
         print(f"\n{'=' * 60}")
         print("LLVM Bisect Result")
         print(f"{'=' * 60}")
         print(f"Culprit LLVM commit: {culprit}")
+        print(f"Log directory: {args.log_dir}")
         print(f"{'=' * 60}")
         return 0
 
-    except ImportError:
-        # llvm_bisector.py not yet implemented (PR5)
-        print("LLVM-only bisect not yet implemented (requires PR5)")
-        return 1
     except Exception as e:
         print(f"LLVM bisect failed: {e}")
         return 1
@@ -299,21 +293,26 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
     """Handle default mode: Triton bisect (or full workflow with --commits-csv)."""
+    from pathlib import Path
+
+    from tritonparse.bisect.executor import ShellExecutor
     from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 
     logger = _create_logger(args.log_dir)
 
     # Check if this is full workflow mode
     if args.commits_csv:
-        return _handle_full_workflow(args, logger)
+        return _handle_full_workflow(args)
 
     # Triton-only bisect
     try:
+        executor = ShellExecutor(logger)
         bisector = TritonBisector(
-            triton_dir=args.triton_dir,
-            test_script=args.test_script,
-            conda_env=args.conda_env,
+            triton_dir=Path(args.triton_dir),
+            test_script=Path(args.test_script),
+            executor=executor,
             logger=logger,
+            conda_env=args.conda_env,
             build_command=args.build_command,
         )
 
@@ -338,11 +337,11 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
         return 1
 
 
-def _handle_full_workflow(args: argparse.Namespace, logger) -> int:  # noqa: ARG001
+def _handle_full_workflow(args: argparse.Namespace) -> int:
     """Handle full workflow mode (with --commits-csv)."""
-    try:
-        from tritonparse.bisect.workflow import BisectWorkflow
+    from tritonparse.bisect.workflow import BisectWorkflow, BisectWorkflowError
 
+    try:
         workflow = BisectWorkflow(
             triton_dir=args.triton_dir,
             test_script=args.test_script,
@@ -358,13 +357,11 @@ def _handle_full_workflow(args: argparse.Namespace, logger) -> int:  # noqa: ARG
         _print_result(result)
         return 0
 
-    except ImportError:
-        # workflow.py not yet implemented (PR7)
-        print("Full workflow not yet implemented (requires PR7)")
-        print("Use default mode (without --commits-csv) for Triton-only bisect.")
+    except BisectWorkflowError as e:
+        print(f"Workflow failed: {e}")
         return 1
     except Exception as e:
-        print(f"Workflow failed: {e}")
+        print(f"Unexpected error: {e}")
         return 1
 
 
