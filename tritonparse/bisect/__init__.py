@@ -6,16 +6,34 @@ Bisect module for tritonparse.
 This module provides tools for bisecting Triton and LLVM regressions.
 """
 
+from tritonparse.bisect.commit_detector import (
+    CommitDetector,
+    CommitDetectorError,
+    LLVMBumpInfo,
+)
 from tritonparse.bisect.executor import CommandResult, ShellExecutor
 from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
 from tritonparse.bisect.logger import BisectLogger
+from tritonparse.bisect.pair_tester import (
+    CommitPair,
+    PairTester,
+    PairTesterError,
+    PairTestResult,
+)
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 
 __all__ = [
     "BisectLogger",
     "CommandResult",
+    "CommitDetector",
+    "CommitDetectorError",
+    "CommitPair",
     "LLVMBisectError",
     "LLVMBisector",
+    "LLVMBumpInfo",
+    "PairTester",
+    "PairTesterError",
+    "PairTestResult",
     "ShellExecutor",
     "TritonBisectError",
     "TritonBisector",
