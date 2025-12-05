@@ -7,12 +7,15 @@ This module provides tools for bisecting Triton and LLVM regressions.
 """
 
 from tritonparse.bisect.executor import CommandResult, ShellExecutor
+from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
 from tritonparse.bisect.logger import BisectLogger
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 
 __all__ = [
     "BisectLogger",
     "CommandResult",
+    "LLVMBisectError",
+    "LLVMBisector",
     "ShellExecutor",
     "TritonBisectError",
     "TritonBisector",
