@@ -29,6 +29,9 @@ test = [
 [tool.setuptools.packages.find]
 include = ["tritonparse*"]
 
+[tool.setuptools.package-data]
+"tritonparse.bisect.scripts" = ["*.sh"]
+
 [tool.black]
 line-length = 88
 target-version = ["py310"]
