@@ -9,7 +9,7 @@ commits within a Triton-compatible range to find the first bad LLVM commit.
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -86,6 +86,7 @@ class LLVMBisector:
         triton_commit: Optional[str],
         good_llvm: str,
         bad_llvm: str,
+        output_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         """
         Execute LLVM bisect to find the culprit commit.
@@ -94,6 +95,8 @@ class LLVMBisector:
             triton_commit: Fixed Triton commit to use. If None, uses current HEAD.
             good_llvm: Known good LLVM commit hash (test passes).
             bad_llvm: Known bad LLVM commit hash (test fails).
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
 
         Returns:
             The culprit LLVM commit hash (first bad commit).
@@ -136,6 +139,7 @@ class LLVMBisector:
             "BUILD_COMMAND": self.build_command,
             "LOG_DIR": str(self.logger.log_dir),
             "COMPAT_MODE": "0",  # Normal mode: find regression
+            "PER_COMMIT_LOG": "0",  # Disable per-commit logs in Python mode
         }
 
         # Step 7: Execute git bisect sequence on LLVM repo
@@ -145,6 +149,7 @@ class LLVMBisector:
             bad_commit=bad_llvm,
             run_script=script_path,
             env=env,
+            output_callback=output_callback,
         )
 
         if not result.success:

@@ -269,29 +269,39 @@ def _handle_resume(args: argparse.Namespace) -> int:
 
 def _handle_llvm_only(args: argparse.Namespace) -> int:
     """Handle --llvm-only mode: bisect only LLVM commits."""
-    from pathlib import Path
-
-    from tritonparse.bisect.executor import ShellExecutor
     from tritonparse.bisect.llvm_bisector import LLVMBisector
+    from tritonparse.bisect.ui import BisectUI
 
     try:
         logger = _create_logger(args.log_dir)
-        executor = ShellExecutor(logger)
+
+        # Initialize TUI
+        ui = BisectUI(enabled=args.tui)
+        logger.info(ui.get_tui_status_message())
+
+        # Set log paths in UI
+        ui.update_progress(
+            log_dir=str(logger.log_dir),
+            log_file=logger.module_log_path.name,
+            command_log=logger.command_log_path.name,
+        )
 
         bisector = LLVMBisector(
-            triton_dir=Path(args.triton_dir),
-            test_script=Path(args.test_script),
-            executor=executor,
-            logger=logger,
+            triton_dir=args.triton_dir,
+            test_script=args.test_script,
             conda_env=args.conda_env,
+            logger=logger,
             build_command=args.build_command,
         )
 
-        culprit = bisector.run(
-            good_commit=args.good_llvm,
-            bad_commit=args.bad_llvm,
-            triton_commit=args.triton_commit,
-        )
+        # Use context manager to start/stop TUI
+        with ui:
+            culprit = bisector.run(
+                triton_commit=args.triton_commit,
+                good_llvm=args.good_llvm,
+                bad_llvm=args.bad_llvm,
+                output_callback=ui.create_output_callback(),
+            )
 
         print(f"\n{'=' * 60}")
         print("LLVM Bisect Result")
@@ -308,10 +318,8 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
     """Handle default mode: Triton bisect (or full workflow with --commits-csv)."""
-    from pathlib import Path
-
-    from tritonparse.bisect.executor import ShellExecutor
     from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
+    from tritonparse.bisect.ui import BisectUI
 
     logger = _create_logger(args.log_dir)
 
@@ -319,22 +327,34 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     if args.commits_csv:
         return _handle_full_workflow(args)
 
-    # Triton-only bisect
+    # Initialize TUI
+    ui = BisectUI(enabled=args.tui)
+    logger.info(ui.get_tui_status_message())
+
+    # Set log paths in UI
+    ui.update_progress(
+        log_dir=str(logger.log_dir),
+        log_file=logger.module_log_path.name,
+        command_log=logger.command_log_path.name,
+    )
+
+    # Triton-only bisect with TUI
     try:
-        executor = ShellExecutor(logger)
         bisector = TritonBisector(
-            triton_dir=Path(args.triton_dir),
-            test_script=Path(args.test_script),
-            executor=executor,
+            triton_dir=args.triton_dir,
+            test_script=args.test_script,
             logger=logger,
             conda_env=args.conda_env,
             build_command=args.build_command,
         )
 
-        culprit = bisector.run(
-            good_commit=args.good,
-            bad_commit=args.bad,
-        )
+        # Use context manager to start/stop TUI
+        with ui:
+            culprit = bisector.run(
+                good_commit=args.good,
+                bad_commit=args.bad,
+                output_callback=ui.create_output_callback(),
+            )
 
         print(f"\n{'=' * 60}")
         print("Triton Bisect Result")

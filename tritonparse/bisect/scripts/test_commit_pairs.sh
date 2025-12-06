@@ -34,7 +34,7 @@ Required Environment Variables:
 Optional Environment Variables (with defaults):
   CONDA_ENV           Conda environment name (default: triton_bisect)
   CONDA_DIR           Conda directory (default: $HOME/miniconda3)
-  LOG_DIR             Log directory (default: ./test_logs)
+  LOG_DIR             Log directory (default: ./bisect_logs)
   TEST_ARGS           Arguments for test script (default: empty)
   BUILD_COMMAND       Custom build command template (default: LLVM_COMMIT_HASH={LLVM_COMMIT} make dev-install-llvm)
                       Use {TRITON_COMMIT} and {LLVM_COMMIT} as placeholders
@@ -68,8 +68,8 @@ Exit Codes:
   1 - Error (build failed, validation error, or cannot checkout commit)
 
 Output Files:
-  - Unified log file: test_logs/commit_pairs_test_TIMESTAMP.log
-  - Result file (if bad pair found): test_logs/first_bad_pair_TIMESTAMP.txt
+  - Unified log file: bisect_logs/bisect_commit_pairs_TIMESTAMP.log
+  - Result file (if bad pair found): bisect_logs/bisect_first_bad_pair_TIMESTAMP.txt
 
 Example:
   # Create CSV file
@@ -94,7 +94,7 @@ TEST_SCRIPT=${TEST_SCRIPT:-""}
 COMMITS_CSV=${COMMITS_CSV:-""}
 CONDA_ENV=${CONDA_ENV:-triton_bisect}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
-LOG_DIR=${LOG_DIR:-./test_logs}
+LOG_DIR=${LOG_DIR:-./bisect_logs}
 TEST_ARGS=${TEST_ARGS:-""}
 BUILD_COMMAND=${BUILD_COMMAND:-""}
 
@@ -156,8 +156,8 @@ LOG_DIR=$(realpath "$LOG_DIR")
 
 # ============ Setup ============
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$LOG_DIR/commit_pairs_test_${TIMESTAMP}.log"
-RESULT_FILE="$LOG_DIR/first_bad_pair_${TIMESTAMP}.txt"
+LOG_FILE="$LOG_DIR/bisect_commit_pairs_${TIMESTAMP}.log"
+RESULT_FILE="$LOG_DIR/bisect_first_bad_pair_${TIMESTAMP}.txt"
 
 # Count total commit pairs (skip empty lines and header)
 TOTAL_PAIRS=0
@@ -272,6 +272,12 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   fi
 
   echo "✅ Triton checkout successful" | tee -a "$LOG_FILE"
+
+  # Update git submodules to match the current commit
+  echo "" | tee -a "$LOG_FILE"
+  echo "Updating git submodules..." | tee -a "$LOG_FILE"
+  git submodule update --init --recursive 2>&1 | tee -a "$LOG_FILE"
+  echo "✅ Submodules updated" | tee -a "$LOG_FILE"
 
   # ========== 2. Clean build cache ==========
   cd "$TRITON_DIR" || exit 1

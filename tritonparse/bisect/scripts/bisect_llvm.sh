@@ -50,6 +50,7 @@ Optional Environment Variables (with defaults):
                         Use this to find first incompatible LLVM commit
                    - 0: Pass through test exit code (0=good, 1=bad, 125=skip)
                         Use this to find regression within compatible range
+  PER_COMMIT_LOG   Write per-commit log files (default: 1, set to 0 to disable)
 
 Example:
   # Minimal usage
@@ -67,6 +68,12 @@ Example:
   git bisect run bash /path/to/bisect_llvm.sh
   WRAPPER
 
+  # Disable per-commit log files (only keep commands.log)
+  PER_COMMIT_LOG=0 \
+  TRITON_DIR=/path/to/triton \
+  TEST_SCRIPT=/path/to/test.py \
+  git bisect run bash bisect_llvm.sh
+
 Exit Codes:
   0   - Good commit (test passed)
   1   - Bad commit (test failed)
@@ -81,9 +88,10 @@ CONDA_ENV=${CONDA_ENV:-triton_bisect}
 TRITON_DIR=${TRITON_DIR:-""}
 TEST_SCRIPT=${TEST_SCRIPT:-""}
 TEST_ARGS=${TEST_ARGS:-""}
-LOG_DIR=${LOG_DIR:-""}
+LOG_DIR=${LOG_DIR:-./bisect_logs}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 BUILD_COMMAND=${BUILD_COMMAND:-""}
+PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
 
 # Validate we're in LLVM repository
 if [ ! -d .git ]; then
@@ -127,7 +135,7 @@ CONDA_DIR=$(realpath "$CONDA_DIR")
 
 # Get LLVM commit information
 LLVM_COMMIT=$(git rev-parse HEAD)
-SHORT_LLVM=$(git rev-parse --short HEAD)
+SHORT_LLVM=$(git rev-parse --short=9 HEAD)
 
 # Set default log directory if not specified
 if [ -z "$LOG_DIR" ]; then
@@ -139,7 +147,21 @@ mkdir -p "$LOG_DIR"
 LOG_DIR=$(realpath "$LOG_DIR")
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$LOG_DIR/${TIMESTAMP}_llvm_${SHORT_LLVM}.log"
+
+# Create per-commit log file (optional, controlled by PER_COMMIT_LOG)
+LOG_FILE=""
+if [ "$PER_COMMIT_LOG" = "1" ]; then
+  LOG_FILE="$LOG_DIR/${TIMESTAMP}_bisect_llvm_${SHORT_LLVM}.log"
+fi
+
+# Helper function for logging output
+log_output() {
+  if [ -n "$LOG_FILE" ]; then
+    tee -a "$LOG_FILE"
+  else
+    cat
+  fi
+}
 
 # Start logging
 {
@@ -154,25 +176,34 @@ LOG_FILE="$LOG_DIR/${TIMESTAMP}_llvm_${SHORT_LLVM}.log"
   echo "Conda Env: $CONDA_ENV"
   echo "========================"
   echo ""
-} | tee "$LOG_FILE"
+} | log_output
+
+# Update Triton git submodules (in case Triton has submodules)
+echo "Updating Triton git submodules..." | log_output
+cd "$TRITON_DIR" || {
+  echo "ERROR: Cannot change to TRITON_DIR: $TRITON_DIR" | log_output
+  exit 128
+}
+git submodule update --init --recursive 2>&1 | log_output
+echo "" | log_output
 
 # Activate conda environment
-echo "Activating conda environment: $CONDA_ENV" | tee -a "$LOG_FILE"
+echo "Activating conda environment: $CONDA_ENV" | log_output
 source ${CONDA_DIR}/bin/activate
 if [ $? -ne 0 ]; then
-  echo "ERROR: Cannot activate conda" | tee -a "$LOG_FILE"
+  echo "ERROR: Cannot activate conda" | log_output
   exit 128
 fi
 
 conda activate "$CONDA_ENV"
 if [ $? -ne 0 ]; then
-  echo "ERROR: Failed to activate conda environment: $CONDA_ENV" | tee -a "$LOG_FILE"
+  echo "ERROR: Failed to activate conda environment: $CONDA_ENV" | log_output
   exit 128
 fi
 
 # Change to Triton directory for building
 cd "$TRITON_DIR" || {
-  echo "ERROR: Cannot change to TRITON_DIR: $TRITON_DIR" | tee -a "$LOG_FILE"
+  echo "ERROR: Cannot change to TRITON_DIR: $TRITON_DIR" | log_output
   exit 128
 }
 
@@ -184,44 +215,54 @@ fi
 # Clean LLVM build directory to avoid CMake cache issues
 LLVM_BUILD_DIR="$TRITON_DIR/.llvm-project/build"
 if [ -d "$LLVM_BUILD_DIR" ]; then
-  echo "Cleaning LLVM build directory: $LLVM_BUILD_DIR" | tee -a "$LOG_FILE"
+  echo "Cleaning LLVM build directory: $LLVM_BUILD_DIR" | log_output
   rm -rf "$LLVM_BUILD_DIR"
 fi
 
 # Build Triton with specific LLVM commit
-echo "" | tee -a "$LOG_FILE"
-echo "Building Triton with LLVM $SHORT_LLVM..." | tee -a "$LOG_FILE"
+echo "" | log_output
+echo "Building Triton with LLVM $SHORT_LLVM..." | log_output
 BUILD_START=$(date +%s)
 
-eval "$BUILD_COMMAND" 2>&1 | tee -a "$LOG_FILE"
-BUILD_CODE=${PIPESTATUS[0]}  # Get exit code of the build command, not tee
+if [ -n "$LOG_FILE" ]; then
+  eval "$BUILD_COMMAND" 2>&1 | tee -a "$LOG_FILE"
+  BUILD_CODE=${PIPESTATUS[0]}
+else
+  eval "$BUILD_COMMAND" 2>&1
+  BUILD_CODE=$?
+fi
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
-echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | tee -a "$LOG_FILE"
+echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | log_output
 
 if [ $BUILD_CODE -ne 0 ]; then
-  echo "Build failed" | tee -a "$LOG_FILE"
+  echo "Build failed" | log_output
   if [ "$COMPAT_MODE" = "1" ]; then
-    echo "COMPAT_MODE: Build failed - INCOMPATIBLE" | tee -a "$LOG_FILE"
+    echo "COMPAT_MODE: Build failed - INCOMPATIBLE" | log_output
     exit 1   # bad - incompatible
   else
-    echo "Skipping this LLVM commit" | tee -a "$LOG_FILE"
+    echo "Skipping this LLVM commit" | log_output
     exit 125  # skip
   fi
 fi
 
 # Run test with TRITON_ALWAYS_COMPILE
-echo "" | tee -a "$LOG_FILE"
-echo "Running test..." | tee -a "$LOG_FILE"
+echo "" | log_output
+echo "Running test..." | log_output
 TEST_START=$(date +%s)
 
-TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1 | tee -a "$LOG_FILE"
-TEST_CODE=${PIPESTATUS[0]}  # Get exit code of python, not tee
+if [ -n "$LOG_FILE" ]; then
+  TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1 | tee -a "$LOG_FILE"
+  TEST_CODE=${PIPESTATUS[0]}
+else
+  TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1
+  TEST_CODE=$?
+fi
 
 TEST_END=$(date +%s)
 TEST_TIME=$((TEST_END - TEST_START))
-echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | tee -a "$LOG_FILE"
+echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | log_output
 
 # Handle compatibility mode
 COMPAT_MODE=${COMPAT_MODE:-0}
@@ -231,13 +272,13 @@ if [ "$COMPAT_MODE" = "1" ]; then
   if [ $TEST_CODE -eq 0 ] || [ $TEST_CODE -eq 1 ]; then
     RESULT="COMPATIBLE"
     FINAL_EXIT=0
-    echo "" | tee -a "$LOG_FILE"
-    echo "COMPAT_MODE: Test exited normally (exit $TEST_CODE) - COMPATIBLE" | tee -a "$LOG_FILE"
+    echo "" | log_output
+    echo "COMPAT_MODE: Test exited normally (exit $TEST_CODE) - COMPATIBLE" | log_output
   else
     RESULT="INCOMPATIBLE"
     FINAL_EXIT=1
-    echo "" | tee -a "$LOG_FILE"
-    echo "COMPAT_MODE: Test exited abnormally (exit $TEST_CODE) - INCOMPATIBLE" | tee -a "$LOG_FILE"
+    echo "" | log_output
+    echo "COMPAT_MODE: Test exited abnormally (exit $TEST_CODE) - INCOMPATIBLE" | log_output
   fi
 else
   # Normal mode: pass through test exit code
@@ -260,8 +301,10 @@ fi
   echo "Test: ${TEST_TIME}s (exit $TEST_CODE)"
   echo "Mode: $([ "$COMPAT_MODE" = "1" ] && echo 'COMPAT_MODE' || echo 'NORMAL')"
   echo "Result: $RESULT"
-  echo "Log: $LOG_FILE"
+  if [ -n "$LOG_FILE" ]; then
+    echo "Log: $LOG_FILE"
+  fi
   echo "==============="
-} | tee -a "$LOG_FILE"
+} | log_output
 
 exit $FINAL_EXIT

@@ -8,6 +8,7 @@ and real-time command output. It gracefully falls back to plain text when
 Rich is not available or when running in non-TTY environments.
 """
 
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -27,6 +28,35 @@ except ImportError:
     RICH_AVAILABLE = False
 
 
+class _LiveContent:
+    """
+    Wrapper that regenerates layout on each render.
+
+    This class implements the Rich renderable protocol (__rich__) to ensure
+    that the layout is regenerated on each Live refresh cycle. This enables
+    automatic updating of dynamic content like elapsed time without requiring
+    explicit calls to update the display.
+    """
+
+    def __init__(self, ui: "BisectUI") -> None:
+        self._ui = ui
+
+    def __rich__(self) -> "Layout":
+        """
+        Called by Rich Live on each refresh cycle.
+
+        Returns:
+            The updated layout with fresh elapsed time.
+        """
+        # Update elapsed time on each render
+        if self._ui.start_time:
+            self._ui.progress.elapsed_seconds = time.time() - self._ui.start_time
+
+        # Rebuild layout with fresh data
+        self._ui._update_layout()
+        return self._ui._layout
+
+
 @dataclass
 class BisectProgress:
     """
@@ -43,6 +73,9 @@ class BisectProgress:
         status_message: Additional status message.
         is_building: Whether currently building.
         is_testing: Whether currently running test.
+        log_dir: Directory containing log files.
+        log_file: Main log file name.
+        command_log: Command log file name.
     """
 
     phase: str = "Initializing"
@@ -55,6 +88,9 @@ class BisectProgress:
     status_message: Optional[str] = None
     is_building: bool = False
     is_testing: bool = False
+    log_dir: Optional[str] = None
+    log_file: Optional[str] = None
+    command_log: Optional[str] = None
 
 
 class BisectUI:
@@ -87,13 +123,21 @@ class BisectUI:
             enabled: Whether to enable Rich TUI. If False or Rich unavailable,
                     falls back to plain text output.
         """
+        # Track why TUI was disabled for status message
+        self._disabled_reason: Optional[str] = None
+
         # Check if we should use Rich TUI
-        self._rich_enabled = (
-            enabled
-            and RICH_AVAILABLE
-            and sys.stdout.isatty()
-            and sys.stderr.isatty()
-        )
+        if not enabled:
+            self._rich_enabled = False
+            self._disabled_reason = "disabled by --no-tui flag"
+        elif not RICH_AVAILABLE:
+            self._rich_enabled = False
+            self._disabled_reason = "rich library not installed (pip install rich)"
+        elif not sys.stdout.isatty() or not sys.stderr.isatty():
+            self._rich_enabled = False
+            self._disabled_reason = "not running in a TTY (e.g., piped output or CI)"
+        else:
+            self._rich_enabled = True
 
         self.progress = BisectProgress()
         self.output_lines: List[str] = []
@@ -114,11 +158,23 @@ class BisectUI:
         """Check if Rich TUI is enabled."""
         return self._rich_enabled
 
+    @property
+    def disabled_reason(self) -> Optional[str]:
+        """Get the reason TUI was disabled, or None if enabled."""
+        return self._disabled_reason
+
+    def get_tui_status_message(self) -> str:
+        """Get a human-readable message about TUI status."""
+        if self._rich_enabled:
+            return "Rich TUI enabled"
+        else:
+            return f"Rich TUI disabled: {self._disabled_reason}"
+
     def _create_layout(self) -> "Layout":
         """Create the split-screen layout."""
         layout = Layout()
         layout.split_column(
-            Layout(name="progress", size=10),
+            Layout(name="progress", size=6),
             Layout(name="output"),
         )
         return layout
@@ -140,48 +196,70 @@ class BisectUI:
         """Render the progress information panel."""
         p = self.progress
 
+        # Auto-update elapsed time on each render
+        if self.start_time:
+            p.elapsed_seconds = time.time() - self.start_time
+
         text = Text()
 
-        # Phase info
+        # Line 1: Core status (Phase, Commit, Progress, Elapsed) - all in one line
         text.append("Phase: ", style="bold")
-        phase_style = "green" if p.phase_number < p.total_phases else "blue"
-        text.append(f"{p.phase} ", style=phase_style)
-        text.append(f"({p.phase_number}/{p.total_phases})\n", style="dim")
+        text.append(f"{p.phase} ", style="green bold")
+        text.append(f"({p.phase_number}/{p.total_phases})  ", style="green")
 
-        # Current commit
         text.append("Commit: ", style="bold")
         if p.current_commit:
-            commit_display = p.current_commit[:12] if len(p.current_commit) > 12 else p.current_commit
-            text.append(f"{commit_display}\n", style="cyan")
+            commit_display = (
+                p.current_commit[:9] if len(p.current_commit) > 9 else p.current_commit
+            )
+            text.append(f"{commit_display}  ", style="cyan")
         else:
-            text.append("N/A\n", style="dim")
+            text.append("N/A  ", style="dim")
 
-        # Progress
         text.append("Progress: ", style="bold")
         if p.total_commits > 0:
             pct = p.commits_tested / p.total_commits * 100
-            text.append(f"{p.commits_tested}/{p.total_commits} ", style="yellow")
-            text.append(f"({pct:.0f}%)\n", style="dim")
+            text.append(
+                f"{p.commits_tested}/{p.total_commits} ({pct:.0f}%)  ", style="yellow"
+            )
         else:
-            text.append(f"{p.commits_tested} commits tested\n", style="yellow")
+            text.append(f"{p.commits_tested} tested  ", style="yellow")
 
-        # Elapsed time
         text.append("Elapsed: ", style="bold")
         text.append(f"{self._format_elapsed(p.elapsed_seconds)}\n", style="magenta")
 
-        # Status indicators
-        if p.is_building:
-            text.append("\n⚙️  Building...", style="yellow")
-        elif p.is_testing:
-            text.append("\n🧪 Testing...", style="cyan")
+        # Line 2-3: Log files
+        if p.log_dir:
+            text.append("📁 Logs: ", style="bold")
+            text.append(f"{p.log_dir}\n", style="dim")
+            log_files = []
+            if p.log_file:
+                log_files.append(p.log_file)
+            if p.command_log:
+                log_files.append(p.command_log)
+            if log_files:
+                text.append("   └─ ", style="dim")
+                text.append(", ".join(log_files) + "\n", style="bright_black")
 
-        # Status message
+        # Line 4: Status indicator + last result (combined)
+        status_parts = []
+        if p.is_building:
+            status_parts.append(("⚙️  Building...", "yellow"))
+        elif p.is_testing:
+            status_parts.append(("🧪 Testing...", "cyan"))
+
         if p.status_message:
-            text.append(f"\n{p.status_message}", style="dim italic")
+            status_parts.append((p.status_message, "bright_black italic"))
+
+        if status_parts:
+            for i, (msg, style) in enumerate(status_parts):
+                if i > 0:
+                    text.append("  ", style="default")
+                text.append(msg, style=style)
 
         return Panel(
             text,
-            title="[bold white]Bisect Progress[/bold white]",
+            title="[bold bright_green]Bisect Progress[/bold bright_green]",
             border_style="green",
         )
 
@@ -199,7 +277,7 @@ class BisectUI:
 
         return Panel(
             text,
-            title="[bold white]Output[/bold white]",
+            title="[bold bright_cyan]Output[/bold bright_cyan]",
             border_style="blue",
         )
 
@@ -219,10 +297,13 @@ class BisectUI:
             return
 
         self._update_layout()
+        # Use _LiveContent wrapper to enable auto-refresh of elapsed time
+        # The __rich__() method is called on each Live refresh cycle
+        # refresh_per_second=1 is sufficient since elapsed time displays in seconds
         self._live = Live(
-            self._layout,
+            _LiveContent(self),
             console=self._console,
-            refresh_per_second=4,
+            refresh_per_second=1,
             screen=True,
         )
         self._live.start()
@@ -270,7 +351,7 @@ class BisectUI:
 
         # Limit stored lines
         if len(self.output_lines) > self.max_output_lines:
-            self.output_lines = self.output_lines[-self.max_output_lines:]
+            self.output_lines = self.output_lines[-self.max_output_lines :]
 
         if not self._rich_enabled:
             # Plain text fallback
@@ -297,12 +378,89 @@ class BisectUI:
         Create a callback function for streaming output.
 
         Returns:
-            Callback that appends lines to the output panel.
+            Callback that appends lines to the output panel and
+            parses progress information from the output.
         """
+
         def callback(line: str) -> None:
             self.append_output(line)
+            self._parse_and_update_progress(line)
 
         return callback
+
+    def _parse_and_update_progress(self, line: str) -> None:
+        """
+        Parse output line and update progress state.
+
+        This method analyzes the output from bisect scripts to extract
+        progress information and update the UI accordingly.
+
+        Args:
+            line: Output line to parse.
+        """
+        # Detect phase from script header
+        if "=== Triton Bisect Run ===" in line:
+            self.update_progress(
+                phase="Triton Bisect",
+                phase_number=1,
+                is_building=False,
+                is_testing=False,
+            )
+        elif "=== LLVM Bisect Run ===" in line:
+            self.update_progress(
+                phase="LLVM Bisect",
+                phase_number=4,
+                is_building=False,
+                is_testing=False,
+            )
+
+        # Detect current commit (from script output: "Commit: abc123...")
+        match = re.search(r"^Commit: ([a-fA-F0-9]{7,40})", line)
+        if match:
+            self.update_progress(current_commit=match.group(1))
+
+        # Detect short commit (from script output: "Short: abc123def")
+        match = re.search(r"^Short: ([a-fA-F0-9]{7,12})", line)
+        if match:
+            self.update_progress(current_commit=match.group(1))
+
+        # Detect building status
+        if "Building Triton" in line or "Building..." in line:
+            self.update_progress(
+                is_building=True,
+                is_testing=False,
+            )
+
+        # Detect testing status
+        if "Running test" in line:
+            self.update_progress(
+                is_building=False,
+                is_testing=True,
+            )
+
+        # Detect test result (commit completed)
+        if "✅ Passed" in line:
+            self.update_progress(
+                is_building=False,
+                is_testing=False,
+                commits_tested=self.progress.commits_tested + 1,
+                status_message="Last: Passed ✅",
+            )
+        elif "❌ Failed" in line:
+            self.update_progress(
+                is_building=False,
+                is_testing=False,
+                commits_tested=self.progress.commits_tested + 1,
+                status_message="Last: Failed ❌",
+            )
+
+        # Detect git bisect progress from "roughly N steps"
+        # Format: "Bisecting: 284 revisions left to test after this (roughly 8 steps)"
+        # Only set total_commits on first detection (when it's still 0)
+        match = re.search(r"\(roughly (\d+) steps?\)", line)
+        if match and self.progress.total_commits == 0:
+            total_steps = int(match.group(1))
+            self.update_progress(total_commits=total_steps)
 
     def __enter__(self) -> "BisectUI":
         """Context manager entry."""

@@ -1,79 +1,100 @@
 #!/bin/bash
 # bisect_triton.sh - Bisect Triton commits to find regressions
 #
-# USAGE:
-#   Set required environment variables and run git bisect:
-#     $ git bisect start
-#     $ git checkout [known good commit]
-#     $ git bisect good
-#     $ git checkout [known bad commit]
-#     $ git bisect bad
-#     $ TEST_SCRIPT=../repro1/triton_only_repro.py TRITON_DIR=./ BUILD_COMMAND="pip install -e ." CONDA_ENV=bisect3 git bisect run bash ../bisect_triton.sh
+# This script is designed to be used with `git bisect run` to automatically
+# find the first commit that introduces a regression in Triton.
 #
-# For help: bash bisect_triton.sh --help
+# Usage:
+#   cd /path/to/triton
+#   git bisect start
+#   git bisect good <known-good-commit>
+#   git bisect bad <known-bad-commit>
+#   TRITON_DIR=/path/to/triton TEST_SCRIPT=/path/to/test.py git bisect run bash bisect_triton.sh
+#
+# For standalone help: bash bisect_triton.sh --help
 
 # Help message
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
   cat << 'EOF'
 Triton Bisect Script
 
+This script is designed to be used with `git bisect run` to automatically
+find the first commit that introduces a regression in Triton.
+
 Usage:
-  TEST_SCRIPT=/path/to/test.py git bisect run bash bisect_triton.sh
+  cd /path/to/triton
+  git bisect start
+  git bisect good <known-good-commit>
+  git bisect bad <known-bad-commit>
+  TRITON_DIR=/path/to/triton TEST_SCRIPT=/path/to/test.py git bisect run bash bisect_triton.sh
 
 Required Environment Variables:
-  TEST_SCRIPT      Test script path
+  TRITON_DIR          Path to triton repository (can be auto-detected if in repo)
+  TEST_SCRIPT         Path to test script that returns 0 for pass, non-0 for fail
 
 Optional Environment Variables (with defaults):
-  CONDA_ENV        Conda environment name (default: bisect_triton)
-  TRITON_DIR       Triton repository path (default: current directory)
-  TEST_ARGS        Arguments to test script (default: empty)
-  LOG_DIR          Log directory (default: ./bisect_logs)
-  BUILD_COMMAND    Build command (default: pip install -e .)
+  CONDA_ENV           Conda environment name (default: triton_bisect)
+  CONDA_DIR           Conda directory (default: $HOME/miniconda3)
+  LOG_DIR             Log directory (default: ./bisect_logs)
+  TEST_ARGS           Arguments for test script (default: empty)
+  BUILD_COMMAND       Build command (default: pip install -e .)
+  PER_COMMIT_LOG      Write per-commit log files (default: 1, set to 0 to disable)
 
-Example:
-  # Minimal usage
-  TEST_SCRIPT=./test.py git bisect run bash bisect_triton.sh
-
-  # With optional settings
-  CONDA_ENV=my_env TRITON_DIR=/path/to/triton TEST_SCRIPT=./test.py \
-    git bisect run bash bisect_triton.sh
-
-  # If you want to save settings, create a wrapper script:
-  cat > my_bisect.sh << 'WRAPPER'
-  #!/bin/bash
-  export TRITON_DIR=/path/to/triton
-  export TEST_SCRIPT=/path/to/test.py
-  export CONDA_ENV=my_env
-  git bisect run bash bisect_triton.sh
-  WRAPPER
-
-Exit Codes:
+Exit Codes (for git bisect):
   0   - Good commit (test passed)
   1   - Bad commit (test failed)
-  125 - Skip commit (build failed for this specific commit)
-  128 - Abort bisect (configuration or environment error)
+  125 - Skip (build failed, git will try adjacent commits)
+  128 - Abort (configuration error, stops bisect)
+
+Example:
+  # Basic usage
+  cd /path/to/triton
+  git bisect start
+  git bisect good v3.4.0
+  git bisect bad v3.5.0
+  TRITON_DIR=$(pwd) TEST_SCRIPT=/path/to/test.py git bisect run bash bisect_triton.sh
+
+  # With custom environment
+  TRITON_DIR=/path/to/triton \
+  TEST_SCRIPT=/path/to/test.py \
+  CONDA_ENV=my_env \
+  LOG_DIR=/path/to/logs \
+  git bisect run bash bisect_triton.sh
+
+  # Disable per-commit log files (only keep commands.log)
+  PER_COMMIT_LOG=0 \
+  TRITON_DIR=/path/to/triton \
+  TEST_SCRIPT=/path/to/test.py \
+  git bisect run bash bisect_triton.sh
 EOF
   exit 0
 fi
 
 # Default values
-CONDA_ENV=${CONDA_ENV:-bisect_triton}
-TRITON_DIR=${TRITON_DIR:-$(pwd)}
+TRITON_DIR=${TRITON_DIR:-""}
 TEST_SCRIPT=${TEST_SCRIPT:-""}
-TEST_ARGS=${TEST_ARGS:-""}
-LOG_DIR=${LOG_DIR:-./bisect_logs}
+CONDA_ENV=${CONDA_ENV:-triton_bisect}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
+LOG_DIR=${LOG_DIR:-./bisect_logs}
+TEST_ARGS=${TEST_ARGS:-""}
 BUILD_COMMAND=${BUILD_COMMAND:-"pip install -e ."}
+PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
 
-# Validate required variables
-if [ -z "$TEST_SCRIPT" ]; then
-  echo "ERROR: TEST_SCRIPT is not set. Please set it via environment variable"
-  echo "Run 'bash bisect_triton.sh --help' for usage information"
-  exit 128
+# ============ Validation ============
+if [ -z "$TRITON_DIR" ]; then
+  # Try to auto-detect if we're in a triton repo
+  if [ -d ".git" ] && [ -f "pyproject.toml" ]; then
+    TRITON_DIR=$(pwd)
+  else
+    echo "ERROR: TRITON_DIR is not set and cannot be auto-detected"
+    echo "Run 'bash bisect_triton.sh --help' for usage information"
+    exit 128
+  fi
 fi
 
-if [ ! -f "$TEST_SCRIPT" ]; then
-  echo "ERROR: Test script not found: $TEST_SCRIPT"
+if [ -z "$TEST_SCRIPT" ]; then
+  echo "ERROR: TEST_SCRIPT is not set"
+  echo "Run 'bash bisect_triton.sh --help' for usage information"
   exit 128
 fi
 
@@ -82,26 +103,48 @@ if [ ! -d "$TRITON_DIR" ]; then
   exit 128
 fi
 
+if [ ! -f "$TEST_SCRIPT" ]; then
+  echo "ERROR: TEST_SCRIPT not found: $TEST_SCRIPT"
+  exit 128
+fi
+
 # Convert all path variables to absolute paths to avoid issues after cd
-TEST_SCRIPT=$(realpath "$TEST_SCRIPT")
 TRITON_DIR=$(realpath "$TRITON_DIR")
+TEST_SCRIPT=$(realpath "$TEST_SCRIPT")
 CONDA_DIR=$(realpath "$CONDA_DIR")
 
-# Create log directory and convert to absolute path
+# Create log directory and get absolute path
 mkdir -p "$LOG_DIR"
 LOG_DIR=$(realpath "$LOG_DIR")
 
-# Get current commit information
-CURRENT_COMMIT=$(git rev-parse HEAD)
-SHORT_COMMIT=$(git rev-parse --short HEAD)
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$LOG_DIR/${TIMESTAMP}_${SHORT_COMMIT}.log"
+# ============ Setup ============
+cd "$TRITON_DIR" || exit 128
 
-# Start logging
+# Get current commit info
+COMMIT_HASH=$(git rev-parse HEAD)
+SHORT_COMMIT=$(git rev-parse --short=9 HEAD)
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+# Create per-commit log file (optional, controlled by PER_COMMIT_LOG)
+COMMIT_LOG=""
+if [ "$PER_COMMIT_LOG" = "1" ]; then
+  COMMIT_LOG="$LOG_DIR/${TIMESTAMP}_bisect_triton_${SHORT_COMMIT}.log"
+fi
+
+# Helper function for logging output
+log_output() {
+  if [ -n "$COMMIT_LOG" ]; then
+    tee -a "$COMMIT_LOG"
+  else
+    cat
+  fi
+}
+
+# Start logging to per-commit log file (if enabled)
 {
   echo "=== Triton Bisect Run ==="
   echo "Timestamp: $(date)"
-  echo "Commit: $CURRENT_COMMIT"
+  echo "Commit: $COMMIT_HASH"
   echo "Short: $SHORT_COMMIT"
   echo "Triton Dir: $TRITON_DIR"
   echo "Test Script: $TEST_SCRIPT"
@@ -109,67 +152,90 @@ LOG_FILE="$LOG_DIR/${TIMESTAMP}_${SHORT_COMMIT}.log"
   echo "Conda Env: $CONDA_ENV"
   echo "========================="
   echo ""
-} | tee "$LOG_FILE"
+} | log_output
 
-# Activate conda environment
-echo "Activating conda environment: $CONDA_ENV" | tee -a "$LOG_FILE"
-source ${CONDA_DIR:-$HOME/miniconda3}/bin/activate
+# Update git submodules to match the current commit
+echo "Updating git submodules..." | log_output
+git submodule update --init --recursive 2>&1 | log_output
+echo "" | log_output
+
+# Activate conda
+echo "Activating conda environment: $CONDA_ENV" | log_output
+
+source ${CONDA_DIR}/bin/activate
 if [ $? -ne 0 ]; then
-  echo "ERROR: Cannot activate conda" | tee -a "$LOG_FILE"
+  echo "ERROR: Cannot activate conda" | log_output
   exit 128
 fi
 
 conda activate "$CONDA_ENV"
 if [ $? -ne 0 ]; then
-  echo "ERROR: Failed to activate conda environment: $CONDA_ENV" | tee -a "$LOG_FILE"
+  echo "ERROR: Failed to activate conda environment: $CONDA_ENV" | log_output
   exit 128
 fi
 
-# Change to Triton directory
-cd "$TRITON_DIR" || {
-  echo "ERROR: Cannot change to TRITON_DIR: $TRITON_DIR" | tee -a "$LOG_FILE"
-  exit 128
-}
+echo "" | log_output
 
 # Build Triton
-echo "" | tee -a "$LOG_FILE"
-echo "Building Triton..." | tee -a "$LOG_FILE"
+echo "Building Triton..." | log_output
 BUILD_START=$(date +%s)
 
-eval "$BUILD_COMMAND" 2>&1 | tee -a "$LOG_FILE"
-BUILD_CODE=${PIPESTATUS[0]}  # Get exit code of the build command, not tee
+if [ -n "$COMMIT_LOG" ]; then
+  eval "$BUILD_COMMAND" 2>&1 | tee -a "$COMMIT_LOG"
+  BUILD_CODE=${PIPESTATUS[0]}
+else
+  eval "$BUILD_COMMAND" 2>&1
+  BUILD_CODE=$?
+fi
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
-echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | tee -a "$LOG_FILE"
+echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | log_output
 
 if [ $BUILD_CODE -ne 0 ]; then
-  echo "Build failed, skipping this commit" | tee -a "$LOG_FILE"
+  echo "Build FAILED" | log_output
   exit 125
 fi
 
+echo "" | log_output
+
 # Run test
-echo "" | tee -a "$LOG_FILE"
-echo "Running test..." | tee -a "$LOG_FILE"
+echo "Running test..." | log_output
 TEST_START=$(date +%s)
 
-python "$TEST_SCRIPT" $TEST_ARGS 2>&1 | tee -a "$LOG_FILE"
-TEST_CODE=${PIPESTATUS[0]}  # Get exit code of python, not tee
+if [ -n "$COMMIT_LOG" ]; then
+  TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1 | tee -a "$COMMIT_LOG"
+  TEST_CODE=${PIPESTATUS[0]}
+else
+  TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1
+  TEST_CODE=$?
+fi
 
 TEST_END=$(date +%s)
 TEST_TIME=$((TEST_END - TEST_START))
-echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | tee -a "$LOG_FILE"
+echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | log_output
 
-# Summary
+# Report result
+if [ $TEST_CODE -eq 0 ]; then
+  RESULT="GOOD"
+  echo "✅ Passed" | log_output
+else
+  RESULT="BAD"
+  echo "❌ Failed" | log_output
+fi
+
+echo "" | log_output
 {
-  echo ""
   echo "=== Summary ==="
   echo "Commit: $SHORT_COMMIT"
   echo "Build: ${BUILD_TIME}s (exit $BUILD_CODE)"
   echo "Test: ${TEST_TIME}s (exit $TEST_CODE)"
-  echo "Result: $([ $TEST_CODE -eq 0 ] && echo 'GOOD' || echo 'BAD')"
-  echo "Log: $LOG_FILE"
+  echo "Result: $RESULT"
+  if [ -n "$COMMIT_LOG" ]; then
+    echo "Log: $COMMIT_LOG"
+  fi
   echo "==============="
-} | tee -a "$LOG_FILE"
+} | log_output
 
+# Exit with test code for git bisect
 exit $TEST_CODE

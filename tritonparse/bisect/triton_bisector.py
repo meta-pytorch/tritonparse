@@ -9,7 +9,7 @@ commits to find the first bad commit that causes a test to fail.
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -71,13 +71,20 @@ class TritonBisector:
         self.build_command = build_command or self.DEFAULT_BUILD_COMMAND
         self.executor = ShellExecutor(logger)
 
-    def run(self, good_commit: str, bad_commit: str) -> str:
+    def run(
+        self,
+        good_commit: str,
+        bad_commit: str,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
         """
         Execute Triton bisect to find the culprit commit.
 
         Args:
             good_commit: Known good commit hash or tag (test passes).
             bad_commit: Known bad commit hash or tag (test fails).
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
 
         Returns:
             The culprit commit hash (first bad commit).
@@ -109,6 +116,7 @@ class TritonBisector:
             "CONDA_ENV": self.conda_env,
             "BUILD_COMMAND": self.build_command,
             "LOG_DIR": str(self.logger.log_dir),
+            "PER_COMMIT_LOG": "0",  # Disable per-commit logs in Python mode
         }
 
         # Execute git bisect sequence
@@ -118,6 +126,7 @@ class TritonBisector:
             bad_commit=bad_commit,
             run_script=script_path,
             env=env,
+            output_callback=output_callback,
         )
 
         if not result.success:

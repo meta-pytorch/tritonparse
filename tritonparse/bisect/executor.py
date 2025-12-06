@@ -314,6 +314,7 @@ class ShellExecutor:
         bad_commit: str,
         run_script: str,
         env: Optional[Dict[str, str]] = None,
+        output_callback: Optional[Callable[[str], None]] = None,
     ) -> CommandResult:
         """
         Execute a complete git bisect sequence.
@@ -334,6 +335,8 @@ class ShellExecutor:
             bad_commit: Known bad commit hash or tag.
             run_script: Path to the script to run for each bisect step.
             env: Additional environment variables for the run script.
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
 
         Returns:
             CommandResult from the 'git bisect run' command, containing
@@ -394,6 +397,7 @@ class ShellExecutor:
                 ["git", "bisect", "run", "bash", run_script],
                 cwd=repo_path,
                 env=env,
+                output_callback=output_callback,
             )
 
             return result
