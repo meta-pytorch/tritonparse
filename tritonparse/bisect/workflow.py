@@ -18,6 +18,7 @@ from tritonparse.bisect.logger import BisectLogger
 from tritonparse.bisect.pair_tester import PairTester
 from tritonparse.bisect.state import BisectPhase, BisectState, StateManager
 from tritonparse.bisect.triton_bisector import TritonBisector
+from tritonparse.bisect.ui import BisectUI
 
 
 class BisectWorkflowError(Exception):

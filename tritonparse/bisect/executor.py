@@ -16,7 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from tritonparse.bisect.logger import BisectLogger
 
@@ -203,6 +203,7 @@ class ShellExecutor:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
         shell: bool = False,
+        output_callback: Optional[Callable[[str], None]] = None,
     ) -> CommandResult:
         """
         Execute a shell command with real-time streaming output.
@@ -215,6 +216,8 @@ class ShellExecutor:
             cwd: Working directory for command execution.
             env: Additional environment variables (merged with current env).
             shell: If True, execute command through the shell.
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
 
         Returns:
             CommandResult containing exit code, stdout, and duration.
@@ -257,6 +260,9 @@ class ShellExecutor:
                 self.logger.log_command_output(
                     cmd_str, line + "\n", 0, include_wrapper=False
                 )
+                # Call output callback for TUI
+                if output_callback:
+                    output_callback(line)
 
             process.wait()
             exit_code = process.returncode
@@ -268,6 +274,8 @@ class ShellExecutor:
             self.logger.log_command_output(
                 cmd_str, error_msg + "\n", exit_code, include_wrapper=False
             )
+            if output_callback:
+                output_callback(error_msg)
 
         except Exception as e:
             exit_code = -1
@@ -276,6 +284,8 @@ class ShellExecutor:
             self.logger.log_command_output(
                 cmd_str, error_msg + "\n", exit_code, include_wrapper=False
             )
+            if output_callback:
+                output_callback(error_msg)
 
         duration = time.time() - start_time
 

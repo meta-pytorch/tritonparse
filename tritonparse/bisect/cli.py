@@ -136,6 +136,21 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         help="Path to state file (for --resume or --status)",
     )
 
+    # TUI control
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        default=True,
+        dest="tui",
+        help="Enable Rich TUI interface (default: enabled if available)",
+    )
+    parser.add_argument(
+        "--no-tui",
+        action="store_false",
+        dest="tui",
+        help="Disable Rich TUI, use plain text output",
+    )
+
 
 def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """
