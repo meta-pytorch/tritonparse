@@ -379,6 +379,11 @@ class ShellExecutor:
                 self.logger.error(f"git bisect good failed: {result.stderr}")
                 self._bisect_reset(repo_path)
                 return result
+            # Pass output to callback for TUI parsing (e.g., "roughly N steps")
+            if output_callback:
+                for line in result.output.split("\n"):
+                    if line.strip():
+                        output_callback(line)
 
             # Step 3: git bisect bad
             self.logger.info(f"Step 3/4: git bisect bad {bad_commit}")
@@ -390,6 +395,11 @@ class ShellExecutor:
                 self.logger.error(f"git bisect bad failed: {result.stderr}")
                 self._bisect_reset(repo_path)
                 return result
+            # Pass output to callback for TUI parsing (e.g., "roughly N steps")
+            if output_callback:
+                for line in result.output.split("\n"):
+                    if line.strip():
+                        output_callback(line)
 
             # Step 4: git bisect run (streaming for long-running builds)
             self.logger.info(f"Step 4/4: git bisect run bash {run_script}")

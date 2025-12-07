@@ -68,7 +68,7 @@ class BisectProgress:
         total_phases: Total number of phases.
         current_commit: Currently testing commit hash.
         commits_tested: Number of commits tested so far.
-        total_commits: Total commits to test (estimated).
+        steps_remaining: Estimated steps remaining (from git bisect output).
         elapsed_seconds: Time elapsed since start.
         status_message: Additional status message.
         is_building: Whether currently building.
@@ -83,7 +83,7 @@ class BisectProgress:
     total_phases: int = 4
     current_commit: Optional[str] = None
     commits_tested: int = 0
-    total_commits: int = 0
+    steps_remaining: Optional[int] = None
     elapsed_seconds: float = 0.0
     status_message: Optional[str] = None
     is_building: bool = False
@@ -217,13 +217,10 @@ class BisectUI:
             text.append("N/A  ", style="dim")
 
         text.append("Progress: ", style="bold")
-        if p.total_commits > 0:
-            pct = p.commits_tested / p.total_commits * 100
-            text.append(
-                f"{p.commits_tested}/{p.total_commits} ({pct:.0f}%)  ", style="yellow"
-            )
-        else:
-            text.append(f"{p.commits_tested} tested  ", style="yellow")
+        progress_text = f"{p.commits_tested} tested"
+        if p.steps_remaining is not None:
+            progress_text += f", ~{p.steps_remaining} steps left"
+        text.append(progress_text + "  ", style="yellow")
 
         text.append("Elapsed: ", style="bold")
         text.append(f"{self._format_elapsed(p.elapsed_seconds)}\n", style="magenta")
@@ -303,7 +300,7 @@ class BisectUI:
         self._live = Live(
             _LiveContent(self),
             console=self._console,
-            refresh_per_second=1,
+            refresh_per_second=2,
             screen=True,
         )
         self._live.start()
@@ -456,11 +453,10 @@ class BisectUI:
 
         # Detect git bisect progress from "roughly N steps"
         # Format: "Bisecting: 284 revisions left to test after this (roughly 8 steps)"
-        # Only set total_commits on first detection (when it's still 0)
         match = re.search(r"\(roughly (\d+) steps?\)", line)
-        if match and self.progress.total_commits == 0:
-            total_steps = int(match.group(1))
-            self.update_progress(total_commits=total_steps)
+        if match:
+            steps_remaining = int(match.group(1))
+            self.update_progress(steps_remaining=steps_remaining)
 
     def __enter__(self) -> "BisectUI":
         """Context manager entry."""

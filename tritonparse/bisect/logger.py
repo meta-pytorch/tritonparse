@@ -62,11 +62,11 @@ class BisectLogger:
         self._stdout_handler: Optional[logging.Handler] = None
 
         # Module log: stdout + file
-        self.module_log_path = self.log_dir / f"{session_name}.log"
+        self.module_log_path = self.log_dir / f"{session_name}_bisect.log"
         self._setup_module_logger()
 
         # Command log: file only
-        self.command_log_path = self.log_dir / f"{session_name}_commands.log"
+        self.command_log_path = self.log_dir / f"{session_name}_bisect_commands.log"
 
         # Print log file locations
         self.info(f"Log directory: {self.log_dir}")

@@ -329,6 +329,8 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
     """Handle default mode: Triton bisect (or full workflow with --commits-csv)."""
+    from tritonparse.bisect.commit_detector import CommitDetector
+    from tritonparse.bisect.executor import ShellExecutor
     from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
     from tritonparse.bisect.ui import BisectUI
 
@@ -374,12 +376,34 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 output_callback=ui.create_output_callback(),
             )
 
+            # Detect if culprit is an LLVM bump
+            executor = ShellExecutor(logger)
+            detector = CommitDetector(
+                triton_dir=args.triton_dir,
+                executor=executor,
+                logger=logger,
+            )
+            llvm_bump_info = detector.detect(culprit)
+
             # Show result in TUI
             ui.append_output("")
             ui.append_output("=" * 60)
             ui.append_output("Triton Bisect Result")
             ui.append_output("=" * 60)
             ui.append_output(f"Culprit commit: {culprit}")
+
+            # Show LLVM bump info if applicable
+            if llvm_bump_info.is_llvm_bump:
+                ui.append_output("")
+                ui.append_output("⚠️  This commit is an LLVM bump!")
+                ui.append_output(
+                    f"  LLVM version: {llvm_bump_info.old_hash} -> {llvm_bump_info.new_hash}"
+                )
+                ui.append_output("")
+                ui.append_output(
+                    "  Consider running LLVM bisect with --llvm-only to find the exact LLVM culprit."
+                )
+
             ui.append_output(f"Log directory: {args.log_dir}")
             ui.append_output("=" * 60)
 
