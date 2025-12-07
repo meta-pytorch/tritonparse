@@ -291,8 +291,11 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
             ui.append_output(ui.get_tui_status_message())
 
-            # Set log paths in UI
+            # Set initial progress: LLVM only mode has 1 phase
             ui.update_progress(
+                phase="LLVM Bisect",
+                phase_number=1,
+                total_phases=1,
                 log_dir=str(logger.log_dir),
                 log_file=logger.module_log_path.name,
                 command_log=logger.command_log_path.name,
@@ -374,8 +377,11 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
 
             ui.append_output(ui.get_tui_status_message())
 
-            # Set log paths in UI
+            # Set initial progress: Triton only mode has 2 phases
             ui.update_progress(
+                phase="Triton Bisect",
+                phase_number=1,
+                total_phases=2,
                 log_dir=str(logger.log_dir),
                 log_file=logger.module_log_path.name,
                 command_log=logger.command_log_path.name,
@@ -397,7 +403,11 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 output_callback=ui.create_output_callback(),
             )
 
-            # Detect if culprit is an LLVM bump
+            # Detect if culprit is an LLVM bump (Phase 2)
+            ui.update_progress(
+                phase="LLVM Bump Check",
+                phase_number=2,
+            )
             executor = ShellExecutor(logger)
             detector = CommitDetector(
                 triton_dir=args.triton_dir,

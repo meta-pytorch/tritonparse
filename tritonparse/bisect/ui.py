@@ -64,8 +64,8 @@ class BisectProgress:
 
     Attributes:
         phase: Current phase name (e.g., "Triton Bisect").
-        phase_number: Current phase number (1-4).
-        total_phases: Total number of phases.
+        phase_number: Current phase number.
+        total_phases: Total number of phases (depends on mode).
         current_commit: Currently testing commit hash.
         commits_tested: Number of commits tested so far.
         steps_remaining: Estimated steps remaining (from git bisect output).
@@ -80,7 +80,7 @@ class BisectProgress:
 
     phase: str = "Initializing"
     phase_number: int = 1
-    total_phases: int = 4
+    total_phases: int = 1  # Default to 1, CLI will set correct value based on mode
     current_commit: Optional[str] = None
     commits_tested: int = 0
     steps_remaining: Optional[int] = None
@@ -392,21 +392,23 @@ class BisectUI:
         This method analyzes the output from bisect scripts to extract
         progress information and update the UI accordingly.
 
+        Note: phase_number and total_phases are NOT set here - they should
+        be set by the CLI based on the current mode (triton only, llvm only,
+        or full workflow).
+
         Args:
             line: Output line to parse.
         """
-        # Detect phase from script header
+        # Detect phase from script header (only update phase name, not phase_number)
         if "=== Triton Bisect Run ===" in line:
             self.update_progress(
                 phase="Triton Bisect",
-                phase_number=1,
                 is_building=False,
                 is_testing=False,
             )
         elif "=== LLVM Bisect Run ===" in line:
             self.update_progress(
                 phase="LLVM Bisect",
-                phase_number=4,
                 is_building=False,
                 is_testing=False,
             )
