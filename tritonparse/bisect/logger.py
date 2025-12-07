@@ -58,6 +58,8 @@ class BisectLogger:
             session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_name = session_name
         self.output_callback = output_callback
+        self._tui_callback: Optional[Callable[[str], None]] = None
+        self._stdout_handler: Optional[logging.Handler] = None
 
         # Module log: stdout + file
         self.module_log_path = self.log_dir / f"{session_name}.log"
@@ -150,21 +152,54 @@ class BisectLogger:
             for line in output.split("\n"):
                 self.output_callback(line)
 
+    def configure_for_tui(self, callback: Callable[[str], None]) -> None:
+        """
+        Configure logger for TUI mode.
+
+        In TUI mode:
+        - Stdout handler is disabled (Rich screen takes over the terminal)
+        - Log messages are sent to the TUI callback for display
+        - File logging continues as normal
+
+        Args:
+            callback: Callback function that receives log messages for TUI display.
+        """
+        self._tui_callback = callback
+
+        # Remove stdout handler to avoid interference with Rich TUI
+        if self._stdout_handler is not None:
+            self.logger.removeHandler(self._stdout_handler)
+            self._stdout_handler = None
+        else:
+            # Find and remove the StreamHandler
+            for handler in self.logger.handlers[:]:
+                if isinstance(handler, logging.StreamHandler) and not isinstance(
+                    handler, logging.FileHandler
+                ):
+                    self.logger.removeHandler(handler)
+
     def info(self, msg: str) -> None:
         """Log an INFO level message."""
         self.logger.info(msg)
+        if self._tui_callback:
+            self._tui_callback(f"[INFO] {msg}")
 
     def debug(self, msg: str) -> None:
         """Log a DEBUG level message."""
         self.logger.debug(msg)
+        # Debug messages are not sent to TUI (too verbose)
 
     def warning(self, msg: str) -> None:
         """Log a WARNING level message."""
         self.logger.warning(msg)
+        if self._tui_callback:
+            self._tui_callback(f"[WARNING] {msg}")
 
     def error(self, msg: str) -> None:
         """Log an ERROR level message."""
         self.logger.error(msg)
+        if self._tui_callback:
+            self._tui_callback(f"[ERROR] {msg}")
 
     def exception(self, msg: str) -> None:
         """Log an ERROR level message with exception info."""

@@ -272,30 +272,38 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
     from tritonparse.bisect.llvm_bisector import LLVMBisector
     from tritonparse.bisect.ui import BisectUI
 
-    try:
-        logger = _create_logger(args.log_dir)
+    # Initialize TUI first
+    ui = BisectUI(enabled=args.tui)
 
-        # Initialize TUI
-        ui = BisectUI(enabled=args.tui)
-        logger.info(ui.get_tui_status_message())
+    # Use context manager to start/stop TUI - entire workflow inside
+    with ui:
+        try:
+            # Create logger inside TUI context
+            logger = _create_logger(args.log_dir)
 
-        # Set log paths in UI
-        ui.update_progress(
-            log_dir=str(logger.log_dir),
-            log_file=logger.module_log_path.name,
-            command_log=logger.command_log_path.name,
-        )
+            # Configure logger for TUI mode (redirect output to TUI)
+            if ui.is_tui_enabled:
+                logger.configure_for_tui(ui.create_output_callback())
 
-        bisector = LLVMBisector(
-            triton_dir=args.triton_dir,
-            test_script=args.test_script,
-            conda_env=args.conda_env,
-            logger=logger,
-            build_command=args.build_command,
-        )
+            ui.append_output(ui.get_tui_status_message())
 
-        # Use context manager to start/stop TUI
-        with ui:
+            # Set log paths in UI
+            ui.update_progress(
+                log_dir=str(logger.log_dir),
+                log_file=logger.module_log_path.name,
+                command_log=logger.command_log_path.name,
+            )
+
+            # Create bisector (its logs will go to TUI)
+            bisector = LLVMBisector(
+                triton_dir=args.triton_dir,
+                test_script=args.test_script,
+                conda_env=args.conda_env,
+                logger=logger,
+                build_command=args.build_command,
+            )
+
+            # Run bisect
             culprit = bisector.run(
                 triton_commit=args.triton_commit,
                 good_llvm=args.good_llvm,
@@ -303,17 +311,20 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
                 output_callback=ui.create_output_callback(),
             )
 
-        print(f"\n{'=' * 60}")
-        print("LLVM Bisect Result")
-        print(f"{'=' * 60}")
-        print(f"Culprit LLVM commit: {culprit}")
-        print(f"Log directory: {args.log_dir}")
-        print(f"{'=' * 60}")
-        return 0
+            # Show result in TUI
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("LLVM Bisect Result")
+            ui.append_output("=" * 60)
+            ui.append_output(f"Culprit LLVM commit: {culprit}")
+            ui.append_output(f"Log directory: {args.log_dir}")
+            ui.append_output("=" * 60)
 
-    except Exception as e:
-        print(f"LLVM bisect failed: {e}")
-        return 1
+            return 0
+
+        except Exception as e:
+            ui.append_output(f"LLVM bisect failed: {e}")
+            return 1
 
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
@@ -321,55 +332,65 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
     from tritonparse.bisect.ui import BisectUI
 
-    logger = _create_logger(args.log_dir)
-
     # Check if this is full workflow mode
     if args.commits_csv:
         return _handle_full_workflow(args)
 
-    # Initialize TUI
+    # Initialize TUI first
     ui = BisectUI(enabled=args.tui)
-    logger.info(ui.get_tui_status_message())
 
-    # Set log paths in UI
-    ui.update_progress(
-        log_dir=str(logger.log_dir),
-        log_file=logger.module_log_path.name,
-        command_log=logger.command_log_path.name,
-    )
+    # Use context manager to start/stop TUI - entire workflow inside
+    with ui:
+        try:
+            # Create logger inside TUI context
+            logger = _create_logger(args.log_dir)
 
-    # Triton-only bisect with TUI
-    try:
-        bisector = TritonBisector(
-            triton_dir=args.triton_dir,
-            test_script=args.test_script,
-            logger=logger,
-            conda_env=args.conda_env,
-            build_command=args.build_command,
-        )
+            # Configure logger for TUI mode (redirect output to TUI)
+            if ui.is_tui_enabled:
+                logger.configure_for_tui(ui.create_output_callback())
 
-        # Use context manager to start/stop TUI
-        with ui:
+            ui.append_output(ui.get_tui_status_message())
+
+            # Set log paths in UI
+            ui.update_progress(
+                log_dir=str(logger.log_dir),
+                log_file=logger.module_log_path.name,
+                command_log=logger.command_log_path.name,
+            )
+
+            # Create bisector (its logs will go to TUI)
+            bisector = TritonBisector(
+                triton_dir=args.triton_dir,
+                test_script=args.test_script,
+                logger=logger,
+                conda_env=args.conda_env,
+                build_command=args.build_command,
+            )
+
+            # Run bisect
             culprit = bisector.run(
                 good_commit=args.good,
                 bad_commit=args.bad,
                 output_callback=ui.create_output_callback(),
             )
 
-        print(f"\n{'=' * 60}")
-        print("Triton Bisect Result")
-        print(f"{'=' * 60}")
-        print(f"Culprit commit: {culprit}")
-        print(f"Log directory: {args.log_dir}")
-        print(f"{'=' * 60}")
-        return 0
+            # Show result in TUI
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("Triton Bisect Result")
+            ui.append_output("=" * 60)
+            ui.append_output(f"Culprit commit: {culprit}")
+            ui.append_output(f"Log directory: {args.log_dir}")
+            ui.append_output("=" * 60)
 
-    except TritonBisectError as e:
-        print(f"\nTriton bisect failed: {e}")
-        return 1
-    except Exception as e:
-        print(f"\nUnexpected error: {e}")
-        return 1
+            return 0
+
+        except TritonBisectError as e:
+            ui.append_output(f"\nTriton bisect failed: {e}")
+            return 1
+        except Exception as e:
+            ui.append_output(f"\nUnexpected error: {e}")
+            return 1
 
 
 def _handle_full_workflow(args: argparse.Namespace) -> int:
