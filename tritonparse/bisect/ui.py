@@ -472,3 +472,92 @@ class BisectUI:
 def is_rich_available() -> bool:
     """Check if Rich library is available."""
     return RICH_AVAILABLE
+
+
+def print_final_summary(
+    culprit: Optional[str] = None,
+    llvm_bump_info: Optional[object] = None,
+    log_dir: Optional[str] = None,
+    error_msg: Optional[str] = None,
+    bisect_type: str = "triton",
+) -> None:
+    """
+    Print final summary with Rich formatting (or plain text fallback).
+
+    Args:
+        culprit: The culprit commit hash (None if failed).
+        llvm_bump_info: LLVMBumpInfo object if applicable.
+        log_dir: Directory containing log files.
+        error_msg: Error message if bisect failed.
+        bisect_type: Type of bisect ("triton" or "llvm").
+    """
+    success = culprit is not None
+    is_llvm_bump = (
+        llvm_bump_info is not None
+        and hasattr(llvm_bump_info, "is_llvm_bump")
+        and llvm_bump_info.is_llvm_bump
+    )
+
+    title = "Triton Bisect Result" if bisect_type == "triton" else "LLVM Bisect Result"
+
+    if RICH_AVAILABLE:
+        console = Console()
+        text = Text()
+
+        if success:
+            text.append("✅ Bisect Completed\n\n", style="bold green")
+            text.append("🔍 Culprit commit: ", style="bold")
+            text.append(f"{culprit}\n", style="cyan bold")
+
+            if is_llvm_bump:
+                text.append("\n⚠️  This commit is an LLVM bump!\n", style="yellow bold")
+                text.append("   LLVM: ", style="bold")
+                text.append(f"{llvm_bump_info.old_hash}", style="dim")
+                text.append(" → ", style="bold")
+                text.append(f"{llvm_bump_info.new_hash}\n", style="yellow")
+            elif bisect_type == "triton":
+                text.append(
+                    "\nℹ️  This is a regular Triton commit (not an LLVM bump)\n",
+                    style="dim italic",
+                )
+
+            if log_dir:
+                text.append("\n📁 Log directory: ", style="bold")
+                text.append(f"{log_dir}", style="dim")
+        else:
+            text.append("❌ Bisect Failed\n\n", style="bold red")
+            if error_msg:
+                text.append(f"{error_msg}", style="red")
+            if log_dir:
+                text.append("\n\n📁 Log directory: ", style="bold")
+                text.append(f"{log_dir}", style="dim")
+
+        panel = Panel(
+            text,
+            title=f"[bold]{title}[/bold]",
+            border_style="green" if success else "red",
+            padding=(1, 2),
+        )
+        console.print()
+        console.print(panel)
+
+    else:
+        # Plain text fallback
+        print()
+        print("=" * 60)
+        print(title)
+        print("=" * 60)
+        if success:
+            print(f"✅ Bisect Completed")
+            print(f"🔍 Culprit commit: {culprit}")
+            if is_llvm_bump:
+                print(
+                    f"⚠️  LLVM bump: {llvm_bump_info.old_hash} → {llvm_bump_info.new_hash}"
+                )
+            elif bisect_type == "triton":
+                print("ℹ️  This is a regular Triton commit (not an LLVM bump)")
+        else:
+            print(f"❌ Bisect Failed: {error_msg}")
+        if log_dir:
+            print(f"📁 Log directory: {log_dir}")
+        print("=" * 60)

@@ -269,11 +269,15 @@ def _handle_resume(args: argparse.Namespace) -> int:
 
 def _handle_llvm_only(args: argparse.Namespace) -> int:
     """Handle --llvm-only mode: bisect only LLVM commits."""
-    from tritonparse.bisect.llvm_bisector import LLVMBisector
-    from tritonparse.bisect.ui import BisectUI
+    from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
+    from tritonparse.bisect.ui import BisectUI, print_final_summary
 
     # Initialize TUI first
     ui = BisectUI(enabled=args.tui)
+
+    # Variables to store results for summary after TUI exits
+    culprit = None
+    error_msg = None
 
     # Use context manager to start/stop TUI - entire workflow inside
     with ui:
@@ -320,11 +324,23 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
             ui.append_output(f"Log directory: {args.log_dir}")
             ui.append_output("=" * 60)
 
-            return 0
-
+        except LLVMBisectError as e:
+            error_msg = str(e)
+            ui.append_output(f"\nLLVM bisect failed: {e}")
         except Exception as e:
-            ui.append_output(f"LLVM bisect failed: {e}")
-            return 1
+            error_msg = str(e)
+            ui.append_output(f"\nUnexpected error: {e}")
+
+    # TUI has exited, print final summary
+    print_final_summary(
+        culprit=culprit,
+        llvm_bump_info=None,
+        log_dir=args.log_dir,
+        error_msg=error_msg,
+        bisect_type="llvm",
+    )
+
+    return 0 if culprit else 1
 
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
@@ -332,7 +348,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     from tritonparse.bisect.commit_detector import CommitDetector
     from tritonparse.bisect.executor import ShellExecutor
     from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
-    from tritonparse.bisect.ui import BisectUI
+    from tritonparse.bisect.ui import BisectUI, print_final_summary
 
     # Check if this is full workflow mode
     if args.commits_csv:
@@ -340,6 +356,11 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
 
     # Initialize TUI first
     ui = BisectUI(enabled=args.tui)
+
+    # Variables to store results for summary after TUI exits
+    culprit = None
+    llvm_bump_info = None
+    error_msg = None
 
     # Use context manager to start/stop TUI - entire workflow inside
     with ui:
@@ -399,22 +420,27 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 ui.append_output(
                     f"  LLVM version: {llvm_bump_info.old_hash} -> {llvm_bump_info.new_hash}"
                 )
-                ui.append_output("")
-                ui.append_output(
-                    "  Consider running LLVM bisect with --llvm-only to find the exact LLVM culprit."
-                )
 
             ui.append_output(f"Log directory: {args.log_dir}")
             ui.append_output("=" * 60)
 
-            return 0
-
         except TritonBisectError as e:
+            error_msg = str(e)
             ui.append_output(f"\nTriton bisect failed: {e}")
-            return 1
         except Exception as e:
+            error_msg = str(e)
             ui.append_output(f"\nUnexpected error: {e}")
-            return 1
+
+    # TUI has exited, print final summary
+    print_final_summary(
+        culprit=culprit,
+        llvm_bump_info=llvm_bump_info,
+        log_dir=args.log_dir,
+        error_msg=error_msg,
+        bisect_type="triton",
+    )
+
+    return 0 if culprit else 1
 
 
 def _handle_full_workflow(args: argparse.Namespace) -> int:
