@@ -103,7 +103,7 @@ main() {
     if [ "$COMMITS_SINCE" -eq 0 ]; then
         echo "No new commits since last nightly, skipping publish"
         echo "should_publish=false" >> "$GITHUB_OUTPUT"
-        exit 1
+        exit 0
     else
         echo "Found $COMMITS_SINCE new commit(s) since last nightly"
         echo "should_publish=true" >> "$GITHUB_OUTPUT"
