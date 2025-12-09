@@ -1,5 +1,5 @@
 #!/bin/bash
-#  Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # Check if there are new commits since the last nightly PyPI release.
 # This script is used by nightly-pypi.yml to implement on-demand nightly publishing.
 #
