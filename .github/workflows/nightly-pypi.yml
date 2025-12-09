@@ -23,9 +23,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Check for new commits since last nightly
+        id: check
+        if: github.ref_type != 'tag'
+        run: bash .github/scripts/check_new_commits.sh
+
       - name: Compute nightly version from latest tag (next patch + timestamp)
         id: ver
-        if: github.ref_type != 'tag'
+        if: github.ref_type != 'tag' && steps.check.outputs.should_publish != 'false'
         run: |
           # Get latest tag; allow 'v' prefix; fail if none
           if ! TAG=$(git describe --tags --abbrev=0 2>/dev/null); then
@@ -46,6 +52,7 @@ jobs:
           echo "Computed nightly version: ${NEXT}.dev${DATE}"
 
       - name: Build sdist/wheel
+        if: github.ref_type == 'tag' || steps.check.outputs.should_publish != 'false'
         run: |
           python -m pip install --upgrade pip
           pip install build setuptools-scm
@@ -55,12 +62,13 @@ jobs:
           python -m build
 
       - name: Check metadata
+        if: github.ref_type == 'tag' || steps.check.outputs.should_publish != 'false'
         run: |
           pip install twine
           twine check dist/*
 
       - name: Publish to PyPI (API token)
-        if: github.event_name == 'schedule' || github.ref_type == 'tag'
+        if: (github.event_name == 'schedule' || github.ref_type == 'tag') && steps.check.outputs.should_publish != 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
