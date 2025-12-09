@@ -1781,7 +1781,7 @@ class TestTritonparseCUDA(unittest.TestCase):
             ]
 
             # Create tensors and run kernels
-            for size, desc in test_cases:
+            for size, _ in test_cases:
                 x = torch.randn(size, device=self.cuda_device, dtype=torch.float32)
                 y = run_kernel(x)
                 y.sum()
@@ -1838,7 +1838,7 @@ class TestTritonparseCUDA(unittest.TestCase):
             x = torch.randn((512,), device=self.cuda_device, dtype=torch.float32)
 
             # Run kernel 3 times with same input
-            for i in range(3):
+            for _ in range(3):
                 y = run_kernel(x)
                 y.sum()
             torch.cuda.synchronize()
