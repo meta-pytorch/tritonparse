@@ -28,7 +28,6 @@ jobs:
         id: check
         if: github.ref_type != 'tag'
         run: bash .github/scripts/check_new_commits.sh
-        continue-on-error: true
 
       - name: Compute nightly version from latest tag (next patch + timestamp)
         id: ver

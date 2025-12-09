@@ -11,12 +11,17 @@
 #   Sets GITHUB_OUTPUT variable: should_publish=true/false
 
 set -o pipefail
+# Note: set -e is intentionally not used to allow explicit error handling.
+# The script implements fail-open behavior where errors should not block publishing.
 
 # Configuration
 MAX_RETRIES=3
 RETRY_DELAY=5
 CURL_TIMEOUT=10
 PACKAGE_NAME="${PACKAGE_NAME:-tritonparse}"
+
+# Dependencies: This script requires 'jq' and 'curl' to be installed.
+# These are pre-installed on ubuntu-latest GitHub Actions runners.
 
 # Function: Fetch latest nightly version from PyPI with retry
 fetch_latest_nightly() {
@@ -34,8 +39,9 @@ fetch_latest_nightly() {
             latest=$(echo "$response" | \
                 jq -r '.releases | keys[] | select(contains(".dev"))' 2>/dev/null | \
                 sort -V | tail -1)
+            local jq_exit=$?
 
-            if [ $? -eq 0 ]; then
+            if [ $jq_exit -eq 0 ] && [ -n "$latest" ]; then
                 echo "$latest"
                 return 0
             fi
@@ -79,7 +85,7 @@ main() {
     echo "Latest nightly on PyPI: $LATEST_NIGHTLY"
 
     # Step 4: Extract timestamp from version (format: X.Y.Z.devYYYYMMDDHHMMSS)
-    TIMESTAMP=$(echo "$LATEST_NIGHTLY" | grep -oP '\.dev\K[0-9]{14}' || true)
+    TIMESTAMP=$(echo "$LATEST_NIGHTLY" | sed -n 's/.*\.dev\([0-9]\{14\}\).*/\1/p')
 
     if [ -z "$TIMESTAMP" ]; then
         echo "::warning::Cannot parse timestamp from version, proceeding with publish"
