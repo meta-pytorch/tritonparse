@@ -225,36 +225,45 @@ class LLVMBisector:
         """
         Ensure the LLVM repository exists and is valid.
 
-        If the LLVM repo doesn't exist, attempt to initialize it by running
-        'make dev-install-llvm' in the Triton directory.
+        If the LLVM repo doesn't exist, clone it from GitHub.
+        If it exists, verify it's a valid git repository by checking git rev-parse HEAD.
 
         Raises:
-            LLVMBisectError: If LLVM repo cannot be initialized or is invalid.
+            LLVMBisectError: If LLVM repo cannot be cloned or is invalid.
         """
+        LLVM_REPO_URL = "https://github.com/llvm/llvm-project"
+
         if not self.llvm_dir.exists():
             self.logger.info(f"LLVM repo not found at {self.llvm_dir}")
-            self.logger.info("Initializing LLVM repo with 'make dev-install-llvm'...")
+            self.logger.info(f"Cloning LLVM repo from {LLVM_REPO_URL}...")
 
             result = self.executor.run_command_streaming(
-                ["make", "dev-install-llvm"],
+                ["git", "clone", LLVM_REPO_URL, str(self.llvm_dir)],
                 cwd=str(self.triton_dir),
             )
 
             if not result.success:
                 raise LLVMBisectError(
-                    f"Failed to initialize LLVM repo: {result.stderr}"
+                    f"Failed to clone LLVM repo: {result.stderr}"
                 )
 
-            self.logger.info("LLVM repo initialized successfully")
+            self.logger.info("LLVM repo cloned successfully")
 
-        # Verify it's a git repository
-        git_dir = self.llvm_dir / ".git"
-        if not git_dir.exists():
+        # Verify it's a valid git repository by trying to get current commit
+        result = self.executor.run_command(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(self.llvm_dir),
+        )
+
+        if not result.success:
             raise LLVMBisectError(
-                f"LLVM directory exists but is not a git repository: {self.llvm_dir}"
+                f"LLVM directory exists but is not a valid git repository: {self.llvm_dir}\n"
+                f"Please remove it and retry: rm -rf {self.llvm_dir}"
             )
 
+        current_commit = result.stdout.strip()
         self.logger.info(f"LLVM repo verified at: {self.llvm_dir}")
+        self.logger.info(f"Current LLVM commit: {current_commit[:12]}")
 
     def _pre_bisect_check(self) -> None:
         """

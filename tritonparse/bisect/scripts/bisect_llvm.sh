@@ -207,9 +207,13 @@ cd "$TRITON_DIR" || {
   exit 128
 }
 
+# Always export LLVM_COMMIT_HASH so the build system knows which commit to use
+# This can be overridden by user's BUILD_COMMAND if they specify it inline
+export LLVM_COMMIT_HASH=$LLVM_COMMIT
+
 # Set default build command if not specified
 if [ -z "$BUILD_COMMAND" ]; then
-  BUILD_COMMAND="LLVM_COMMIT_HASH=$LLVM_COMMIT make dev-install-llvm"
+  BUILD_COMMAND="make dev-install-llvm"
 fi
 
 # Clean LLVM build directory to avoid CMake cache issues
@@ -242,8 +246,12 @@ if [ $BUILD_CODE -ne 0 ]; then
     echo "COMPAT_MODE: Build failed - INCOMPATIBLE" | log_output
     exit 1   # bad - incompatible
   else
-    echo "Skipping this LLVM commit" | log_output
-    exit 125  # skip
+    echo "ERROR: Build failed in normal bisect mode" | log_output
+    echo "This is unexpected - all commits in the bisect range should be buildable" | log_output
+    echo "Please verify:" | log_output
+    echo "  1. Your good/bad commits were validated before starting bisect" | log_output
+    echo "  2. Build environment has all required dependencies" | log_output
+    exit 128  # abort bisect - build failure is unexpected in normal mode
   fi
 fi
 
