@@ -516,6 +516,7 @@ def _generate_title(culprits: Optional[dict]) -> str:
 def print_final_summary(
     culprits: Optional[dict] = None,
     llvm_bump_info: Optional[object] = None,
+    pair_test_result: Optional[object] = None,
     error_msg: Optional[str] = None,
     log_dir: Optional[str] = None,
     log_file: Optional[str] = None,
@@ -529,11 +530,21 @@ def print_final_summary(
                   Keys can be: 'triton', 'llvm' (extensible).
                   Example: {'triton': 'abc123', 'llvm': 'def456'}
         llvm_bump_info: LLVMBumpInfo object if Triton culprit is an LLVM bump.
+        pair_test_result: PairTestResult object if this is a pair test mode.
         error_msg: Error message if bisect failed.
         log_dir: Directory containing log files.
         log_file: Main log file path (shown on error).
         command_log: Command log file path (shown on error).
     """
+    # Check if this is a pair test result
+    is_pair_test = pair_test_result is not None
+
+    if is_pair_test:
+        _print_pair_test_summary(
+            pair_test_result, error_msg, log_dir, log_file, command_log
+        )
+        return
+
     success = culprits is not None and len(culprits) > 0
 
     # Generate title based on culprits
@@ -685,7 +696,7 @@ def _print_final_summary_plain(
                 # Show LLVM bump info after Triton culprit (if applicable)
                 if key == "triton":
                     if is_llvm_bump:
-                        print(f"⚠️  This Triton commit is an LLVM bump!")
+                        print("⚠️  This Triton commit is an LLVM bump!")
                         print(
                             f"   LLVM: {llvm_bump_info.old_hash} → {llvm_bump_info.new_hash}"
                         )
@@ -705,5 +716,203 @@ def _print_final_summary_plain(
             print(f"📄 Module log: {log_file}")
         if log_dir and not command_log and not log_file:
             print(f"📁 Log directory: {log_dir}")
+
+    print("=" * 60)
+
+
+def _print_pair_test_summary(
+    result: object,
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+) -> None:
+    """
+    Print pair test summary with Rich formatting (or plain text fallback).
+
+    Args:
+        result: PairTestResult object.
+        error_msg: Error message if test failed.
+        log_dir: Directory containing log files.
+        log_file: Main log file path.
+        command_log: Command log file path.
+    """
+    if RICH_AVAILABLE:
+        _print_pair_test_summary_rich(result, error_msg, log_dir, log_file, command_log)
+    else:
+        _print_pair_test_summary_plain(result, error_msg, log_dir, log_file, command_log)
+
+
+def _print_pair_test_summary_rich(
+    result: object,
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+) -> None:
+    """Print pair test summary with Rich formatting."""
+    console = Console()
+    text = Text()
+
+    title = "Pair Test Result"
+
+    if result is None:
+        # Error case
+        text.append("❌ Pair Test Failed\n\n", style="bold red")
+        if error_msg:
+            text.append(f"{error_msg}", style="red")
+        if command_log:
+            text.append("\n\n📄 Check command log for details:\n", style="bold")
+            text.append(f"   {command_log}", style="yellow")
+        if log_file:
+            text.append("\n📄 Module log: ", style="bold")
+            text.append(f"{log_file}", style="dim")
+        if log_dir and not command_log and not log_file:
+            text.append("\n\n📁 Log directory: ", style="bold")
+            text.append(f"{log_dir}", style="dim")
+
+        panel = Panel(
+            text,
+            title=f"[bold]{title}[/bold]",
+            border_style="red",
+            padding=(1, 2),
+        )
+        console.print()
+        console.print(panel)
+        return
+
+    # Success cases
+    if result.all_passed:
+        text.append("✅ All Pairs Passed\n\n", style="bold green")
+        text.append(f"📊 Tested {result.total_pairs} pairs\n", style="bold")
+        text.append("\nℹ️  No failing pair found in the specified range\n", style="dim italic")
+        border_style = "green"
+    elif result.found_failing:
+        text.append("✅ Pair Test Completed\n\n", style="bold green")
+        text.append(
+            f"📍 First failing pair: #{result.failing_index + 1} of {result.total_pairs}\n\n",
+            style="bold",
+        )
+
+        # Triton commit for LLVM bisect
+        if result.triton_commit:
+            text.append("🔧 Triton commit for LLVM bisect: ", style="bold")
+            text.append(f"{result.triton_commit}\n", style="cyan bold")
+            triton_url = GITHUB_COMMIT_URLS.get("triton", "") + result.triton_commit
+            text.append("   🔗 Link:\n", style="bold")
+            text.append(f"      {triton_url}\n", style="blue underline")
+            text.append("\n")
+
+        # LLVM bisect range
+        text.append("📊 LLVM bisect range:\n", style="bold")
+        if result.good_llvm:
+            text.append(f"   Good: {result.good_llvm}\n", style="green")
+        if result.bad_llvm:
+            text.append(f"   Bad:  {result.bad_llvm}\n", style="red")
+        text.append("\n")
+
+        # Next step hint
+        text.append("💡 Next step:\n", style="bold yellow")
+        next_cmd = (
+            f"   tritonparseoss bisect --llvm-only \\\n"
+            f"     --triton-dir <path> \\\n"
+            f"     --test-script <script> \\\n"
+        )
+        if result.triton_commit:
+            next_cmd += f"     --triton-commit {result.triton_commit} \\\n"
+        if result.good_llvm:
+            next_cmd += f"     --good-llvm {result.good_llvm} \\\n"
+        if result.bad_llvm:
+            next_cmd += f"     --bad-llvm {result.bad_llvm}"
+        text.append(next_cmd, style="dim")
+        text.append("\n")
+        border_style = "green"
+    else:
+        # Error in result
+        text.append("❌ Pair Test Failed\n\n", style="bold red")
+        if result.error_message:
+            text.append(f"{result.error_message}", style="red")
+        elif error_msg:
+            text.append(f"{error_msg}", style="red")
+        border_style = "red"
+
+    if log_dir:
+        text.append("\n📁 Log directory: ", style="bold")
+        text.append(f"{log_dir}", style="dim")
+
+    panel = Panel(
+        text,
+        title=f"[bold]{title}[/bold]",
+        border_style=border_style,
+        padding=(1, 2),
+    )
+    console.print()
+    console.print(panel)
+
+
+def _print_pair_test_summary_plain(
+    result: object,
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+) -> None:
+    """Print pair test summary with plain text."""
+    print()
+    print("=" * 60)
+    print("Pair Test Result")
+    print("=" * 60)
+
+    if result is None:
+        print("❌ Pair Test Failed")
+        if error_msg:
+            print(f"Error: {error_msg}")
+        if command_log:
+            print(f"📄 Check command log: {command_log}")
+        if log_file:
+            print(f"📄 Module log: {log_file}")
+        if log_dir:
+            print(f"📁 Log directory: {log_dir}")
+        print("=" * 60)
+        return
+
+    if result.all_passed:
+        print("✅ All Pairs Passed")
+        print(f"📊 Tested {result.total_pairs} pairs")
+        print("ℹ️  No failing pair found in the specified range")
+    elif result.found_failing:
+        print("✅ Pair Test Completed")
+        print(f"📍 First failing pair: #{result.failing_index + 1} of {result.total_pairs}")
+        print()
+        if result.triton_commit:
+            print(f"🔧 Triton commit for LLVM bisect: {result.triton_commit}")
+            triton_url = GITHUB_COMMIT_URLS.get("triton", "") + result.triton_commit
+            print(f"   🔗 {triton_url}")
+        print()
+        print("📊 LLVM bisect range:")
+        if result.good_llvm:
+            print(f"   Good: {result.good_llvm}")
+        if result.bad_llvm:
+            print(f"   Bad:  {result.bad_llvm}")
+        print()
+        print("💡 Next step:")
+        print("   tritonparseoss bisect --llvm-only \\")
+        print("     --triton-dir <path> \\")
+        print("     --test-script <script> \\")
+        if result.triton_commit:
+            print(f"     --triton-commit {result.triton_commit} \\")
+        if result.good_llvm:
+            print(f"     --good-llvm {result.good_llvm} \\")
+        if result.bad_llvm:
+            print(f"     --bad-llvm {result.bad_llvm}")
+    else:
+        print("❌ Pair Test Failed")
+        if result.error_message:
+            print(f"Error: {result.error_message}")
+        elif error_msg:
+            print(f"Error: {error_msg}")
+
+    if log_dir:
+        print(f"📁 Log directory: {log_dir}")
 
     print("=" * 60)
