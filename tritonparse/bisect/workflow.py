@@ -435,11 +435,18 @@ class BisectWorkflow:
 
         if self.state.is_llvm_bump:
             report["llvm_culprit"] = self.state.llvm_culprit
+            # Original LLVM bump info (from Type Check phase)
+            report["llvm_bump"] = {
+                "old": self.state.old_llvm_hash,
+                "new": self.state.new_llvm_hash,
+            }
+            # LLVM bisect range (from Pair Test phase)
             report["llvm_range"] = {
                 "good": self.state.good_llvm,
                 "bad": self.state.bad_llvm,
             }
             report["failing_pair_index"] = self.state.failing_pair_index
+            report["triton_commit_for_llvm"] = self.state.triton_commit_for_llvm
 
         if self.state.error_message:
             report["error"] = self.state.error_message

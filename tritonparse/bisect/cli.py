@@ -267,14 +267,15 @@ def _handle_resume(args: argparse.Namespace) -> int:
         if result.get("llvm_culprit"):
             culprits["llvm"] = result["llvm_culprit"]
 
-        # Build LLVMBumpInfo from result
+        # Build LLVMBumpInfo from result using correct fields
         llvm_bump_info = None
         if result.get("is_llvm_bump"):
-            llvm_range = result.get("llvm_range", {})
+            # Use llvm_bump (original bump info from Type Check), not llvm_range
+            llvm_bump = result.get("llvm_bump", {})
             llvm_bump_info = LLVMBumpInfo(
                 is_llvm_bump=True,
-                old_hash=llvm_range.get("good"),
-                new_hash=llvm_range.get("bad"),
+                old_hash=llvm_bump.get("old"),
+                new_hash=llvm_bump.get("new"),
                 triton_commit=result.get("triton_culprit"),
             )
 
@@ -507,14 +508,15 @@ def _handle_full_workflow(args: argparse.Namespace) -> int:
         if result.get("llvm_culprit"):
             culprits["llvm"] = result["llvm_culprit"]
 
-        # Build LLVMBumpInfo from result
+        # Build LLVMBumpInfo from result using correct fields
         llvm_bump_info = None
         if result.get("is_llvm_bump"):
-            llvm_range = result.get("llvm_range", {})
+            # Use llvm_bump (original bump info from Type Check), not llvm_range
+            llvm_bump = result.get("llvm_bump", {})
             llvm_bump_info = LLVMBumpInfo(
                 is_llvm_bump=True,
-                old_hash=llvm_range.get("good"),
-                new_hash=llvm_range.get("bad"),
+                old_hash=llvm_bump.get("old"),
+                new_hash=llvm_bump.get("new"),
                 triton_commit=result.get("triton_culprit"),
             )
 
