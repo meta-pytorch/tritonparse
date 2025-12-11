@@ -27,6 +27,21 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
 
+# GitHub commit URL mapping - for generating clickable links
+GITHUB_COMMIT_URLS = {
+    "triton": "https://github.com/triton-lang/triton/commit/",
+    "llvm": "https://github.com/llvm/llvm-project/commit/",
+}
+
+# Display order - from upper layer to lower layer (call stack order)
+CULPRIT_DISPLAY_ORDER = ["triton", "llvm"]
+
+# Display names for each component
+CULPRIT_DISPLAY_NAMES = {
+    "triton": "Triton",
+    "llvm": "LLVM",
+}
+
 
 class _LiveContent:
     """
@@ -413,13 +428,15 @@ class BisectUI:
                 is_testing=False,
             )
 
-        # Detect current commit (from script output: "Commit: abc123...")
-        match = re.search(r"^Commit: ([a-fA-F0-9]{7,40})", line)
+        # Detect current commit (from script output)
+        # Matches: "Commit: abc123", "LLVM Commit: abc123", "Triton Commit: abc123"
+        match = re.search(r"^(?:LLVM |Triton )?Commit: ([a-fA-F0-9]{7,40})", line)
         if match:
             self.update_progress(current_commit=match.group(1))
 
-        # Detect short commit (from script output: "Short: abc123def")
-        match = re.search(r"^Short: ([a-fA-F0-9]{7,12})", line)
+        # Detect short commit (from script output)
+        # Matches: "Short: abc123def", "LLVM Short: abc123def", "Triton Short: abc123def"
+        match = re.search(r"^(?:LLVM |Triton )?Short: ([a-fA-F0-9]{7,12})", line)
         if match:
             self.update_progress(current_commit=match.group(1))
 
@@ -476,90 +493,217 @@ def is_rich_available() -> bool:
     return RICH_AVAILABLE
 
 
-def print_final_summary(
-    culprit: Optional[str] = None,
-    llvm_bump_info: Optional[object] = None,
-    log_dir: Optional[str] = None,
-    error_msg: Optional[str] = None,
-    bisect_type: str = "triton",
-) -> None:
+def _generate_title(culprits: Optional[dict]) -> str:
     """
-    Print final summary with Rich formatting (or plain text fallback).
+    Generate panel title based on culprits dictionary.
 
     Args:
-        culprit: The culprit commit hash (None if failed).
-        llvm_bump_info: LLVMBumpInfo object if applicable.
-        log_dir: Directory containing log files.
-        error_msg: Error message if bisect failed.
-        bisect_type: Type of bisect ("triton" or "llvm").
+        culprits: Dictionary mapping component name to culprit commit hash.
+
+    Returns:
+        Title string for the summary panel.
     """
-    success = culprit is not None
+    if not culprits:
+        return "Bisect Failed"
+
+    if len(culprits) == 1:
+        key = list(culprits.keys())[0]
+        return f"{CULPRIT_DISPLAY_NAMES.get(key, key)} Bisect Result"
+    else:
+        return "Bisect Result (Full Workflow)"
+
+
+def print_final_summary(
+    culprits: Optional[dict] = None,
+    llvm_bump_info: Optional[object] = None,
+    error_msg: Optional[str] = None,
+    log_dir: Optional[str] = None,
+    log_file: Optional[str] = None,
+    command_log: Optional[str] = None,
+) -> None:
+    """
+    Print final bisect summary with Rich formatting (or plain text fallback).
+
+    Args:
+        culprits: Dictionary mapping component name to culprit commit hash.
+                  Keys can be: 'triton', 'llvm' (extensible).
+                  Example: {'triton': 'abc123', 'llvm': 'def456'}
+        llvm_bump_info: LLVMBumpInfo object if Triton culprit is an LLVM bump.
+        error_msg: Error message if bisect failed.
+        log_dir: Directory containing log files.
+        log_file: Main log file path (shown on error).
+        command_log: Command log file path (shown on error).
+    """
+    success = culprits is not None and len(culprits) > 0
+
+    # Generate title based on culprits
+    title = _generate_title(culprits)
+
+    # Check if Triton culprit is an LLVM bump
     is_llvm_bump = (
         llvm_bump_info is not None
         and hasattr(llvm_bump_info, "is_llvm_bump")
         and llvm_bump_info.is_llvm_bump
     )
 
-    title = "Triton Bisect Result" if bisect_type == "triton" else "LLVM Bisect Result"
-
     if RICH_AVAILABLE:
-        console = Console()
-        text = Text()
-
-        if success:
-            text.append("✅ Bisect Completed\n\n", style="bold green")
-            text.append("🔍 Culprit commit: ", style="bold")
-            text.append(f"{culprit}\n", style="cyan bold")
-
-            if is_llvm_bump:
-                text.append("\n⚠️  This commit is an LLVM bump!\n", style="yellow bold")
-                text.append("   LLVM: ", style="bold")
-                text.append(f"{llvm_bump_info.old_hash}", style="dim")
-                text.append(" → ", style="bold")
-                text.append(f"{llvm_bump_info.new_hash}\n", style="yellow")
-            elif bisect_type == "triton":
-                text.append(
-                    "\nℹ️  This is a regular Triton commit (not an LLVM bump)\n",
-                    style="dim italic",
-                )
-
-            if log_dir:
-                text.append("\n📁 Log directory: ", style="bold")
-                text.append(f"{log_dir}", style="dim")
-        else:
-            text.append("❌ Bisect Failed\n\n", style="bold red")
-            if error_msg:
-                text.append(f"{error_msg}", style="red")
-            if log_dir:
-                text.append("\n\n📁 Log directory: ", style="bold")
-                text.append(f"{log_dir}", style="dim")
-
-        panel = Panel(
-            text,
-            title=f"[bold]{title}[/bold]",
-            border_style="green" if success else "red",
-            padding=(1, 2),
+        _print_final_summary_rich(
+            culprits,
+            is_llvm_bump,
+            llvm_bump_info,
+            error_msg,
+            log_dir,
+            log_file,
+            command_log,
+            title,
+            success,
         )
-        console.print()
-        console.print(panel)
-
     else:
-        # Plain text fallback
-        print()
-        print("=" * 60)
-        print(title)
-        print("=" * 60)
-        if success:
-            print(f"✅ Bisect Completed")
-            print(f"🔍 Culprit commit: {culprit}")
-            if is_llvm_bump:
-                print(
-                    f"⚠️  LLVM bump: {llvm_bump_info.old_hash} → {llvm_bump_info.new_hash}"
-                )
-            elif bisect_type == "triton":
-                print("ℹ️  This is a regular Triton commit (not an LLVM bump)")
-        else:
-            print(f"❌ Bisect Failed: {error_msg}")
+        _print_final_summary_plain(
+            culprits,
+            is_llvm_bump,
+            llvm_bump_info,
+            error_msg,
+            log_dir,
+            log_file,
+            command_log,
+            title,
+            success,
+        )
+
+
+def _print_final_summary_rich(
+    culprits: Optional[dict],
+    is_llvm_bump: bool,
+    llvm_bump_info: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    title: str,
+    success: bool,
+) -> None:
+    """Print final summary with Rich formatting."""
+    console = Console()
+    text = Text()
+
+    if success:
+        text.append("✅ Bisect Completed\n\n", style="bold green")
+
+        # Print all culprits in order
+        for key in CULPRIT_DISPLAY_ORDER:
+            if culprits and key in culprits:
+                name = CULPRIT_DISPLAY_NAMES.get(key, key)
+                commit = culprits[key]
+                url = GITHUB_COMMIT_URLS.get(key, "") + commit
+
+                text.append(f"🔍 {name} culprit: ", style="bold")
+                text.append(f"{commit}\n", style="cyan bold")
+                if url:
+                    text.append("   🔗 Link:\n", style="bold")
+                    text.append(f"      {url}\n", style="blue underline")
+
+                # Show LLVM bump info after Triton culprit (if applicable)
+                if key == "triton":
+                    if is_llvm_bump:
+                        text.append(
+                            "\n⚠️  This Triton commit is an LLVM bump!\n",
+                            style="yellow bold",
+                        )
+                        text.append("   LLVM: ", style="bold")
+                        text.append(f"{llvm_bump_info.old_hash}", style="dim")
+                        text.append(" → ", style="bold")
+                        text.append(f"{llvm_bump_info.new_hash}\n", style="yellow")
+                    elif culprits and len(culprits) == 1:
+                        # Only show "not an LLVM bump" for Triton-only mode
+                        text.append(
+                            "\nℹ️  This is a regular Triton commit (not an LLVM bump)\n",
+                            style="dim italic",
+                        )
+
+                text.append("\n")
+
+        if log_dir:
+            text.append("📁 Log directory: ", style="bold")
+            text.append(f"{log_dir}", style="dim")
+    else:
+        text.append("❌ Bisect Failed\n\n", style="bold red")
+        if error_msg:
+            text.append(f"{error_msg}", style="red")
+        # Show specific log files for easier debugging
+        if command_log:
+            text.append("\n\n📄 Check command log for details:\n", style="bold")
+            text.append(f"   {command_log}", style="yellow")
+        if log_file:
+            text.append("\n📄 Module log: ", style="bold")
+            text.append(f"{log_file}", style="dim")
+        if log_dir and not command_log and not log_file:
+            text.append("\n\n📁 Log directory: ", style="bold")
+            text.append(f"{log_dir}", style="dim")
+
+    panel = Panel(
+        text,
+        title=f"[bold]{title}[/bold]",
+        border_style="green" if success else "red",
+        padding=(1, 2),
+    )
+    console.print()
+    console.print(panel)
+
+
+def _print_final_summary_plain(
+    culprits: Optional[dict],
+    is_llvm_bump: bool,
+    llvm_bump_info: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    title: str,
+    success: bool,
+) -> None:
+    """Print final summary with plain text (fallback when Rich not available)."""
+    print()
+    print("=" * 60)
+    print(title)
+    print("=" * 60)
+
+    if success:
+        print("✅ Bisect Completed")
+
+        # Print all culprits in order
+        for key in CULPRIT_DISPLAY_ORDER:
+            if culprits and key in culprits:
+                name = CULPRIT_DISPLAY_NAMES.get(key, key)
+                commit = culprits[key]
+                url = GITHUB_COMMIT_URLS.get(key, "") + commit
+
+                print(f"🔍 {name} culprit: {commit}")
+                if url:
+                    print(f"   🔗 {url}")
+
+                # Show LLVM bump info after Triton culprit (if applicable)
+                if key == "triton":
+                    if is_llvm_bump:
+                        print(f"⚠️  This Triton commit is an LLVM bump!")
+                        print(
+                            f"   LLVM: {llvm_bump_info.old_hash} → {llvm_bump_info.new_hash}"
+                        )
+                    elif culprits and len(culprits) == 1:
+                        # Only show "not an LLVM bump" for Triton-only mode
+                        print("ℹ️  This is a regular Triton commit (not an LLVM bump)")
+
         if log_dir:
             print(f"📁 Log directory: {log_dir}")
-        print("=" * 60)
+    else:
+        print(f"❌ Bisect Failed: {error_msg}")
+        # Show specific log files for easier debugging
+        if command_log:
+            print("📄 Check command log for details:")
+            print(f"   {command_log}")
+        if log_file:
+            print(f"📄 Module log: {log_file}")
+        if log_dir and not command_log and not log_file:
+            print(f"📁 Log directory: {log_dir}")
+
+    print("=" * 60)

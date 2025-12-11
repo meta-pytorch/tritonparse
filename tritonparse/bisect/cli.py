@@ -250,6 +250,8 @@ def _handle_status(args: argparse.Namespace) -> int:
 
 def _handle_resume(args: argparse.Namespace) -> int:
     """Handle --resume mode: resume from saved state."""
+    from tritonparse.bisect.commit_detector import LLVMBumpInfo
+    from tritonparse.bisect.ui import print_final_summary
     from tritonparse.bisect.workflow import BisectWorkflow
 
     state_path = args.state or "./bisect_logs/state.json"
@@ -257,7 +259,30 @@ def _handle_resume(args: argparse.Namespace) -> int:
     try:
         workflow = BisectWorkflow.resume(state_path)
         result = workflow.run()
-        _print_result(result)
+
+        # Build culprits dictionary from result
+        culprits = {}
+        if result.get("triton_culprit"):
+            culprits["triton"] = result["triton_culprit"]
+        if result.get("llvm_culprit"):
+            culprits["llvm"] = result["llvm_culprit"]
+
+        # Build LLVMBumpInfo from result
+        llvm_bump_info = None
+        if result.get("is_llvm_bump"):
+            llvm_range = result.get("llvm_range", {})
+            llvm_bump_info = LLVMBumpInfo(
+                is_llvm_bump=True,
+                old_hash=llvm_range.get("good"),
+                new_hash=llvm_range.get("bad"),
+                triton_commit=result.get("triton_culprit"),
+            )
+
+        print_final_summary(
+            culprits=culprits if culprits else None,
+            llvm_bump_info=llvm_bump_info,
+            log_dir=workflow.state.log_dir,
+        )
         return 0
     except FileNotFoundError:
         print(f"State file not found: {state_path}")
@@ -336,11 +361,12 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
     # TUI has exited, print final summary
     print_final_summary(
-        culprit=culprit,
+        culprits={"llvm": culprit} if culprit else None,
         llvm_bump_info=None,
-        log_dir=args.log_dir,
         error_msg=error_msg,
-        bisect_type="llvm",
+        log_dir=args.log_dir,
+        log_file=str(logger.module_log_path) if logger else None,
+        command_log=str(logger.command_log_path) if logger else None,
     )
 
     return 0 if culprit else 1
@@ -443,11 +469,12 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
 
     # TUI has exited, print final summary
     print_final_summary(
-        culprit=culprit,
+        culprits={"triton": culprit} if culprit else None,
         llvm_bump_info=llvm_bump_info,
-        log_dir=args.log_dir,
         error_msg=error_msg,
-        bisect_type="triton",
+        log_dir=args.log_dir,
+        log_file=str(logger.module_log_path) if logger else None,
+        command_log=str(logger.command_log_path) if logger else None,
     )
 
     return 0 if culprit else 1
@@ -455,6 +482,8 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
 
 def _handle_full_workflow(args: argparse.Namespace) -> int:
     """Handle full workflow mode (with --commits-csv)."""
+    from tritonparse.bisect.commit_detector import LLVMBumpInfo
+    from tritonparse.bisect.ui import print_final_summary
     from tritonparse.bisect.workflow import BisectWorkflow, BisectWorkflowError
 
     try:
@@ -470,14 +499,45 @@ def _handle_full_workflow(args: argparse.Namespace) -> int:
         )
 
         result = workflow.run()
-        _print_result(result)
+
+        # Build culprits dictionary from result
+        culprits = {}
+        if result.get("triton_culprit"):
+            culprits["triton"] = result["triton_culprit"]
+        if result.get("llvm_culprit"):
+            culprits["llvm"] = result["llvm_culprit"]
+
+        # Build LLVMBumpInfo from result
+        llvm_bump_info = None
+        if result.get("is_llvm_bump"):
+            llvm_range = result.get("llvm_range", {})
+            llvm_bump_info = LLVMBumpInfo(
+                is_llvm_bump=True,
+                old_hash=llvm_range.get("good"),
+                new_hash=llvm_range.get("bad"),
+                triton_commit=result.get("triton_culprit"),
+            )
+
+        print_final_summary(
+            culprits=culprits if culprits else None,
+            llvm_bump_info=llvm_bump_info,
+            log_dir=args.log_dir,
+        )
         return 0
 
     except BisectWorkflowError as e:
-        print(f"Workflow failed: {e}")
+        print_final_summary(
+            culprits=None,
+            error_msg=str(e),
+            log_dir=args.log_dir,
+        )
         return 1
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print_final_summary(
+            culprits=None,
+            error_msg=str(e),
+            log_dir=args.log_dir,
+        )
         return 1
 
 
@@ -486,25 +546,3 @@ def _create_logger(log_dir: str):
     from tritonparse.bisect.logger import BisectLogger
 
     return BisectLogger(log_dir)
-
-
-def _print_result(result: dict) -> None:
-    """Print the bisect result in a formatted way."""
-    print(f"\n{'=' * 60}")
-    print("Bisect Result")
-    print(f"{'=' * 60}")
-
-    print(f"Phase: {result.get('phase', 'unknown')}")
-    print(f"Triton culprit: {result.get('triton_culprit', 'N/A')}")
-
-    if result.get("is_llvm_bump"):
-        print("Is LLVM bump: Yes")
-        print(f"LLVM culprit: {result.get('llvm_culprit', 'N/A')}")
-        llvm_range = result.get("llvm_range", {})
-        print(
-            f"LLVM range: {llvm_range.get('good', 'N/A')} -> {llvm_range.get('bad', 'N/A')}"
-        )
-    else:
-        print("Is LLVM bump: No")
-
-    print(f"{'=' * 60}")
