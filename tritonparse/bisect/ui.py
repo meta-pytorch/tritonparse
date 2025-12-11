@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, List, Optional
 
 # Graceful fallback if rich not installed
@@ -41,6 +42,19 @@ CULPRIT_DISPLAY_NAMES = {
     "triton": "Triton",
     "llvm": "LLVM",
 }
+
+
+class SummaryMode(Enum):
+    """
+    Mode for print_final_summary output.
+
+    Determines the title and structure of the summary panel.
+    """
+
+    TRITON_BISECT = "triton_bisect"
+    LLVM_BISECT = "llvm_bisect"
+    FULL_WORKFLOW = "full_workflow"
+    PAIR_TEST = "pair_test"
 
 
 class _LiveContent:
@@ -493,27 +507,37 @@ def is_rich_available() -> bool:
     return RICH_AVAILABLE
 
 
-def _generate_title(culprits: Optional[dict]) -> str:
+def _generate_title(mode: SummaryMode, success: bool = True) -> str:
     """
-    Generate panel title based on culprits dictionary.
+    Generate panel title based on mode.
 
     Args:
-        culprits: Dictionary mapping component name to culprit commit hash.
+        mode: The summary mode.
+        success: Whether the operation succeeded.
 
     Returns:
         Title string for the summary panel.
     """
-    if not culprits:
-        return "Bisect Failed"
+    if not success:
+        if mode == SummaryMode.PAIR_TEST:
+            return "Pair Test Failed"
+        else:
+            return "Bisect Failed"
 
-    if len(culprits) == 1:
-        key = list(culprits.keys())[0]
-        return f"{CULPRIT_DISPLAY_NAMES.get(key, key)} Bisect Result"
-    else:
+    if mode == SummaryMode.TRITON_BISECT:
+        return "Triton Bisect Result"
+    elif mode == SummaryMode.LLVM_BISECT:
+        return "LLVM Bisect Result"
+    elif mode == SummaryMode.FULL_WORKFLOW:
         return "Bisect Result (Full Workflow)"
+    elif mode == SummaryMode.PAIR_TEST:
+        return "Pair Test Result"
+    else:
+        return "Bisect Result"
 
 
 def print_final_summary(
+    mode: SummaryMode,
     culprits: Optional[dict] = None,
     llvm_bump_info: Optional[object] = None,
     pair_test_result: Optional[object] = None,
@@ -526,29 +550,29 @@ def print_final_summary(
     Print final bisect summary with Rich formatting (or plain text fallback).
 
     Args:
+        mode: The summary mode (determines title and output structure).
         culprits: Dictionary mapping component name to culprit commit hash.
                   Keys can be: 'triton', 'llvm' (extensible).
                   Example: {'triton': 'abc123', 'llvm': 'def456'}
         llvm_bump_info: LLVMBumpInfo object if Triton culprit is an LLVM bump.
-        pair_test_result: PairTestResult object if this is a pair test mode.
-        error_msg: Error message if bisect failed.
+        pair_test_result: PairTestResult object (required for PAIR_TEST mode).
+        error_msg: Error message if operation failed.
         log_dir: Directory containing log files.
         log_file: Main log file path (shown on error).
         command_log: Command log file path (shown on error).
     """
-    # Check if this is a pair test result
-    is_pair_test = pair_test_result is not None
-
-    if is_pair_test:
+    # Handle pair test mode separately
+    if mode == SummaryMode.PAIR_TEST:
         _print_pair_test_summary(
             pair_test_result, error_msg, log_dir, log_file, command_log
         )
         return
 
+    # Bisect modes (TRITON_BISECT, LLVM_BISECT, FULL_WORKFLOW)
     success = culprits is not None and len(culprits) > 0
 
-    # Generate title based on culprits
-    title = _generate_title(culprits)
+    # Generate title based on mode
+    title = _generate_title(mode, success)
 
     # Check if Triton culprit is an LLVM bump
     is_llvm_bump = (
