@@ -136,9 +136,7 @@ class BisectWorkflow:
                 self._run_llvm_bisect()
 
             # Generate and return report
-            report = self._generate_report()
-            self._print_final_report(report)
-            return report
+            return self.state.to_report()
 
         except Exception as e:
             self._handle_failure(str(e))
@@ -422,58 +420,3 @@ class BisectWorkflow:
                 ["git", "bisect", "reset"],
                 cwd=str(llvm_dir),
             )
-
-    def _generate_report(self) -> Dict[str, Any]:
-        """Generate final report dictionary."""
-        report: Dict[str, Any] = {
-            "status": self.state.phase.value,
-            "triton_culprit": self.state.triton_culprit,
-            "is_llvm_bump": self.state.is_llvm_bump,
-        }
-
-        if self.state.is_llvm_bump:
-            report["llvm_culprit"] = self.state.llvm_culprit
-            # Original LLVM bump info (from Type Check phase)
-            report["llvm_bump"] = {
-                "old": self.state.old_llvm_hash,
-                "new": self.state.new_llvm_hash,
-            }
-            # LLVM bisect range (from Pair Test phase)
-            report["llvm_range"] = {
-                "good": self.state.good_llvm,
-                "bad": self.state.bad_llvm,
-            }
-            report["failing_pair_index"] = self.state.failing_pair_index
-            report["triton_commit_for_llvm"] = self.state.triton_commit_for_llvm
-
-        if self.state.error_message:
-            report["error"] = self.state.error_message
-
-        return report
-
-    def _print_final_report(self, report: Dict[str, Any]) -> None:
-        """Print final report to logger."""
-        self.logger.info("")
-        self.logger.info("=" * 60)
-        self.logger.info("Bisect Complete")
-        self.logger.info("=" * 60)
-        self.logger.info("")
-
-        if report.get("triton_culprit"):
-            self.logger.info(f"Triton Culprit: {report['triton_culprit']}")
-
-        if report.get("is_llvm_bump"):
-            self.logger.info("Type: LLVM Bump Commit")
-            if report.get("llvm_culprit"):
-                self.logger.info(f"LLVM Culprit: {report['llvm_culprit']}")
-            if report.get("llvm_range"):
-                self.logger.info(
-                    f"LLVM Range: {report['llvm_range']['good']} -> "
-                    f"{report['llvm_range']['bad']}"
-                )
-        else:
-            self.logger.info("Type: Regular Triton Commit")
-
-        self.logger.info("")
-        self.logger.info(f"Log directory: {self.state.log_dir}")
-        self.logger.info("=" * 60)

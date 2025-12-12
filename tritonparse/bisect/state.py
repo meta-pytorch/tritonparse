@@ -120,7 +120,9 @@ class BisectState:
 
     # ========== Persistence Methods ==========
 
-    def save(self, path: Optional[Path] = None, session_name: Optional[str] = None) -> Path:
+    def save(
+        self, path: Optional[Path] = None, session_name: Optional[str] = None
+    ) -> Path:
         """
         Save state to JSON file.
 
@@ -134,7 +136,9 @@ class BisectState:
         Returns:
             Path where state was saved.
         """
-        return StateManager.save(self, session_name=session_name, path=str(path) if path else None)
+        return StateManager.save(
+            self, session_name=session_name, path=str(path) if path else None
+        )
 
     @classmethod
     def load(cls, path: Path) -> "BisectState":
@@ -372,6 +376,8 @@ class StateManager:
         """
         Print human-readable status summary.
 
+        Used by --status CLI mode to display current bisect state.
+
         Args:
             state: BisectState to display.
         """
@@ -429,31 +435,3 @@ class StateManager:
 
         print()
         print("=" * 60)
-
-    @staticmethod
-    def format_summary(state: BisectState) -> str:
-        """
-        Format a one-line status summary.
-
-        Args:
-            state: BisectState to summarize.
-
-        Returns:
-            One-line summary string.
-        """
-        phase = state.phase.value.replace("_", " ").title()
-
-        if state.phase == BisectPhase.COMPLETED:
-            if state.is_llvm_bump and state.llvm_culprit:
-                return (
-                    f"Completed: Triton={state.triton_culprit[:12]}, "
-                    f"LLVM={state.llvm_culprit[:12]}"
-                )
-            elif state.triton_culprit:
-                return f"Completed: Triton={state.triton_culprit[:12]}"
-            else:
-                return "Completed"
-        elif state.phase == BisectPhase.FAILED:
-            return f"Failed: {state.error_message or 'Unknown error'}"
-        else:
-            return f"In Progress: {phase}"
