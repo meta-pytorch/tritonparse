@@ -648,6 +648,7 @@ def _handle_pair_test(args: argparse.Namespace) -> int:
                 csv_path=Path(args.commits_csv),
                 good_llvm=args.good_llvm,
                 bad_llvm=args.bad_llvm,
+                output_callback=ui.create_output_callback(),
             )
 
             # Show result in TUI

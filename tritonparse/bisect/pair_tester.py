@@ -13,7 +13,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -125,6 +125,7 @@ class PairTester:
         test_args: Optional[str] = None,
         good_llvm: Optional[str] = None,
         bad_llvm: Optional[str] = None,
+        output_callback: Optional[Callable[[str], None]] = None,
     ) -> PairTestResult:
         """
         Test commit pairs from a CSV file.
@@ -170,7 +171,9 @@ class PairTester:
             )
 
         # Run the test script
-        return self._run_pair_test(pairs, csv_path, test_args, good_llvm, bad_llvm)
+        return self._run_pair_test(
+            pairs, csv_path, test_args, good_llvm, bad_llvm, output_callback
+        )
 
     def _filter_pairs_by_llvm_range(
         self,
@@ -350,6 +353,7 @@ class PairTester:
         test_args: Optional[str] = None,
         good_llvm: Optional[str] = None,
         bad_llvm: Optional[str] = None,
+        output_callback: Optional[Callable[[str], None]] = None,
     ) -> PairTestResult:
         """
         Run the pair testing script.
@@ -405,6 +409,7 @@ class PairTester:
             ["bash", str(script_path)],
             cwd=str(self.triton_dir),
             env=env,
+            output_callback=output_callback,
         )
 
         # Parse the output

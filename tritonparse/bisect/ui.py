@@ -120,6 +120,8 @@ class BisectProgress:
     log_dir: Optional[str] = None
     log_file: Optional[str] = None
     command_log: Optional[str] = None
+    # Pair test specific: track the starting index when range filter is applied
+    range_start_index: Optional[int] = None
 
 
 class BisectUI:
@@ -441,6 +443,12 @@ class BisectUI:
                 is_building=False,
                 is_testing=False,
             )
+        elif "Sequential Commit Pairs Testing" in line:
+            self.update_progress(
+                phase="Pair Test",
+                is_building=False,
+                is_testing=False,
+            )
 
         # Detect current commit (from script output)
         # Matches: "Commit: abc123", "LLVM Commit: abc123", "Triton Commit: abc123"
@@ -454,8 +462,45 @@ class BisectUI:
         if match:
             self.update_progress(current_commit=match.group(1))
 
+        # Detect pair test range start
+        # Matches: "→ Entering filter range at pair 4 (LLVM: 6118a25)"
+        match = re.search(r"Entering filter range at pair (\d+)", line)
+        if match:
+            range_start = int(match.group(1))
+            self.update_progress(range_start_index=range_start)
+
+        # Detect pair test progress
+        # Matches: "Testing pair 4 of 7"
+        match = re.search(r"Testing pair (\d+) of (\d+)", line)
+        if match:
+            current_pair = int(match.group(1))
+            total_pairs = int(match.group(2))
+
+            range_start = self.progress.range_start_index
+            if range_start is not None:
+                # Has range filter: calculate progress within the range
+                current_in_range = current_pair - range_start + 1
+                pairs_in_range = total_pairs - range_start + 1
+                self.update_progress(
+                    commits_tested=current_in_range - 1,
+                    status_message=f"Pair {current_in_range}/{pairs_in_range} in range",
+                )
+            else:
+                # No range filter: use absolute position
+                self.update_progress(
+                    commits_tested=current_pair - 1,
+                    status_message=f"Pair {current_pair}/{total_pairs}",
+                )
+
         # Detect building status
+        # Standard format for Triton/LLVM bisect
         if "Building Triton" in line or "Building..." in line:
+            self.update_progress(
+                is_building=True,
+                is_testing=False,
+            )
+        # Pair test format: "Building Triton 0024781 with LLVM 6118a25..."
+        elif re.search(r"Building Triton [a-fA-F0-9]+ with LLVM", line):
             self.update_progress(
                 is_building=True,
                 is_testing=False,
@@ -483,6 +528,30 @@ class BisectUI:
                 commits_tested=self.progress.commits_tested + 1,
                 status_message="Last: Failed ❌",
             )
+
+        # Detect pair test specific results
+        if "✅ Test PASSED for this pair" in line:
+            self.update_progress(
+                is_building=False,
+                is_testing=False,
+                status_message="Last pair: Passed ✅",
+            )
+        elif "❌ TEST FAILED" in line:
+            self.update_progress(
+                is_building=False,
+                is_testing=False,
+                status_message="Found failing pair ❌",
+            )
+
+        # Detect skipped pairs in pair test
+        # Matches: "⏭️  Skipping pair 1 (outside filter range, LLVM: 77618a9)"
+        if "Skipping pair" in line and "outside filter range" in line:
+            match = re.search(r"Skipping pair (\d+)", line)
+            if match:
+                skipped_pair = int(match.group(1))
+                self.update_progress(
+                    status_message=f"Skipping pair {skipped_pair} (out of range)",
+                )
 
         # Detect git bisect progress from "roughly N steps"
         # Format: "Bisecting: 284 revisions left to test after this (roughly 8 steps)"
