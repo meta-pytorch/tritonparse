@@ -9,7 +9,7 @@ commits within a Triton-compatible range to find the first bad LLVM commit.
 
 import re
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -306,12 +306,12 @@ class LLVMBisector:
 
         self.logger.info("Pre-bisect checks passed")
 
-    def _prepare_script(self) -> str:
+    def _prepare_script(self) -> Union[str, Path]:
         """
         Get the path to the embedded bisect script.
 
         Returns:
-            Absolute path to bisect_llvm.sh script.
+            Path to bisect_llvm.sh script.
         """
         return get_bisect_llvm_script()
 

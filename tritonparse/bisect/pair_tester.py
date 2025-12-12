@@ -153,7 +153,11 @@ class PairTester:
 
         self.logger.info(f"Loaded {len(pairs)} commit pairs from {csv_path}")
 
-        # Filter pairs by LLVM range if specified
+        # Initialize filter indices (will be set if filtering is requested)
+        self._filter_start_idx = None
+        self._filter_end_idx = None
+
+        # Validate LLVM range if specified (does not filter the list)
         if good_llvm and bad_llvm:
             pairs = self._filter_pairs_by_llvm_range(pairs, good_llvm, bad_llvm)
             if not pairs:
@@ -166,7 +170,7 @@ class PairTester:
             )
 
         # Run the test script
-        return self._run_pair_test(pairs, csv_path, test_args)
+        return self._run_pair_test(pairs, csv_path, test_args, good_llvm, bad_llvm)
 
     def _filter_pairs_by_llvm_range(
         self,
@@ -175,7 +179,11 @@ class PairTester:
         bad_llvm: str,
     ) -> List[CommitPair]:
         """
-        Filter pairs to only include those within the specified LLVM range.
+        Validate that the LLVM range exists in the pairs list.
+
+        This method validates the range but does NOT filter the list.
+        The actual filtering is done by the shell script using environment
+        variables FILTER_GOOD_LLVM and FILTER_BAD_LLVM.
 
         Args:
             pairs: List of all commit pairs.
@@ -183,7 +191,7 @@ class PairTester:
             bad_llvm: End LLVM commit (inclusive).
 
         Returns:
-            Filtered list of CommitPair objects.
+            The original pairs list (unmodified).
 
         Raises:
             PairTesterError: If the range cannot be found in the pairs.
@@ -194,15 +202,13 @@ class PairTester:
         for i, pair in enumerate(pairs):
             # Match by prefix to allow short hashes
             if start_idx is None:
-                if (
-                    pair.llvm_commit.startswith(good_llvm)
-                    or good_llvm.startswith(pair.llvm_commit)
+                if pair.llvm_commit.startswith(good_llvm) or good_llvm.startswith(
+                    pair.llvm_commit
                 ):
                     start_idx = i
 
-            if (
-                pair.llvm_commit.startswith(bad_llvm)
-                or bad_llvm.startswith(pair.llvm_commit)
+            if pair.llvm_commit.startswith(bad_llvm) or bad_llvm.startswith(
+                pair.llvm_commit
             ):
                 end_idx = i
                 # Don't break - continue to find the last match in case of duplicates
@@ -213,9 +219,7 @@ class PairTester:
             )
 
         if end_idx is None:
-            raise PairTesterError(
-                f"Could not find bad_llvm '{bad_llvm}' in CSV pairs"
-            )
+            raise PairTesterError(f"Could not find bad_llvm '{bad_llvm}' in CSV pairs")
 
         if start_idx > end_idx:
             raise PairTesterError(
@@ -223,14 +227,19 @@ class PairTester:
                 f"Expected good_llvm to come before bad_llvm."
             )
 
-        # Return the filtered range (inclusive)
-        filtered = pairs[start_idx : end_idx + 1]
+        # Store the range for later use but return the original list
+        self._filter_start_idx = start_idx
+        self._filter_end_idx = end_idx
 
-        # Re-index the filtered pairs
-        for i, pair in enumerate(filtered):
-            pair.index = i
+        # Calculate how many pairs are in the range
+        range_count = end_idx - start_idx + 1
+        self.logger.info(
+            f"LLVM range validated: {range_count} pairs "
+            f"(indices {start_idx} to {end_idx})"
+        )
 
-        return filtered
+        # Return the original list - filtering is done by the script
+        return pairs
 
     def test_pairs(
         self,
@@ -339,6 +348,8 @@ class PairTester:
         pairs: List[CommitPair],
         csv_path: Path,
         test_args: Optional[str] = None,
+        good_llvm: Optional[str] = None,
+        bad_llvm: Optional[str] = None,
     ) -> PairTestResult:
         """
         Run the pair testing script.
@@ -347,6 +358,8 @@ class PairTester:
             pairs: List of commit pairs.
             csv_path: Path to the CSV file.
             test_args: Additional test arguments.
+            good_llvm: Start LLVM commit for filtering (passed to script).
+            bad_llvm: End LLVM commit for filtering (passed to script).
 
         Returns:
             PairTestResult with testing results.
@@ -369,7 +382,17 @@ class PairTester:
             "COMMITS_CSV": str(csv_path),
             "CONDA_ENV": self.conda_env,
             "LOG_DIR": str(self.logger.log_dir),
+            # Pass log file path to use consistent naming with BisectLogger
+            "PAIR_TEST_LOG_FILE": str(
+                self.logger.log_dir / f"{self.logger.session_name}_bisect.log"
+            ),
         }
+
+        # Pass LLVM filter range to script if specified
+        if good_llvm:
+            env["FILTER_GOOD_LLVM"] = good_llvm
+        if bad_llvm:
+            env["FILTER_BAD_LLVM"] = bad_llvm
 
         if test_args:
             env["TEST_ARGS"] = test_args
@@ -473,7 +496,9 @@ class PairTester:
 
             self.logger.info(f"Found first failing pair at index {failing_index}")
             if good_llvm and bad_llvm:
-                self.logger.info(f"  LLVM bisect range: {good_llvm[:7]} -> {bad_llvm[:7]}")
+                self.logger.info(
+                    f"  LLVM bisect range: {good_llvm[:7]} -> {bad_llvm[:7]}"
+                )
 
             return PairTestResult(
                 found_failing=True,

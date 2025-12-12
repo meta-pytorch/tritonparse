@@ -764,7 +764,9 @@ def _print_pair_test_summary(
     if RICH_AVAILABLE:
         _print_pair_test_summary_rich(result, error_msg, log_dir, log_file, command_log)
     else:
-        _print_pair_test_summary_plain(result, error_msg, log_dir, log_file, command_log)
+        _print_pair_test_summary_plain(
+            result, error_msg, log_dir, log_file, command_log
+        )
 
 
 def _print_pair_test_summary_rich(
@@ -809,16 +811,22 @@ def _print_pair_test_summary_rich(
     if result.all_passed:
         text.append("✅ All Pairs Passed\n\n", style="bold green")
         text.append(f"📊 Tested {result.total_pairs} pairs\n", style="bold")
-        text.append("\nℹ️  No failing pair found in the specified range\n", style="dim italic")
+        text.append(
+            "\nℹ️  No failing pair found in the specified range\n", style="dim italic"
+        )
         border_style = "green"
     elif result.found_failing:
         text.append("✅ Pair Test Completed\n\n", style="bold green")
-        text.append(
-            f"📍 First failing pair: #{result.failing_index + 1} of {result.total_pairs}\n\n",
-            style="bold",
-        )
+        text.append("📍 First failing pair:\n", style="bold")
 
-        # Triton commit for LLVM bisect
+        # Show the failing pair content
+        if result.triton_commit:
+            text.append(f"   Triton: {result.triton_commit}\n", style="cyan")
+        if result.bad_llvm:
+            text.append(f"   LLVM:   {result.bad_llvm}\n", style="red")
+        text.append("\n")
+
+        # Triton commit for LLVM bisect (with link)
         if result.triton_commit:
             text.append("🔧 Triton commit for LLVM bisect: ", style="bold")
             text.append(f"{result.triton_commit}\n", style="cyan bold")
@@ -906,7 +914,9 @@ def _print_pair_test_summary_plain(
         print("ℹ️  No failing pair found in the specified range")
     elif result.found_failing:
         print("✅ Pair Test Completed")
-        print(f"📍 First failing pair: #{result.failing_index + 1} of {result.total_pairs}")
+        print(
+            f"📍 First failing pair: #{result.failing_index + 1} of {result.total_pairs}"
+        )
         print()
         if result.triton_commit:
             print(f"🔧 Triton commit for LLVM bisect: {result.triton_commit}")

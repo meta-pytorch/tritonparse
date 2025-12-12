@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Union
 
+from pathlib import Path
 from tritonparse.bisect.logger import BisectLogger
 
 
@@ -312,7 +313,7 @@ class ShellExecutor:
         repo_path: str,
         good_commit: str,
         bad_commit: str,
-        run_script: str,
+        run_script: Union[str, Path],
         env: Optional[Dict[str, str]] = None,
         output_callback: Optional[Callable[[str], None]] = None,
     ) -> CommandResult:

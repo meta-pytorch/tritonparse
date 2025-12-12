@@ -97,6 +97,9 @@ CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 TEST_ARGS=${TEST_ARGS:-""}
 BUILD_COMMAND=${BUILD_COMMAND:-""}
+# LLVM range filter (optional, passed from Python)
+FILTER_GOOD_LLVM=${FILTER_GOOD_LLVM:-""}
+FILTER_BAD_LLVM=${FILTER_BAD_LLVM:-""}
 
 # ============ Validation ============
 echo "========================================"
@@ -156,8 +159,14 @@ LOG_DIR=$(realpath "$LOG_DIR")
 
 # ============ Setup ============
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$LOG_DIR/bisect_commit_pairs_${TIMESTAMP}.log"
-RESULT_FILE="$LOG_DIR/bisect_first_bad_pair_${TIMESTAMP}.txt"
+
+# Use log file path from Python if provided, otherwise generate our own
+if [ -n "$PAIR_TEST_LOG_FILE" ]; then
+  LOG_FILE="$PAIR_TEST_LOG_FILE"
+else
+  LOG_FILE="$LOG_DIR/${TIMESTAMP}_bisect.log"
+fi
+RESULT_FILE="$LOG_DIR/${TIMESTAMP}_pair_test_result.txt"
 
 # Count total commit pairs (skip empty lines and header)
 TOTAL_PAIRS=0
@@ -215,6 +224,15 @@ echo "✅ Conda environment activated" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
 # ============ Main Loop ============
+# Track if we're within the filter range
+IN_RANGE=false
+PASSED_END=false
+
+# If no filter specified, we're always in range
+if [ -z "$FILTER_GOOD_LLVM" ] && [ -z "$FILTER_BAD_LLVM" ]; then
+  IN_RANGE=true
+fi
+
 while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   # Skip empty lines
   [ -z "$triton_commit" ] && continue
@@ -235,6 +253,27 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   CURRENT=$((CURRENT + 1))
   SHORT_TRITON=$(echo "$triton_commit" | cut -c1-7)
   SHORT_LLVM=$(echo "$llvm_commit" | cut -c1-7)
+
+  # ========== LLVM Range Filter Logic ==========
+  # Check if we've reached the start of the range
+  if [ "$IN_RANGE" = "false" ] && [ -n "$FILTER_GOOD_LLVM" ]; then
+    if [[ "$llvm_commit" == *"$FILTER_GOOD_LLVM"* ]] || [[ "$FILTER_GOOD_LLVM" == *"$llvm_commit"* ]]; then
+      IN_RANGE=true
+      echo "→ Entering filter range at pair $CURRENT (LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    fi
+  fi
+
+  # Skip pairs outside the filter range
+  if [ "$IN_RANGE" = "false" ]; then
+    echo "⏭️  Skipping pair $CURRENT (outside filter range, LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    continue
+  fi
+
+  # Check if we've passed the end of the range
+  if [ "$PASSED_END" = "true" ]; then
+    echo "⏭️  Skipping pair $CURRENT (after filter range, LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    continue
+  fi
 
   {
     echo ""
@@ -410,6 +449,14 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   fi
 
   echo "✅ Test PASSED for this pair" | tee -a "$LOG_FILE"
+
+  # Check if we've reached the end of the filter range
+  if [ -n "$FILTER_BAD_LLVM" ]; then
+    if [[ "$llvm_commit" == *"$FILTER_BAD_LLVM"* ]] || [[ "$FILTER_BAD_LLVM" == *"$llvm_commit"* ]]; then
+      PASSED_END=true
+      echo "→ Reached end of filter range at pair $CURRENT (LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    fi
+  fi
 
 done < "$COMMITS_CSV"
 

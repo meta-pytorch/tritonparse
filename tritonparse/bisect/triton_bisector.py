@@ -9,7 +9,7 @@ commits to find the first bad commit that causes a test to fail.
 
 import re
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -183,12 +183,12 @@ class TritonBisector:
 
         self.logger.info("Pre-bisect checks passed")
 
-    def _prepare_script(self) -> str:
+    def _prepare_script(self) -> Union[str, Path]:
         """
         Get the path to the embedded bisect script.
 
         Returns:
-            Absolute path to bisect_triton.sh script.
+            Path to bisect_triton.sh script.
         """
         return get_bisect_triton_script()
 

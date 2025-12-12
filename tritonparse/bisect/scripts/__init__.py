@@ -18,7 +18,7 @@ except ImportError:
     _USE_IMPORTLIB = False
 
 
-def get_script_path(script_name: str) -> str:
+def get_script_path(script_name: str) -> Path:
     """
     Get the absolute path to an embedded shell script.
 
@@ -26,7 +26,7 @@ def get_script_path(script_name: str) -> str:
         script_name: Name of the script file (e.g., "bisect_triton.sh")
 
     Returns:
-        Absolute path to the script file.
+        Path object pointing to the script file.
 
     Raises:
         FileNotFoundError: If the script cannot be found.
@@ -42,7 +42,7 @@ def get_script_path(script_name: str) -> str:
             ref = files("tritonparse.bisect.scripts").joinpath(script_name)
             with as_file(ref) as path:
                 if path.exists():
-                    return str(path.resolve())
+                    return path.resolve()
         except (TypeError, AttributeError, ModuleNotFoundError):
             pass
 
@@ -51,24 +51,24 @@ def get_script_path(script_name: str) -> str:
     script_path = scripts_dir / script_name
 
     if script_path.exists():
-        return str(script_path.resolve())
+        return script_path.resolve()
 
     raise FileNotFoundError(
         f"Script not found: {script_name}. " f"Searched in: {scripts_dir}"
     )
 
 
-def get_bisect_triton_script() -> str:
+def get_bisect_triton_script() -> Path:
     """Get the path to bisect_triton.sh script."""
     return get_script_path("bisect_triton.sh")
 
 
-def get_bisect_llvm_script() -> str:
+def get_bisect_llvm_script() -> Path:
     """Get the path to bisect_llvm.sh script."""
     return get_script_path("bisect_llvm.sh")
 
 
-def get_test_commit_pairs_script() -> str:
+def get_test_commit_pairs_script() -> Path:
     """Get the path to test_commit_pairs.sh script."""
     return get_script_path("test_commit_pairs.sh")
 
