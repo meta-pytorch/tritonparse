@@ -7,22 +7,21 @@ This module implements Phase 4 of the bisect workflow: bisecting LLVM
 commits within a Triton-compatible range to find the first bad LLVM commit.
 """
 
-import re
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
-from tritonparse.bisect.executor import ShellExecutor
+from tritonparse.bisect.base_bisector import BaseBisector, BisectError
 from tritonparse.bisect.logger import BisectLogger
 from tritonparse.bisect.scripts import get_bisect_llvm_script
 
 
-class LLVMBisectError(Exception):
+class LLVMBisectError(BisectError):
     """Exception raised for LLVM bisect related errors."""
 
     pass
 
 
-class LLVMBisector:
+class LLVMBisector(BaseBisector):
     """
     LLVM bisect executor.
 
@@ -52,8 +51,6 @@ class LLVMBisector:
         >>> print(f"Culprit LLVM commit: {culprit}")
     """
 
-    DEFAULT_BUILD_COMMAND = "make dev-install-llvm"
-
     def __init__(
         self,
         triton_dir: str,
@@ -73,97 +70,56 @@ class LLVMBisector:
             build_command: Custom build command. Defaults to "make dev-install-llvm".
                           Note: The script will set LLVM_COMMIT_HASH automatically.
         """
-        self.triton_dir = Path(triton_dir).resolve()
+        super().__init__(triton_dir, test_script, conda_env, logger, build_command)
         self.llvm_dir = self.triton_dir / "llvm-project"
-        self.test_script = Path(test_script).resolve()
-        self.conda_env = conda_env
-        self.logger = logger
-        self.build_command = build_command or self.DEFAULT_BUILD_COMMAND
-        self.executor = ShellExecutor(logger)
+        # Store triton_commit for use in _prepare_before_bisect
+        self._triton_commit: Optional[str] = None
 
-    def run(
-        self,
-        triton_commit: Optional[str],
-        good_llvm: str,
-        bad_llvm: str,
-        output_callback: Optional[Callable[[str], None]] = None,
-    ) -> str:
-        """
-        Execute LLVM bisect to find the culprit commit.
+    @property
+    def bisect_name(self) -> str:
+        """Name of the bisect operation."""
+        return "Phase 4: LLVM Bisect"
 
-        Args:
-            triton_commit: Fixed Triton commit to use. If None, uses current HEAD.
-            good_llvm: Known good LLVM commit hash (test passes).
-            bad_llvm: Known bad LLVM commit hash (test fails).
-            output_callback: Optional callback called for each output line.
-                            Used by TUI to display real-time output.
+    @property
+    def default_build_command(self) -> str:
+        """Default build command for LLVM."""
+        return "make dev-install-llvm"
 
-        Returns:
-            The culprit LLVM commit hash (first bad commit).
+    @property
+    def target_repo_dir(self) -> Path:
+        """Directory where git bisect runs (LLVM repo)."""
+        return self.llvm_dir
 
-        Raises:
-            LLVMBisectError: If bisect fails or cannot parse the result.
-        """
+    def _get_bisect_script(self) -> Union[str, Path]:
+        """Get the path to the LLVM bisect script."""
+        return get_bisect_llvm_script()
+
+    def _get_extra_env_vars(self) -> Dict[str, str]:
+        """LLVM-specific environment variables."""
+        return {
+            "COMPAT_MODE": "0",  # Normal mode: find regression
+        }
+
+    def _log_header(self, good_commit: str, bad_commit: str) -> None:
+        """Log LLVM-specific header information."""
         self.logger.info("=" * 60)
-        self.logger.info("Phase 4: LLVM Bisect")
+        self.logger.info(self.bisect_name)
         self.logger.info("=" * 60)
-
-        # Step 1: Get Triton commit
-        actual_triton_commit = self._get_triton_commit(triton_commit)
         self.logger.info(f"Triton directory: {self.triton_dir}")
-        self.logger.info(f"Triton commit: {actual_triton_commit}")
+        self.logger.info(f"Triton commit: {self._triton_commit}")
         self.logger.info(f"Test script: {self.test_script}")
-        self.logger.info(f"Good LLVM commit: {good_llvm}")
-        self.logger.info(f"Bad LLVM commit: {bad_llvm}")
+        self.logger.info(f"Good LLVM commit: {good_commit}")
+        self.logger.info(f"Bad LLVM commit: {bad_commit}")
         self.logger.info(f"Conda environment: {self.conda_env}")
         self.logger.info(f"Build command: {self.build_command}")
 
-        # Step 2: Checkout Triton commit
-        self._checkout_triton(actual_triton_commit)
+    def _prepare_before_bisect(self) -> None:
+        """Checkout Triton commit and ensure LLVM repo exists."""
+        # Checkout Triton to the specified commit
+        self._checkout_triton(self._triton_commit)
 
-        # Step 3: Ensure LLVM repo exists
+        # Ensure LLVM repo exists
         self._ensure_llvm_repo()
-
-        # Step 4: Pre-bisect validation
-        self._pre_bisect_check()
-
-        # Step 5: Get the embedded bisect script
-        script_path = self._prepare_script()
-        self.logger.info(f"Using bisect script: {script_path}")
-
-        # Step 6: Set up environment variables for the bisect script
-        env = {
-            "TRITON_DIR": str(self.triton_dir),
-            "TEST_SCRIPT": str(self.test_script),
-            "CONDA_ENV": self.conda_env,
-            "BUILD_COMMAND": self.build_command,
-            "LOG_DIR": str(self.logger.log_dir),
-            "COMPAT_MODE": "0",  # Normal mode: find regression
-            "PER_COMMIT_LOG": "0",  # Disable per-commit logs in Python mode
-        }
-
-        # Step 7: Execute git bisect sequence on LLVM repo
-        result = self.executor.run_git_bisect_sequence(
-            repo_path=str(self.llvm_dir),
-            good_commit=good_llvm,
-            bad_commit=bad_llvm,
-            run_script=script_path,
-            env=env,
-            output_callback=output_callback,
-        )
-
-        if not result.success:
-            raise LLVMBisectError(f"LLVM bisect failed: {result.stderr}")
-
-        # Step 8: Parse the culprit commit from output
-        culprit = self._parse_bisect_result(result.stdout)
-
-        self.logger.info("=" * 60)
-        self.logger.info("LLVM bisect completed!")
-        self.logger.info(f"Culprit LLVM commit: {culprit}")
-        self.logger.info("=" * 60)
-
-        return culprit
 
     def _get_triton_commit(self, specified_commit: Optional[str]) -> str:
         """
@@ -192,9 +148,7 @@ class LLVMBisector:
         )
 
         if not result.success:
-            raise LLVMBisectError(
-                f"Failed to get Triton HEAD: {result.stderr}"
-            )
+            raise LLVMBisectError(f"Failed to get Triton HEAD: {result.stderr}")
 
         commit = result.stdout.strip()
         self.logger.info(f"Current Triton HEAD: {commit}")
@@ -226,7 +180,7 @@ class LLVMBisector:
         Ensure the LLVM repository exists and is valid.
 
         If the LLVM repo doesn't exist, clone it from GitHub.
-        If it exists, verify it's a valid git repository by checking git rev-parse HEAD.
+        If it exists, verify it's a valid git repository.
 
         Raises:
             LLVMBisectError: If LLVM repo cannot be cloned or is invalid.
@@ -243,13 +197,11 @@ class LLVMBisector:
             )
 
             if not result.success:
-                raise LLVMBisectError(
-                    f"Failed to clone LLVM repo: {result.stderr}"
-                )
+                raise LLVMBisectError(f"Failed to clone LLVM repo: {result.stderr}")
 
             self.logger.info("LLVM repo cloned successfully")
 
-        # Verify it's a valid git repository by trying to get current commit
+        # Verify it's a valid git repository
         result = self.executor.run_command(
             ["git", "rev-parse", "HEAD"],
             cwd=str(self.llvm_dir),
@@ -265,86 +217,33 @@ class LLVMBisector:
         self.logger.info(f"LLVM repo verified at: {self.llvm_dir}")
         self.logger.info(f"Current LLVM commit: {current_commit[:12]}")
 
-    def _pre_bisect_check(self) -> None:
+    def run(
+        self,
+        triton_commit: Optional[str],
+        good_llvm: str,
+        bad_llvm: str,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
         """
-        Perform pre-bisect validation checks.
-
-        Raises:
-            LLVMBisectError: If any validation check fails.
-        """
-        # Check Triton directory exists
-        if not self.triton_dir.exists():
-            raise LLVMBisectError(f"Triton directory not found: {self.triton_dir}")
-
-        # Check Triton is a git repository
-        triton_git_dir = self.triton_dir / ".git"
-        if not triton_git_dir.exists():
-            raise LLVMBisectError(f"Triton is not a git repository: {self.triton_dir}")
-
-        # Check for in-progress bisect in LLVM repo
-        bisect_start = self.llvm_dir / ".git" / "BISECT_START"
-        if bisect_start.exists():
-            raise LLVMBisectError(
-                "A bisect is already in progress in the LLVM repository. "
-                f"Run 'cd {self.llvm_dir} && git bisect reset' first."
-            )
-
-        # Check test script exists
-        if not self.test_script.exists():
-            raise LLVMBisectError(f"Test script not found: {self.test_script}")
-
-        # Check LLVM working directory status (warning only)
-        result = self.executor.run_command(
-            ["git", "status", "--porcelain"],
-            cwd=str(self.llvm_dir),
-        )
-        if result.stdout.strip():
-            self.logger.warning(
-                "LLVM working directory has uncommitted changes. "
-                "This may cause issues during bisect."
-            )
-
-        self.logger.info("Pre-bisect checks passed")
-
-    def _prepare_script(self) -> Union[str, Path]:
-        """
-        Get the path to the embedded bisect script.
-
-        Returns:
-            Path to bisect_llvm.sh script.
-        """
-        return get_bisect_llvm_script()
-
-    def _parse_bisect_result(self, output: str) -> str:
-        """
-        Parse the culprit commit from git bisect output.
-
-        The output contains a line like:
-        "<40-char-hash> is the first bad commit"
+        Execute LLVM bisect to find the culprit commit.
 
         Args:
-            output: The stdout from git bisect run.
+            triton_commit: Fixed Triton commit to use. If None, uses current HEAD.
+            good_llvm: Known good LLVM commit hash (test passes).
+            bad_llvm: Known bad LLVM commit hash (test fails).
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
 
         Returns:
-            The culprit LLVM commit hash.
+            The culprit LLVM commit hash (first bad commit).
 
         Raises:
-            LLVMBisectError: If cannot parse the result.
+            LLVMBisectError: If bisect fails or cannot parse the result.
         """
-        # Try full 40-character hash first
-        pattern_full = r"([a-f0-9]{40}) is the first bad commit"
-        match = re.search(pattern_full, output)
-        if match:
-            return match.group(1)
+        # Store triton commit for _prepare_before_bisect
+        self._triton_commit = self._get_triton_commit(triton_commit)
 
-        # Try shorter hash (7-12 characters)
-        pattern_short = r"([a-f0-9]{7,12}) is the first bad commit"
-        match = re.search(pattern_short, output)
-        if match:
-            return match.group(1)
-
-        # If we can't find the pattern, raise an error with context
-        raise LLVMBisectError(
-            f"Cannot parse bisect result. Expected '<hash> is the first bad commit' "
-            f"in output:\n{output[-500:]}"  # Last 500 chars for context
-        )
+        try:
+            return self._run_bisect(good_llvm, bad_llvm, output_callback)
+        except BisectError as e:
+            raise LLVMBisectError(str(e)) from e
