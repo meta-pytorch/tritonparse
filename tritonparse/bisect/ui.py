@@ -210,19 +210,6 @@ class BisectUI:
         )
         return layout
 
-    def _format_elapsed(self, seconds: float) -> str:
-        """Format elapsed time as human-readable string."""
-        if seconds < 60:
-            return f"{seconds:.0f}s"
-        elif seconds < 3600:
-            mins = int(seconds // 60)
-            secs = int(seconds % 60)
-            return f"{mins}m {secs}s"
-        else:
-            hours = int(seconds // 3600)
-            mins = int((seconds % 3600) // 60)
-            return f"{hours}h {mins}m"
-
     def _render_progress_panel(self) -> "Panel":
         """Render the progress information panel."""
         p = self.progress
@@ -254,7 +241,7 @@ class BisectUI:
         text.append(progress_text + "  ", style="yellow")
 
         text.append("Elapsed: ", style="bold")
-        text.append(f"{self._format_elapsed(p.elapsed_seconds)}\n", style="magenta")
+        text.append(f"{_format_elapsed(p.elapsed_seconds)}\n", style="magenta")
 
         # Line 2-3: Log files
         if p.log_dir:
@@ -337,7 +324,11 @@ class BisectUI:
         self._live.start()
 
     def stop(self) -> None:
-        """Stop the live display."""
+        """Stop the live display and save final elapsed time."""
+        # Save final elapsed time before stopping
+        if self.start_time:
+            self.progress.elapsed_seconds = time.time() - self.start_time
+
         if self._live:
             self._live.stop()
             self._live = None
@@ -390,7 +381,7 @@ class BisectUI:
     def print_summary(self) -> None:
         """Print a final summary after TUI stops."""
         p = self.progress
-        elapsed = self._format_elapsed(p.elapsed_seconds)
+        elapsed = _format_elapsed(p.elapsed_seconds)
 
         print()
         print("=" * 60)
@@ -581,6 +572,28 @@ def is_rich_available() -> bool:
     return RICH_AVAILABLE
 
 
+def _format_elapsed(seconds: float) -> str:
+    """
+    Format elapsed time as human-readable string.
+
+    Args:
+        seconds: Elapsed time in seconds.
+
+    Returns:
+        Formatted string like "45s", "5m 30s", or "2h 15m".
+    """
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        return f"{hours}h {mins}m"
+
+
 def _generate_title(mode: SummaryMode, success: bool = True) -> str:
     """
     Generate panel title based on mode.
@@ -619,6 +632,7 @@ def print_final_summary(
     log_dir: Optional[str] = None,
     log_file: Optional[str] = None,
     command_log: Optional[str] = None,
+    elapsed_time: Optional[float] = None,
 ) -> None:
     """
     Print final bisect summary with Rich formatting (or plain text fallback).
@@ -634,11 +648,12 @@ def print_final_summary(
         log_dir: Directory containing log files.
         log_file: Main log file path (shown on error).
         command_log: Command log file path (shown on error).
+        elapsed_time: Total execution time in seconds.
     """
     # Handle pair test mode separately
     if mode == SummaryMode.PAIR_TEST:
         _print_pair_test_summary(
-            pair_test_result, error_msg, log_dir, log_file, command_log
+            pair_test_result, error_msg, log_dir, log_file, command_log, elapsed_time
         )
         return
 
@@ -666,6 +681,7 @@ def print_final_summary(
             command_log,
             title,
             success,
+            elapsed_time,
         )
     else:
         _print_final_summary_plain(
@@ -678,6 +694,7 @@ def print_final_summary(
             command_log,
             title,
             success,
+            elapsed_time,
         )
 
 
@@ -691,6 +708,7 @@ def _print_final_summary_rich(
     command_log: Optional[str],
     title: str,
     success: bool,
+    elapsed_time: Optional[float] = None,
 ) -> None:
     """Print final summary with Rich formatting."""
     console = Console()
@@ -732,6 +750,11 @@ def _print_final_summary_rich(
 
                 text.append("\n")
 
+        # Show total time
+        if elapsed_time is not None:
+            text.append("⏱️  Total time: ", style="bold")
+            text.append(f"{_format_elapsed(elapsed_time)}\n", style="magenta")
+
         if log_dir:
             text.append("📁 Log directory: ", style="bold")
             text.append(f"{log_dir}", style="dim")
@@ -739,6 +762,12 @@ def _print_final_summary_rich(
         text.append("❌ Bisect Failed\n\n", style="bold red")
         if error_msg:
             text.append(f"{error_msg}", style="red")
+
+        # Show total time even on failure
+        if elapsed_time is not None:
+            text.append("\n\n⏱️  Total time: ", style="bold")
+            text.append(f"{_format_elapsed(elapsed_time)}", style="magenta")
+
         # Show specific log files for easier debugging
         if command_log:
             text.append("\n\n📄 Check command log for details:\n", style="bold")
@@ -770,6 +799,7 @@ def _print_final_summary_plain(
     command_log: Optional[str],
     title: str,
     success: bool,
+    elapsed_time: Optional[float] = None,
 ) -> None:
     """Print final summary with plain text (fallback when Rich not available)."""
     print()
@@ -802,10 +832,19 @@ def _print_final_summary_plain(
                         # Only show "not an LLVM bump" for Triton-only mode
                         print("ℹ️  This is a regular Triton commit (not an LLVM bump)")
 
+        # Show total time
+        if elapsed_time is not None:
+            print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
         if log_dir:
             print(f"📁 Log directory: {log_dir}")
     else:
         print(f"❌ Bisect Failed: {error_msg}")
+
+        # Show total time even on failure
+        if elapsed_time is not None:
+            print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
         # Show specific log files for easier debugging
         if command_log:
             print("📄 Check command log for details:")
@@ -824,6 +863,7 @@ def _print_pair_test_summary(
     log_dir: Optional[str],
     log_file: Optional[str],
     command_log: Optional[str],
+    elapsed_time: Optional[float] = None,
 ) -> None:
     """
     Print pair test summary with Rich formatting (or plain text fallback).
@@ -834,12 +874,15 @@ def _print_pair_test_summary(
         log_dir: Directory containing log files.
         log_file: Main log file path.
         command_log: Command log file path.
+        elapsed_time: Total execution time in seconds.
     """
     if RICH_AVAILABLE:
-        _print_pair_test_summary_rich(result, error_msg, log_dir, log_file, command_log)
+        _print_pair_test_summary_rich(
+            result, error_msg, log_dir, log_file, command_log, elapsed_time
+        )
     else:
         _print_pair_test_summary_plain(
-            result, error_msg, log_dir, log_file, command_log
+            result, error_msg, log_dir, log_file, command_log, elapsed_time
         )
 
 
@@ -849,6 +892,7 @@ def _print_pair_test_summary_rich(
     log_dir: Optional[str],
     log_file: Optional[str],
     command_log: Optional[str],
+    elapsed_time: Optional[float] = None,
 ) -> None:
     """Print pair test summary with Rich formatting."""
     console = Console()
@@ -861,6 +905,12 @@ def _print_pair_test_summary_rich(
         text.append("❌ Pair Test Failed\n\n", style="bold red")
         if error_msg:
             text.append(f"{error_msg}", style="red")
+
+        # Show total time even on failure
+        if elapsed_time is not None:
+            text.append("\n\n⏱️  Total time: ", style="bold")
+            text.append(f"{_format_elapsed(elapsed_time)}", style="magenta")
+
         if command_log:
             text.append("\n\n📄 Check command log for details:\n", style="bold")
             text.append(f"   {command_log}", style="yellow")
@@ -942,8 +992,13 @@ def _print_pair_test_summary_rich(
             text.append(f"{error_msg}", style="red")
         border_style = "red"
 
+    # Show total time
+    if elapsed_time is not None:
+        text.append("\n⏱️  Total time: ", style="bold")
+        text.append(f"{_format_elapsed(elapsed_time)}\n", style="magenta")
+
     if log_dir:
-        text.append("\n📁 Log directory: ", style="bold")
+        text.append("📁 Log directory: ", style="bold")
         text.append(f"{log_dir}", style="dim")
 
     panel = Panel(
@@ -962,6 +1017,7 @@ def _print_pair_test_summary_plain(
     log_dir: Optional[str],
     log_file: Optional[str],
     command_log: Optional[str],
+    elapsed_time: Optional[float] = None,
 ) -> None:
     """Print pair test summary with plain text."""
     print()
@@ -973,6 +1029,11 @@ def _print_pair_test_summary_plain(
         print("❌ Pair Test Failed")
         if error_msg:
             print(f"Error: {error_msg}")
+
+        # Show total time even on failure
+        if elapsed_time is not None:
+            print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
         if command_log:
             print(f"📄 Check command log: {command_log}")
         if log_file:
@@ -1019,6 +1080,10 @@ def _print_pair_test_summary_plain(
             print(f"Error: {result.error_message}")
         elif error_msg:
             print(f"Error: {error_msg}")
+
+    # Show total time
+    if elapsed_time is not None:
+        print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
 
     if log_dir:
         print(f"📁 Log directory: {log_dir}")

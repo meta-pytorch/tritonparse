@@ -281,7 +281,7 @@ def _handle_status(args: argparse.Namespace) -> int:
 def _handle_resume(args: argparse.Namespace) -> int:
     """Handle --resume mode: resume from saved state."""
     from tritonparse.bisect.commit_detector import LLVMBumpInfo
-    from tritonparse.bisect.ui import SummaryMode, print_final_summary
+    from tritonparse.bisect.ui import print_final_summary, SummaryMode
     from tritonparse.bisect.workflow import BisectWorkflow
 
     state_path = args.state or "./bisect_logs/state.json"
@@ -333,7 +333,7 @@ def _handle_resume(args: argparse.Namespace) -> int:
 def _handle_llvm_only(args: argparse.Namespace) -> int:
     """Handle --llvm-only mode: bisect only LLVM commits."""
     from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
-    from tritonparse.bisect.ui import BisectUI, SummaryMode, print_final_summary
+    from tritonparse.bisect.ui import BisectUI, print_final_summary, SummaryMode
 
     # Initialize TUI first
     ui = BisectUI(enabled=args.tui)
@@ -407,6 +407,7 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
         log_dir=args.log_dir,
         log_file=str(logger.module_log_path) if logger else None,
         command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
     )
 
     return 0 if culprit else 1
@@ -417,7 +418,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     from tritonparse.bisect.commit_detector import CommitDetector
     from tritonparse.bisect.executor import ShellExecutor
     from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
-    from tritonparse.bisect.ui import BisectUI, SummaryMode, print_final_summary
+    from tritonparse.bisect.ui import BisectUI, print_final_summary, SummaryMode
 
     # Check if this is full workflow mode
     if args.commits_csv:
@@ -517,6 +518,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
         log_dir=args.log_dir,
         log_file=str(logger.module_log_path) if logger else None,
         command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
     )
 
     return 0 if culprit else 1
@@ -525,7 +527,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
 def _handle_full_workflow(args: argparse.Namespace) -> int:
     """Handle full workflow mode (with --commits-csv)."""
     from tritonparse.bisect.commit_detector import LLVMBumpInfo
-    from tritonparse.bisect.ui import SummaryMode, print_final_summary
+    from tritonparse.bisect.ui import print_final_summary, SummaryMode
     from tritonparse.bisect.workflow import BisectWorkflow, BisectWorkflowError
 
     try:
@@ -691,6 +693,7 @@ def _handle_pair_test(args: argparse.Namespace) -> int:
         log_dir=args.log_dir,
         log_file=str(logger.module_log_path) if logger else None,
         command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
     )
 
     # Return success if we found a failing pair or all passed
