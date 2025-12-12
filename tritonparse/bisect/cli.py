@@ -525,68 +525,246 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
 
 
 def _handle_full_workflow(args: argparse.Namespace) -> int:
-    """Handle full workflow mode (with --commits-csv)."""
-    from tritonparse.bisect.commit_detector import LLVMBumpInfo
-    from tritonparse.bisect.ui import print_final_summary, SummaryMode
-    from tritonparse.bisect.workflow import BisectWorkflow, BisectWorkflowError
+    """
+    Handle full workflow mode (with --commits-csv).
 
-    try:
-        workflow = BisectWorkflow(
-            triton_dir=args.triton_dir,
-            test_script=args.test_script,
-            good_commit=args.good,
-            bad_commit=args.bad,
-            commits_csv=args.commits_csv,
-            conda_env=args.conda_env,
-            log_dir=args.log_dir,
-            build_command=args.build_command,
-        )
+    Orchestrates all 4 phases with TUI support:
+    1. Triton Bisect - Find culprit Triton commit
+    2. Type Check - Detect if it's an LLVM bump
+    3. Pair Test - Find LLVM bisect range (if LLVM bump)
+    4. LLVM Bisect - Find culprit LLVM commit (if LLVM bump)
 
-        result = workflow.run()
+    This implementation moves orchestration logic from BisectWorkflow to CLI layer,
+    enabling TUI support and output_callback for all phases.
+    """
+    from pathlib import Path
 
-        # Build culprits dictionary from result
-        culprits = {}
-        if result.get("triton_culprit"):
-            culprits["triton"] = result["triton_culprit"]
-        if result.get("llvm_culprit"):
-            culprits["llvm"] = result["llvm_culprit"]
+    from tritonparse.bisect.commit_detector import CommitDetector, LLVMBumpInfo
+    from tritonparse.bisect.executor import ShellExecutor
+    from tritonparse.bisect.llvm_bisector import LLVMBisector
+    from tritonparse.bisect.pair_tester import PairTester
+    from tritonparse.bisect.state import BisectPhase, BisectState
+    from tritonparse.bisect.triton_bisector import TritonBisector
+    from tritonparse.bisect.ui import BisectUI, print_final_summary, SummaryMode
 
-        # Build LLVMBumpInfo from result using correct fields
-        llvm_bump_info = None
-        if result.get("is_llvm_bump"):
-            # Use llvm_bump (original bump info from Type Check), not llvm_range
-            llvm_bump = result.get("llvm_bump", {})
-            llvm_bump_info = LLVMBumpInfo(
-                is_llvm_bump=True,
-                old_hash=llvm_bump.get("old"),
-                new_hash=llvm_bump.get("new"),
-                triton_commit=result.get("triton_culprit"),
+    # Initialize TUI
+    ui = BisectUI(enabled=args.tui)
+
+    # Variables for final summary
+    culprits = {}
+    llvm_bump_info = None
+    error_msg = None
+    logger = None
+    state = None
+
+    with ui:
+        try:
+            # Create logger inside TUI context
+            logger = _create_logger(args.log_dir)
+
+            # Configure logger for TUI mode
+            if ui.is_tui_enabled:
+                logger.configure_for_tui(ui.create_output_callback())
+
+            ui.append_output(ui.get_tui_status_message())
+
+            # Create or load state
+            state = BisectState(
+                triton_dir=str(Path(args.triton_dir).resolve()),
+                test_script=str(Path(args.test_script).resolve()),
+                good_commit=args.good,
+                bad_commit=args.bad,
+                commits_csv=str(Path(args.commits_csv).resolve()),
+                conda_env=args.conda_env,
+                log_dir=str(Path(args.log_dir).resolve()),
+                build_command=args.build_command,
+                session_name=logger.session_name,
             )
 
-        print_final_summary(
-            mode=SummaryMode.FULL_WORKFLOW,
-            culprits=culprits if culprits else None,
-            llvm_bump_info=llvm_bump_info,
-            log_dir=args.log_dir,
-        )
-        return 0
+            executor = ShellExecutor(logger)
 
-    except BisectWorkflowError as e:
-        print_final_summary(
-            mode=SummaryMode.FULL_WORKFLOW,
-            culprits=None,
-            error_msg=str(e),
-            log_dir=args.log_dir,
-        )
-        return 1
-    except Exception as e:
-        print_final_summary(
-            mode=SummaryMode.FULL_WORKFLOW,
-            culprits=None,
-            error_msg=str(e),
-            log_dir=args.log_dir,
-        )
-        return 1
+            # Determine total phases (4 for full workflow)
+            total_phases = 4
+
+            # ========== Phase 1: Triton Bisect ==========
+            if state.phase == BisectPhase.TRITON_BISECT:
+                ui.update_progress(
+                    phase="Triton Bisect",
+                    phase_number=1,
+                    total_phases=total_phases,
+                    log_dir=str(logger.log_dir),
+                    log_file=logger.module_log_path.name,
+                    command_log=logger.command_log_path.name,
+                )
+
+                bisector = TritonBisector(
+                    triton_dir=args.triton_dir,
+                    test_script=args.test_script,
+                    conda_env=args.conda_env,
+                    logger=logger,
+                    build_command=args.build_command,
+                )
+
+                state.triton_culprit = bisector.run(
+                    good_commit=state.good_commit,
+                    bad_commit=state.bad_commit,
+                    output_callback=ui.create_output_callback(),
+                )
+
+                state.phase = BisectPhase.TYPE_CHECK
+                state.save(session_name=logger.session_name)
+
+            # ========== Phase 2: Type Check ==========
+            if state.phase == BisectPhase.TYPE_CHECK:
+                ui.update_progress(
+                    phase="LLVM Bump Check",
+                    phase_number=2,
+                    total_phases=total_phases,
+                )
+
+                detector = CommitDetector(
+                    triton_dir=args.triton_dir,
+                    executor=executor,
+                    logger=logger,
+                )
+                bump_info = detector.detect(state.triton_culprit)
+
+                state.is_llvm_bump = bump_info.is_llvm_bump
+                state.old_llvm_hash = bump_info.old_hash
+                state.new_llvm_hash = bump_info.new_hash
+
+                if not bump_info.is_llvm_bump:
+                    ui.append_output("")
+                    ui.append_output("Commit is NOT an LLVM bump. Workflow complete.")
+                    state.phase = BisectPhase.COMPLETED
+                else:
+                    ui.append_output("")
+                    ui.append_output("⚠️  This commit is an LLVM bump!")
+                    ui.append_output(
+                        f"  LLVM version: {bump_info.old_hash[:12]} -> {bump_info.new_hash[:12]}"
+                    )
+                    ui.append_output("Proceeding to pair testing...")
+                    state.phase = BisectPhase.PAIR_TEST
+
+                state.save(session_name=logger.session_name)
+
+            # ========== Phase 3: Pair Test ==========
+            if state.phase == BisectPhase.PAIR_TEST:
+                ui.update_progress(
+                    phase="Pair Test",
+                    phase_number=3,
+                    total_phases=total_phases,
+                )
+
+                tester = PairTester(
+                    triton_dir=Path(args.triton_dir),
+                    test_script=Path(args.test_script),
+                    executor=executor,
+                    logger=logger,
+                    conda_env=args.conda_env,
+                    build_command=args.build_command,
+                )
+
+                # Use Type Check results to filter pairs!
+                result = tester.test_from_csv(
+                    csv_path=Path(state.commits_csv),
+                    good_llvm=state.old_llvm_hash,
+                    bad_llvm=state.new_llvm_hash,
+                    output_callback=ui.create_output_callback(),
+                )
+
+                if result.all_passed:
+                    ui.append_output("")
+                    ui.append_output("All pairs passed. No LLVM regression found.")
+                    state.phase = BisectPhase.COMPLETED
+                elif result.found_failing:
+                    state.failing_pair_index = result.failing_index
+                    state.good_llvm = result.good_llvm
+                    state.bad_llvm = result.bad_llvm
+                    state.triton_commit_for_llvm = result.triton_commit
+
+                    ui.append_output("")
+                    ui.append_output(f"Found first failing pair at index {result.failing_index}")
+                    ui.append_output(f"LLVM bisect range: {result.good_llvm[:12]} -> {result.bad_llvm[:12]}")
+                    state.phase = BisectPhase.LLVM_BISECT
+                else:
+                    raise RuntimeError(f"Pair test failed: {result.error_message}")
+
+                state.save(session_name=logger.session_name)
+
+            # ========== Phase 4: LLVM Bisect ==========
+            if state.phase == BisectPhase.LLVM_BISECT:
+                ui.update_progress(
+                    phase="LLVM Bisect",
+                    phase_number=4,
+                    total_phases=total_phases,
+                )
+
+                bisector = LLVMBisector(
+                    triton_dir=args.triton_dir,
+                    test_script=args.test_script,
+                    conda_env=args.conda_env,
+                    logger=logger,
+                    build_command=args.build_command,
+                )
+
+                # Use the Triton commit from pair testing
+                triton_commit = state.triton_commit_for_llvm or state.triton_culprit
+
+                state.llvm_culprit = bisector.run(
+                    triton_commit=triton_commit,
+                    good_llvm=state.good_llvm,
+                    bad_llvm=state.bad_llvm,
+                    output_callback=ui.create_output_callback(),
+                )
+
+                state.phase = BisectPhase.COMPLETED
+                state.save(session_name=logger.session_name)
+
+            # ========== Show Final Result in TUI ==========
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("Full Workflow Complete!")
+            ui.append_output("=" * 60)
+            ui.append_output(f"Triton culprit: {state.triton_culprit}")
+            if state.is_llvm_bump and state.llvm_culprit:
+                ui.append_output(f"LLVM culprit: {state.llvm_culprit}")
+            ui.append_output(f"Log directory: {args.log_dir}")
+
+            # Prepare data for final summary
+            culprits["triton"] = state.triton_culprit
+            if state.llvm_culprit:
+                culprits["llvm"] = state.llvm_culprit
+
+            if state.is_llvm_bump:
+                llvm_bump_info = LLVMBumpInfo(
+                    is_llvm_bump=True,
+                    old_hash=state.old_llvm_hash,
+                    new_hash=state.new_llvm_hash,
+                    triton_commit=state.triton_culprit,
+                )
+
+        except Exception as e:
+            error_msg = str(e)
+            ui.append_output(f"\nWorkflow failed: {e}")
+            if state:
+                state.phase = BisectPhase.FAILED
+                state.error_message = error_msg
+                state.save(session_name=logger.session_name if logger else None)
+
+    # TUI has exited, print final summary
+    print_final_summary(
+        mode=SummaryMode.FULL_WORKFLOW,
+        culprits=culprits if culprits else None,
+        llvm_bump_info=llvm_bump_info,
+        error_msg=error_msg,
+        log_dir=args.log_dir,
+        log_file=str(logger.module_log_path) if logger else None,
+        command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
+    )
+
+    return 0 if state and state.phase == BisectPhase.COMPLETED else 1
 
 
 def _handle_pair_test(args: argparse.Namespace) -> int:
