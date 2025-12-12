@@ -481,14 +481,19 @@ class BisectUI:
                 # Has range filter: calculate progress within the range
                 current_in_range = current_pair - range_start + 1
                 pairs_in_range = total_pairs - range_start + 1
+                # steps_remaining = pairs after current one
+                steps_remaining = pairs_in_range - current_in_range
                 self.update_progress(
                     commits_tested=current_in_range - 1,
+                    steps_remaining=steps_remaining,
                     status_message=f"Pair {current_in_range}/{pairs_in_range} in range",
                 )
             else:
                 # No range filter: use absolute position
+                steps_remaining = total_pairs - current_pair
                 self.update_progress(
                     commits_tested=current_pair - 1,
+                    steps_remaining=steps_remaining,
                     status_message=f"Pair {current_pair}/{total_pairs}",
                 )
 
