@@ -6,6 +6,7 @@ Bisect module for tritonparse.
 This module provides tools for bisecting Triton and LLVM regressions.
 """
 
+from tritonparse.bisect.base_bisector import BaseBisector, BisectError
 from tritonparse.bisect.commit_detector import (
     CommitDetector,
     CommitDetectorError,
@@ -26,6 +27,8 @@ from tritonparse.bisect.ui import BisectProgress, BisectUI, is_rich_available
 from tritonparse.bisect.workflow import BisectWorkflow, BisectWorkflowError
 
 __all__ = [
+    "BaseBisector",
+    "BisectError",
     "BisectLogger",
     "BisectPhase",
     "BisectProgress",

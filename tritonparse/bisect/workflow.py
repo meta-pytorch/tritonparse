@@ -3,6 +3,15 @@
 """
 Main workflow controller for bisect operations.
 
+.. deprecated::
+    This module is deprecated. The orchestration logic has been moved to the CLI
+    layer (cli.py) to enable TUI support. Use the CLI directly:
+    - For new runs: `tritonparseoss bisect --commits-csv ...`
+    - For resume: `tritonparseoss bisect --resume --state ...`
+
+    The BisectWorkflow class is kept for backward compatibility but will be
+    removed in a future version.
+
 This module provides the BisectWorkflow class which orchestrates the complete
 4-phase Triton/LLVM bisect workflow with automatic LLVM bump detection and
 state persistence for checkpoint/resume functionality.
@@ -368,9 +377,7 @@ class BisectWorkflow:
         )
 
         # Use the Triton commit from pair testing, or fall back to culprit
-        triton_commit = (
-            self.state.triton_commit_for_llvm or self.state.triton_culprit
-        )
+        triton_commit = self.state.triton_commit_for_llvm or self.state.triton_culprit
 
         self.state.llvm_culprit = bisector.run(
             triton_commit=triton_commit,
@@ -385,7 +392,9 @@ class BisectWorkflow:
 
     def _save_state(self) -> None:
         """Save current state to file using logger's session_name."""
-        state_path = StateManager.save(self.state, session_name=self.logger.session_name)
+        state_path = StateManager.save(
+            self.state, session_name=self.logger.session_name
+        )
         self.logger.debug(f"State saved to: {state_path}")
 
     def _handle_failure(self, error: str) -> None:
