@@ -73,11 +73,18 @@ def main():
 
     args = parser.parse_args()
 
+    # Log usage for CLI invocations
+    if is_fbcode():
+        from tritonparse.fb.utils import usage_report_logger
+
+        usage_report_logger()
+
     if args.func == "parse":
         parse_args = {
             k: v for k, v in vars(args).items() if k not in ["command", "func"]
         }
-        unified_parse(**parse_args)
+        # skip_logger=True because we already logged above
+        unified_parse(**parse_args, skip_logger=True)
     elif args.func == "reproduce":
         # Check mutual exclusivity between --line and --kernel/--launch-id
         if args.kernel and args.line != 0:
@@ -99,9 +106,12 @@ def main():
             launch_id=args.launch_id if args.kernel else 0,
             kernel_import=args.kernel_import,
             replacer=replacer,
+            skip_logger=True,  # Already logged above
         )
     elif args.func == "info":
-        info_command(input_path=args.input, kernel_name=args.kernel)
+        info_command(
+            input_path=args.input, kernel_name=args.kernel, skip_logger=True
+        )  # Already logged above
     else:
         raise RuntimeError(f"Unknown command: {args.func}")
 

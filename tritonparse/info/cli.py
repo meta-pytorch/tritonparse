@@ -11,6 +11,7 @@ import argparse
 import tempfile
 from typing import Optional
 
+from tritonparse.common import is_fbcode
 from tritonparse.info.kernel_query import (
     find_similar_kernels,
     list_kernels_fast,
@@ -34,14 +35,22 @@ def _add_info_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def info_command(input_path: str, kernel_name: Optional[str] = None) -> None:
+def info_command(
+    input_path: str, kernel_name: Optional[str] = None, skip_logger: bool = False
+) -> None:
     """
     Main function for the info command.
 
     Args:
         input_path: Path to ndjson file
         kernel_name: Optional kernel name to list launches for
+        skip_logger: Whether to skip usage logging (default: False).
     """
+    if not skip_logger and is_fbcode():
+        from tritonparse.fb.utils import usage_report_logger
+
+        usage_report_logger()
+
     # 1. Load and detect type
     events = load_ndjson(input_path)
     has_launch_diff = any(e.get("event_type") == "launch_diff" for e in events)

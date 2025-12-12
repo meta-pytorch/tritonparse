@@ -60,6 +60,7 @@ def oss_run(
     all_ranks: bool = False,
     verbose: bool = False,
     split_inductor_compilations: bool = True,
+    skip_logger: bool = True,
 ):
     """
     Main function for tritonparse. It is for OSS only.
@@ -71,6 +72,7 @@ def oss_run(
         rank: Rank of logs to be analyzed
         all_ranks: Analyze all ranks
         verbose: Verbose logging
+        skip_logger: Unused in OSS, kept for API compatibility.
     """
     source = Source(source, verbose)
     rank_config = RankConfig.from_cli_args(rank, all_ranks, source.type)
@@ -123,6 +125,7 @@ def unified_parse(
     all_ranks: bool = False,
     verbose: bool = False,
     split_inductor_compilations: bool = True,
+    skip_logger: bool = False,
     **kwargs,
 ):
     """
@@ -135,7 +138,14 @@ def unified_parse(
         rank: Specific rank to analyze
         all_ranks: Whether to analyze all ranks
         verbose: Whether to enable verbose logging
+        skip_logger: Whether to skip usage logging (default: False).
     """
+    # Log usage for API invocations
+    if not skip_logger and is_fbcode():
+        from tritonparse.fb.utils import usage_report_logger
+
+        usage_report_logger()
+
     # Choose the appropriate parse function
     if is_fbcode():
         from tritonparse.fb.utils import fb_run as parse
@@ -150,6 +160,7 @@ def unified_parse(
         all_ranks=all_ranks,
         verbose=verbose,
         split_inductor_compilations=split_inductor_compilations,
+        skip_logger=skip_logger,
         **kwargs,
     )
     return output

@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
+from tritonparse.common import is_fbcode
 from tritonparse.info.kernel_query import find_launch_index_by_kernel
 from tritonparse.reproducer.ingestion.ndjson import build_context_bundle
 from tritonparse.reproducer.placeholder_replacer import (
@@ -25,6 +26,7 @@ def reproduce(
     launch_id: int = 0,
     replacer: Optional[PlaceholderReplacer] = None,
     kernel_import: KernelImportMode = KernelImportMode.DEFAULT,
+    skip_logger: bool = False,
 ) -> dict[str, str]:
     """
     Generate a reproducer script from NDJSON trace file.
@@ -43,7 +45,13 @@ def reproduce(
         launch_id: 0-based launch index for the kernel (default: 0, first launch).
         replacer: Optional custom PlaceholderReplacer instance. If None, uses DefaultPlaceholderReplacer.
         kernel_import: Kernel import mode (DEFAULT or COPY).
+        skip_logger: Whether to skip usage logging (default: False).
     """
+    if not skip_logger and is_fbcode():
+        from tritonparse.fb.utils import usage_report_logger
+
+        usage_report_logger()
+
     events = load_ndjson(Path(input_path))
     logger.debug(f"Loaded {len(events)} events")
 
