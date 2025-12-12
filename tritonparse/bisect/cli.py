@@ -32,6 +32,16 @@ Usage Examples:
 """
 
 import argparse
+from pathlib import Path
+
+from tritonparse.bisect.commit_detector import CommitDetector, LLVMBumpInfo
+from tritonparse.bisect.executor import ShellExecutor
+from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
+from tritonparse.bisect.logger import BisectLogger
+from tritonparse.bisect.pair_tester import PairTester, PairTesterError
+from tritonparse.bisect.state import BisectPhase, BisectState, StateManager
+from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
+from tritonparse.bisect.ui import BisectUI, print_final_summary, SummaryMode
 
 
 def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
@@ -261,9 +271,7 @@ def bisect_command(args: argparse.Namespace) -> int:
 
 def _handle_status(args: argparse.Namespace) -> int:
     """Handle --status mode: show current bisect status."""
-    from tritonparse.bisect.state import StateManager
-
-    state_path = args.state or "./bisect_logs/state.json"
+    state_path = args.state
 
     try:
         state = StateManager.load(state_path)
@@ -280,10 +288,7 @@ def _handle_status(args: argparse.Namespace) -> int:
 
 def _handle_resume(args: argparse.Namespace) -> int:
     """Handle --resume mode: resume from saved state with TUI support."""
-    from tritonparse.bisect.state import StateManager
-    from tritonparse.bisect.ui import BisectUI
-
-    state_path = args.state or "./bisect_logs/state.json"
+    state_path = args.state
 
     try:
         # Load existing state
@@ -312,9 +317,6 @@ def _handle_resume(args: argparse.Namespace) -> int:
 
 def _handle_llvm_only(args: argparse.Namespace) -> int:
     """Handle --llvm-only mode: bisect only LLVM commits."""
-    from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
-    from tritonparse.bisect.ui import BisectUI, print_final_summary, SummaryMode
-
     # Initialize TUI first
     ui = BisectUI(enabled=args.tui)
 
@@ -395,11 +397,6 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
     """Handle default mode: Triton bisect (or full workflow with --commits-csv)."""
-    from tritonparse.bisect.commit_detector import CommitDetector
-    from tritonparse.bisect.executor import ShellExecutor
-    from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
-    from tritonparse.bisect.ui import BisectUI, print_final_summary, SummaryMode
-
     # Check if this is full workflow mode
     if args.commits_csv:
         return _handle_full_workflow(args)
@@ -517,11 +514,6 @@ def _handle_full_workflow(args: argparse.Namespace) -> int:
     This implementation moves orchestration logic from BisectWorkflow to CLI layer,
     enabling TUI support and output_callback for all phases.
     """
-    from pathlib import Path
-
-    from tritonparse.bisect.state import BisectState
-    from tritonparse.bisect.ui import BisectUI
-
     # Initialize TUI
     ui = BisectUI(enabled=args.tui)
 
@@ -564,16 +556,6 @@ def _orchestrate_workflow(
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
-    from pathlib import Path
-
-    from tritonparse.bisect.commit_detector import CommitDetector, LLVMBumpInfo
-    from tritonparse.bisect.executor import ShellExecutor
-    from tritonparse.bisect.llvm_bisector import LLVMBisector
-    from tritonparse.bisect.pair_tester import PairTester
-    from tritonparse.bisect.state import BisectPhase
-    from tritonparse.bisect.triton_bisector import TritonBisector
-    from tritonparse.bisect.ui import print_final_summary, SummaryMode
-
     # Variables for final summary
     culprits = {}
     llvm_bump_info = None
@@ -782,10 +764,6 @@ def _orchestrate_workflow(
 
 def _cleanup_bisect_state(state: "BisectState", logger: "BisectLogger") -> None:
     """Clean up git bisect state on failure."""
-    from pathlib import Path
-
-    from tritonparse.bisect.executor import ShellExecutor
-
     executor = ShellExecutor(logger)
 
     # Reset Triton repo bisect state
@@ -805,12 +783,6 @@ def _cleanup_bisect_state(state: "BisectState", logger: "BisectLogger") -> None:
 
 def _handle_pair_test(args: argparse.Namespace) -> int:
     """Handle --pair-test mode: test commit pairs to find LLVM bisect range."""
-    from pathlib import Path
-
-    from tritonparse.bisect.executor import ShellExecutor
-    from tritonparse.bisect.pair_tester import PairTester, PairTesterError
-    from tritonparse.bisect.ui import BisectUI, print_final_summary
-
     # Initialize TUI
     ui = BisectUI(enabled=args.tui)
 
@@ -898,8 +870,6 @@ def _handle_pair_test(args: argparse.Namespace) -> int:
             ui.append_output(f"\nUnexpected error: {e}")
 
     # TUI has exited, print final summary
-    from tritonparse.bisect.ui import SummaryMode
-
     print_final_summary(
         mode=SummaryMode.PAIR_TEST,
         pair_test_result=result,
@@ -916,8 +886,6 @@ def _handle_pair_test(args: argparse.Namespace) -> int:
     return 1
 
 
-def _create_logger(log_dir: str):
+def _create_logger(log_dir: str) -> BisectLogger:
     """Create a BisectLogger instance."""
-    from tritonparse.bisect.logger import BisectLogger
-
     return BisectLogger(log_dir)
