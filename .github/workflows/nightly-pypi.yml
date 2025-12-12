@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # Required for Trusted Publishing (OIDC)
 
 jobs:
   build-and-publish:
@@ -67,10 +68,9 @@ jobs:
           pip install twine
           twine check dist/*
 
-      - name: Publish to PyPI (API token)
+      - name: Publish to PyPI (Trusted Publishing)
         if: (github.event_name == 'schedule' || github.ref_type == 'tag') && steps.check.outputs.should_publish != 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          attestations: true
           skip-existing: true
