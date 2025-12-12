@@ -78,6 +78,7 @@ class BisectState:
     conda_env: str = "triton_bisect"
     log_dir: str = "./bisect_logs"
     build_command: Optional[str] = None
+    session_name: Optional[str] = None  # Links state file to log files
 
     # Progress
     phase: BisectPhase = BisectPhase.TRITON_BISECT
@@ -124,6 +125,11 @@ class StateManager:
 
     Provides methods to save, load, and display bisect state.
 
+    State files are named with a session_name (typically a timestamp) to
+    correlate with log files from the same run:
+    - Log files: {session_name}_bisect.log, {session_name}_bisect_commands.log
+    - State file: {session_name}_state.json
+
     Example:
         >>> state = BisectState(
         ...     triton_dir="/path/to/triton",
@@ -131,36 +137,71 @@ class StateManager:
         ...     good_commit="v2.0.0",
         ...     bad_commit="HEAD",
         ... )
-        >>> StateManager.save(state)  # Saves to {log_dir}/state.json
-        >>> loaded = StateManager.load("./bisect_logs/state.json")
+        >>> # Save with session name (correlates with logs)
+        >>> path = StateManager.save(state, session_name="20251212_120643")
+        >>> # Result: {log_dir}/20251212_120643_state.json
+        >>>
+        >>> # Load from file
+        >>> loaded = StateManager.load(str(path))
         >>> StateManager.print_status(loaded)
     """
 
-    DEFAULT_STATE_FILENAME = "state.json"
+    STATE_SUFFIX = "_state.json"
 
     @staticmethod
-    def get_default_path(log_dir: str) -> Path:
+    def get_state_path(log_dir: str, session_name: str) -> Path:
         """
-        Get default state file path.
+        Get state file path for a session.
+
+        Args:
+            log_dir: Log directory path.
+            session_name: Session identifier (typically timestamp like "20251212_120643").
+
+        Returns:
+            Path to {session_name}_state.json in the log directory.
+        """
+        return Path(log_dir) / f"{session_name}{StateManager.STATE_SUFFIX}"
+
+    @staticmethod
+    def find_latest_state(log_dir: str) -> Optional[Path]:
+        """
+        Find the most recent state file in a directory.
 
         Args:
             log_dir: Log directory path.
 
         Returns:
-            Path to state.json in the log directory.
+            Path to the most recent state file, or None if no state files exist.
         """
-        return Path(log_dir) / StateManager.DEFAULT_STATE_FILENAME
+        log_path = Path(log_dir)
+        if not log_path.exists():
+            return None
+
+        state_files = list(log_path.glob(f"*{StateManager.STATE_SUFFIX}"))
+        if not state_files:
+            return None
+
+        # Sort by modification time, most recent first
+        state_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return state_files[0]
 
     @staticmethod
-    def save(state: BisectState, path: Optional[str] = None) -> Path:
+    def save(
+        state: BisectState,
+        session_name: Optional[str] = None,
+        path: Optional[str] = None,
+    ) -> Path:
         """
         Save state to JSON file.
 
-        Updates the timestamps before saving.
+        Updates the timestamps before saving. The session_name is stored in
+        the state for later reference.
 
         Args:
             state: BisectState to save.
-            path: File path. Defaults to {log_dir}/state.json.
+            session_name: Session identifier for file naming. If not provided,
+                         uses state.session_name or generates a timestamp.
+            path: Explicit file path. If provided, overrides session_name.
 
         Returns:
             Path where state was saved.
@@ -172,10 +213,18 @@ class StateManager:
             state.started_at = now
 
         # Determine path
-        if path is None:
-            save_path = StateManager.get_default_path(state.log_dir)
-        else:
+        if path is not None:
             save_path = Path(path)
+        else:
+            # Use provided session_name, or state's session_name, or generate one
+            if session_name is None:
+                session_name = getattr(state, "session_name", None)
+            if session_name is None:
+                session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Store session_name in state for reference
+            state.session_name = session_name
+            save_path = StateManager.get_state_path(state.log_dir, session_name)
 
         # Ensure directory exists
         save_path.parent.mkdir(parents=True, exist_ok=True)

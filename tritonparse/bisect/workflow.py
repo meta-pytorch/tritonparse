@@ -156,11 +156,10 @@ class BisectWorkflow:
         self.logger.info("Running Triton bisect only")
 
         bisector = TritonBisector(
-            triton_dir=Path(self.state.triton_dir),
-            test_script=Path(self.state.test_script),
-            executor=self.executor,
-            logger=self.logger,
+            triton_dir=self.state.triton_dir,
+            test_script=self.state.test_script,
             conda_env=self.state.conda_env,
+            logger=self.logger,
             build_command=self.state.build_command,
         )
 
@@ -197,18 +196,17 @@ class BisectWorkflow:
         self.logger.info("Running LLVM bisect only")
 
         bisector = LLVMBisector(
-            triton_dir=Path(self.state.triton_dir),
-            test_script=Path(self.state.test_script),
-            executor=self.executor,
-            logger=self.logger,
+            triton_dir=self.state.triton_dir,
+            test_script=self.state.test_script,
             conda_env=self.state.conda_env,
+            logger=self.logger,
             build_command=self.state.build_command,
         )
 
         culprit = bisector.run(
-            good_commit=good_llvm,
-            bad_commit=bad_llvm,
             triton_commit=triton_commit,
+            good_llvm=good_llvm,
+            bad_llvm=bad_llvm,
         )
 
         self.state.llvm_culprit = culprit
@@ -260,11 +258,10 @@ class BisectWorkflow:
         self.logger.info("=" * 60)
 
         bisector = TritonBisector(
-            triton_dir=Path(self.state.triton_dir),
-            test_script=Path(self.state.test_script),
-            executor=self.executor,
-            logger=self.logger,
+            triton_dir=self.state.triton_dir,
+            test_script=self.state.test_script,
             conda_env=self.state.conda_env,
+            logger=self.logger,
             build_command=self.state.build_command,
         )
 
@@ -365,11 +362,10 @@ class BisectWorkflow:
         self.logger.info("=" * 60)
 
         bisector = LLVMBisector(
-            triton_dir=Path(self.state.triton_dir),
-            test_script=Path(self.state.test_script),
-            executor=self.executor,
-            logger=self.logger,
+            triton_dir=self.state.triton_dir,
+            test_script=self.state.test_script,
             conda_env=self.state.conda_env,
+            logger=self.logger,
             build_command=self.state.build_command,
         )
 
@@ -379,9 +375,9 @@ class BisectWorkflow:
         )
 
         self.state.llvm_culprit = bisector.run(
-            good_commit=self.state.good_llvm,
-            bad_commit=self.state.bad_llvm,
             triton_commit=triton_commit,
+            good_llvm=self.state.good_llvm,
+            bad_llvm=self.state.bad_llvm,
         )
 
         self.logger.info(f"LLVM culprit found: {self.state.llvm_culprit}")
@@ -390,8 +386,8 @@ class BisectWorkflow:
         self._save_state()
 
     def _save_state(self) -> None:
-        """Save current state to file."""
-        state_path = StateManager.save(self.state)
+        """Save current state to file using logger's session_name."""
+        state_path = StateManager.save(self.state, session_name=self.logger.session_name)
         self.logger.debug(f"State saved to: {state_path}")
 
     def _handle_failure(self, error: str) -> None:
@@ -403,7 +399,9 @@ class BisectWorkflow:
         self.logger.error(f"Bisect failed: {error}")
         self.logger.info("")
         self.logger.info("State has been saved. To resume, run:")
-        state_path = StateManager.get_default_path(self.state.log_dir)
+        state_path = StateManager.get_state_path(
+            self.state.log_dir, self.logger.session_name
+        )
         self.logger.info(f"  tritonparse bisect --resume --state {state_path}")
 
         # Cleanup: reset git bisect state
