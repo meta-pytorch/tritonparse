@@ -118,6 +118,113 @@ class BisectState:
         data["phase"] = BisectPhase(data["phase"])
         return cls(**data)
 
+    # ========== Persistence Methods ==========
+
+    def save(self, path: Optional[Path] = None, session_name: Optional[str] = None) -> Path:
+        """
+        Save state to JSON file.
+
+        Updates timestamps before saving. This is a convenience method that
+        delegates to StateManager.save().
+
+        Args:
+            path: Optional explicit path. If provided, overrides session_name.
+            session_name: Session identifier for file naming.
+
+        Returns:
+            Path where state was saved.
+        """
+        return StateManager.save(self, session_name=session_name, path=str(path) if path else None)
+
+    @classmethod
+    def load(cls, path: Path) -> "BisectState":
+        """
+        Load state from JSON file.
+
+        Args:
+            path: Path to state file.
+
+        Returns:
+            Loaded BisectState instance.
+
+        Raises:
+            FileNotFoundError: If state file doesn't exist.
+        """
+        return StateManager.load(str(path))
+
+    @classmethod
+    def load_or_create(
+        cls,
+        log_dir: str,
+        session_name: Optional[str] = None,
+        **kwargs,
+    ) -> "BisectState":
+        """
+        Load existing state or create new one.
+
+        If a state file exists (matching session_name or most recent), loads it.
+        Otherwise, creates a new state with the provided arguments.
+
+        Args:
+            log_dir: Log directory path.
+            session_name: Optional session identifier. If provided, looks for
+                         that specific state file.
+            **kwargs: Arguments for creating new state (triton_dir, test_script, etc.)
+
+        Returns:
+            BisectState instance (loaded or newly created).
+        """
+        state_path = None
+
+        if session_name:
+            # Look for specific session state
+            state_path = StateManager.get_state_path(log_dir, session_name)
+            if not state_path.exists():
+                state_path = None
+        else:
+            # Look for most recent state
+            state_path = StateManager.find_latest_state(log_dir)
+
+        if state_path and state_path.exists():
+            return cls.load(state_path)
+
+        return cls(log_dir=log_dir, session_name=session_name, **kwargs)
+
+    # ========== Report Generation ==========
+
+    def to_report(self) -> Dict[str, Any]:
+        """
+        Generate a report dictionary for final output.
+
+        Returns:
+            Dictionary containing workflow results suitable for display.
+        """
+        report: Dict[str, Any] = {
+            "status": self.phase.value,
+            "triton_culprit": self.triton_culprit,
+            "is_llvm_bump": self.is_llvm_bump,
+        }
+
+        if self.is_llvm_bump:
+            report["llvm_culprit"] = self.llvm_culprit
+            # Original LLVM bump info (from Type Check phase)
+            report["llvm_bump"] = {
+                "old": self.old_llvm_hash,
+                "new": self.new_llvm_hash,
+            }
+            # LLVM bisect range (from Pair Test phase)
+            report["llvm_range"] = {
+                "good": self.good_llvm,
+                "bad": self.bad_llvm,
+            }
+            report["failing_pair_index"] = self.failing_pair_index
+            report["triton_commit_for_llvm"] = self.triton_commit_for_llvm
+
+        if self.error_message:
+            report["error"] = self.error_message
+
+        return report
+
 
 class StateManager:
     """
