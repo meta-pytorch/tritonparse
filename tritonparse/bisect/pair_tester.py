@@ -292,6 +292,12 @@ class PairTester:
         """
         Load commit pairs from a CSV file.
 
+        The CSV file format:
+        - Two columns: triton_commit, llvm_commit
+        - Optional header row (auto-detected and skipped)
+        - Empty lines are ignored
+        - Comment lines starting with # are ignored
+
         Args:
             csv_path: Path to the CSV file.
 
@@ -309,15 +315,27 @@ class PairTester:
 
         try:
             with open(csv_path, "r") as f:
-                # Try to detect if there's a header
-                sample = f.read(1024)
-                f.seek(0)
-                has_header = csv.Sniffer().has_header(sample)
+                # Read all lines and filter out comments for header detection
+                all_lines = f.readlines()
+                non_comment_lines = [
+                    line for line in all_lines if not line.strip().startswith("#")
+                ]
 
+                # Use first few non-comment lines for header detection
+                sample = "".join(non_comment_lines[:10])
+                has_header = False
+                if sample.strip():
+                    try:
+                        has_header = csv.Sniffer().has_header(sample)
+                    except csv.Error:
+                        # Sniffer failed, assume no header
+                        has_header = False
+
+                # Reset and read with csv reader
+                f.seek(0)
                 reader = csv.reader(f)
 
-                if has_header:
-                    next(reader)  # Skip header
+                header_skipped = False
 
                 for row in reader:
                     if len(row) < 2:
@@ -326,10 +344,21 @@ class PairTester:
                     triton_commit = row[0].strip().strip('"')
                     llvm_commit = row[1].strip().strip('"')
 
-                    # Skip empty or header-like rows
+                    # Skip empty rows
                     if not triton_commit or not llvm_commit:
                         continue
+
+                    # Skip comment lines (starting with #)
+                    if triton_commit.startswith("#"):
+                        continue
+
+                    # Skip header row (only once)
                     if triton_commit.lower() in ("triton", "triton_commit"):
+                        continue
+
+                    # Skip detected header (first non-comment data row if has_header)
+                    if has_header and not header_skipped:
+                        header_skipped = True
                         continue
 
                     pairs.append(

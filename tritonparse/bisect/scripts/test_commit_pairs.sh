@@ -43,6 +43,7 @@ CSV File Format:
   Two columns separated by comma: triton_commit,llvm_commit
   Optional header row (auto-detected and skipped)
   Empty lines are ignored
+  Comment lines starting with # are ignored
 
   Example with header:
     triton_commit,llvm_commit
@@ -51,6 +52,13 @@ CSV File Format:
 
   Example without header:
     abc123def456,def456789abc
+    xyz789abc123,uvw012def345
+
+  Example with comments:
+    # Known good commits
+    triton_commit,llvm_commit
+    abc123def456,def456789abc
+    # This pair is suspected problematic
     xyz789abc123,uvw012def345
 
 Behavior:
@@ -174,6 +182,8 @@ while IFS=, read -r triton llvm; do
   [ -z "$triton" ] && continue
   triton=$(echo "$triton" | xargs | sed 's/"//g')
   [ -z "$triton" ] && continue
+  # Skip comment lines (starting with #)
+  [[ "$triton" == \#* ]] && continue
   # Skip header lines
   [ "$triton" = "triton" ] && continue
   [ "$triton" = "triton_commit" ] && continue
@@ -244,6 +254,9 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   # Skip if either is empty after processing
   [ -z "$triton_commit" ] && continue
   [ -z "$llvm_commit" ] && continue
+
+  # Skip comment lines (starting with #)
+  [[ "$triton_commit" == \#* ]] && continue
 
   # Skip header lines
   if [ "$triton_commit" = "triton" ] || [ "$triton_commit" = "triton_commit" ]; then
