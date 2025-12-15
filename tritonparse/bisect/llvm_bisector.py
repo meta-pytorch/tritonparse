@@ -118,12 +118,16 @@ class LLVMBisector(BaseBisector):
         self.logger.info(f"Build command: {self.build_command}")
 
     def _prepare_before_bisect(self) -> None:
-        """Checkout Triton commit and ensure LLVM repo exists."""
+        """Checkout Triton commit and ensure LLVM repo exists.
+
+        Note: _ensure_llvm_repo() is called earlier in run() to support
+        _get_next_commit(), so we skip it here to avoid redundant calls.
+        """
         # Checkout Triton to the specified commit
         self._checkout_triton(self._triton_commit)
 
-        # Ensure LLVM repo exists
-        self._ensure_llvm_repo()
+        # Note: LLVM repo is already ensured in run() before _get_next_commit()
+        # No need to call _ensure_llvm_repo() again
 
     def _get_triton_commit(self, specified_commit: Optional[str]) -> str:
         """
@@ -221,6 +225,62 @@ class LLVMBisector(BaseBisector):
         self.logger.info(f"LLVM repo verified at: {self.llvm_dir}")
         self.logger.info(f"Current LLVM commit: {current_commit[:12]}")
 
+    def _get_next_commit(self, good_llvm: str, bad_llvm: str) -> str:
+        """
+        Get the next commit after good_llvm (in the direction of bad_llvm).
+
+        The commits.csv uses 'llvm_commit_last_compatible' which represents
+        the LAST LLVM commit compatible with a Triton version. When bisecting
+        between pairs, we need to use the NEXT commit after 'last compatible'
+        as the actual good starting point.
+
+        For example:
+            - Pair 7: Triton 28d6b1e6, LLVM 067f87c5 (last compatible for 28d6b1e6)
+            - Pair 8: Triton a4d79034, LLVM bcb48aa5 (last compatible for a4d79034)
+
+        When bisecting with Triton a4d79034:
+            - good_llvm = 067f87c5 (from Pair 7)
+            - We need the NEXT commit after 067f87c5 as actual good
+            - Because 067f87c5 itself might not be compatible with a4d79034
+
+        Args:
+            good_llvm: The "last compatible" LLVM commit from commits.csv.
+            bad_llvm: The bad LLVM commit.
+
+        Returns:
+            The next commit after good_llvm, or good_llvm if no next commit exists.
+
+        Raises:
+            LLVMBisectError: If git command fails.
+        """
+        self.logger.info(f"Finding next commit after {good_llvm[:12]}...")
+
+        # Get all commits between good_llvm (exclusive) and bad_llvm (inclusive)
+        # --reverse gives us oldest first, so the first one is the next after good_llvm
+        result = self.executor.run_command(
+            ["git", "rev-list", f"{good_llvm}..{bad_llvm}", "--reverse"],
+            cwd=str(self.llvm_dir),
+        )
+
+        if not result.success:
+            raise LLVMBisectError(
+                f"Failed to get commits between {good_llvm} and {bad_llvm}: {result.stderr}"
+            )
+
+        commits = result.stdout.strip().split('\n')
+        if commits and commits[0]:
+            next_commit = commits[0]
+            self.logger.info(f"Next commit after {good_llvm[:12]}: {next_commit[:12]}")
+            self.logger.info(f"Total commits in range: {len(commits)}")
+            return next_commit
+
+        # If no commits between them, they might be the same or adjacent
+        self.logger.warning(
+            f"No commits found between {good_llvm[:12]} and {bad_llvm[:12]}. "
+            f"Using original good_llvm."
+        )
+        return good_llvm
+
     def run(
         self,
         triton_commit: Optional[str],
@@ -231,9 +291,15 @@ class LLVMBisector(BaseBisector):
         """
         Execute LLVM bisect to find the culprit commit.
 
+        The good_llvm is expected to be from commits.csv's 'llvm_commit_last_compatible'
+        column, which represents the LAST compatible LLVM commit for a Triton version.
+        This method automatically adjusts to use the NEXT commit as the actual good
+        starting point for bisect.
+
         Args:
             triton_commit: Fixed Triton commit to use. If None, uses current HEAD.
-            good_llvm: Known good LLVM commit hash (test passes).
+            good_llvm: Known good LLVM commit hash from commits.csv (last compatible).
+                       Will be adjusted to use the next commit as actual good.
             bad_llvm: Known bad LLVM commit hash (test fails).
             output_callback: Optional callback called for each output line.
                             Used by TUI to display real-time output.
@@ -247,7 +313,24 @@ class LLVMBisector(BaseBisector):
         # Store triton commit for _prepare_before_bisect
         self._triton_commit = self._get_triton_commit(triton_commit)
 
+        # Ensure LLVM repo exists before getting next commit
+        # (need repo to run git commands)
+        self._ensure_llvm_repo()
+
+        # Adjust good commit to use the next commit after 'last compatible'
+        # This is necessary because commits.csv stores 'llvm_commit_last_compatible'
+        # which is the last LLVM compatible with the PREVIOUS Triton version,
+        # not necessarily compatible with the current Triton version.
+        self.logger.info("")
+        self.logger.info("=" * 40)
+        self.logger.info("ADJUSTING GOOD COMMIT")
+        self.logger.info(f"  Original (last compatible): {good_llvm[:12]}")
+        actual_good = self._get_next_commit(good_llvm, bad_llvm)
+        self.logger.info(f"  Adjusted (next commit):     {actual_good[:12]}")
+        self.logger.info("=" * 40)
+        self.logger.info("")
+
         try:
-            return self._run_bisect(good_llvm, bad_llvm, output_callback)
+            return self._run_bisect(actual_good, bad_llvm, output_callback)
         except BisectError as e:
             raise LLVMBisectError(str(e)) from e
