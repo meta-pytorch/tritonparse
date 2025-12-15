@@ -267,7 +267,7 @@ class LLVMBisector(BaseBisector):
                 f"Failed to get commits between {good_llvm} and {bad_llvm}: {result.stderr}"
             )
 
-        commits = result.stdout.strip().split('\n')
+        commits = result.stdout.strip().split("\n")
         if commits and commits[0]:
             next_commit = commits[0]
             self.logger.info(f"Next commit after {good_llvm[:12]}: {next_commit[:12]}")
@@ -280,6 +280,194 @@ class LLVMBisector(BaseBisector):
             f"Using original good_llvm."
         )
         return good_llvm
+
+    def _checkout_llvm(self, commit: str) -> None:
+        """
+        Checkout the specified LLVM commit.
+
+        Args:
+            commit: The LLVM commit hash to checkout.
+
+        Raises:
+            LLVMBisectError: If checkout fails.
+        """
+        self.logger.info(f"Checking out LLVM commit: {commit[:12]}")
+
+        # First fetch the commit (in case it's not in local history)
+        # Fetch might fail if commit is already local, that's okay
+        self.executor.run_command(
+            ["git", "fetch", "origin", commit],
+            cwd=str(self.llvm_dir),
+        )
+
+        # Checkout the commit
+        result = self.executor.run_command(
+            ["git", "checkout", commit],
+            cwd=str(self.llvm_dir),
+        )
+
+        if not result.success:
+            raise LLVMBisectError(
+                f"Failed to checkout LLVM commit {commit}: {result.stderr}"
+            )
+
+    def _build_and_test(
+        self,
+        llvm_commit: str,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> tuple:
+        """
+        Build Triton with the specified LLVM commit and run the test.
+
+        This method:
+        1. Checks out the LLVM commit
+        2. Runs the bisect script (builds LLVM + Triton, runs test)
+        3. Returns the build and test results
+
+        Args:
+            llvm_commit: The LLVM commit to build and test.
+            output_callback: Optional callback for real-time output.
+
+        Returns:
+            Tuple of (build_success: bool, test_passed: bool, exit_code: int)
+            - build_success: True if both LLVM and Triton built successfully
+            - test_passed: True if test exited with code 0
+            - exit_code: The actual exit code from the bisect script
+        """
+        # Checkout LLVM commit
+        self._checkout_llvm(llvm_commit)
+
+        # Set up environment
+        env = self._get_base_env_vars()
+        env.update(self._get_extra_env_vars())
+
+        # Get bisect script
+        script_path = str(self._get_bisect_script())
+
+        # Run the bisect script
+        result = self.executor.run_command_streaming(
+            ["bash", script_path],
+            cwd=str(self.llvm_dir),
+            env=env,
+            output_callback=output_callback,
+        )
+
+        exit_code = result.exit_code
+
+        # Interpret exit codes:
+        # 0 = good (build success, test passed)
+        # 1 = bad (build success, test failed)
+        # 125 = skip (LLVM build failed)
+        # 128 = abort (Triton build failed or other error)
+
+        if exit_code == 125:
+            # LLVM build failed
+            return (False, False, exit_code)
+        elif exit_code == 128:
+            # Triton build failed or other error
+            return (False, False, exit_code)
+        elif exit_code == 0:
+            # Build success, test passed
+            return (True, True, exit_code)
+        elif exit_code == 1:
+            # Build success, test failed
+            return (True, False, exit_code)
+        else:
+            # Unknown exit code, treat as build failure
+            return (False, False, exit_code)
+
+    def _validate_commits(
+        self,
+        good_llvm: str,
+        bad_llvm: str,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """
+        Validate good and bad commits before starting bisect.
+
+        This ensures:
+        1. Bad commit: builds successfully AND test FAILS
+        2. Good commit: builds successfully AND test PASSES
+
+        Args:
+            good_llvm: The good LLVM commit (adjusted, not from CSV directly).
+            bad_llvm: The bad LLVM commit.
+            output_callback: Optional callback for real-time output.
+
+        Raises:
+            LLVMBisectError: If validation fails for either commit.
+        """
+        self.logger.info("")
+        self.logger.info("=" * 60)
+        self.logger.info("VALIDATING COMMITS BEFORE BISECT")
+        self.logger.info("=" * 60)
+
+        # Validate bad commit first (should build + fail test)
+        self.logger.info("")
+        self.logger.info(f"Validating BAD commit: {bad_llvm[:12]}")
+        self.logger.info("  Expected: build SUCCESS + test FAIL")
+
+        build_success, test_passed, exit_code = self._build_and_test(
+            bad_llvm, output_callback
+        )
+
+        if not build_success:
+            raise LLVMBisectError(
+                f"Bad commit validation failed: {bad_llvm}\n"
+                f"Build FAILED (exit code: {exit_code})\n"
+                f"Expected: build success + test fail\n"
+                f"Please verify this commit in commits.csv is correct."
+            )
+
+        if test_passed:
+            raise LLVMBisectError(
+                f"Bad commit validation failed: {bad_llvm}\n"
+                f"Test PASSED (expected FAIL)\n"
+                f"This commit should reproduce the regression but the test passed.\n"
+                f"Please verify:\n"
+                f"  1. The test script correctly detects the regression\n"
+                f"  2. The bad LLVM commit in commits.csv is correct"
+            )
+
+        self.logger.info(f"  ✓ Bad commit validated: build SUCCESS, test FAIL")
+
+        # Validate good commit (should build + pass test)
+        self.logger.info("")
+        self.logger.info(f"Validating GOOD commit: {good_llvm[:12]}")
+        self.logger.info("  Expected: build SUCCESS + test PASS")
+
+        build_success, test_passed, exit_code = self._build_and_test(
+            good_llvm, output_callback
+        )
+
+        if not build_success:
+            raise LLVMBisectError(
+                f"Good commit validation failed: {good_llvm}\n"
+                f"Build FAILED (exit code: {exit_code})\n"
+                f"Expected: build success + test pass\n"
+                f"Please verify the commit range in commits.csv is correct.\n"
+                f"Note: This is the next commit after 'last compatible', "
+                f"so it should be compatible with the current Triton version."
+            )
+
+        if not test_passed:
+            raise LLVMBisectError(
+                f"Good commit validation failed: {good_llvm}\n"
+                f"Test FAILED (expected PASS)\n"
+                f"This commit should pass the test but it failed.\n"
+                f"Please verify:\n"
+                f"  1. The test script is correct\n"
+                f"  2. The good LLVM commit range in commits.csv is correct\n"
+                f"  3. The LLVM range may need to be split into smaller ranges"
+            )
+
+        self.logger.info(f"  ✓ Good commit validated: build SUCCESS, test PASS")
+
+        self.logger.info("")
+        self.logger.info("=" * 60)
+        self.logger.info("VALIDATION COMPLETE - Starting bisect")
+        self.logger.info("=" * 60)
+        self.logger.info("")
 
     def run(
         self,
@@ -329,6 +517,13 @@ class LLVMBisector(BaseBisector):
         self.logger.info(f"  Adjusted (next commit):     {actual_good[:12]}")
         self.logger.info("=" * 40)
         self.logger.info("")
+
+        # Checkout Triton before validation (needed for building)
+        self._checkout_triton(self._triton_commit)
+
+        # Validate both commits before starting bisect
+        # This ensures we don't waste time on a bisect that will fail
+        self._validate_commits(actual_good, bad_llvm, output_callback)
 
         try:
             return self._run_bisect(actual_good, bad_llvm, output_callback)
