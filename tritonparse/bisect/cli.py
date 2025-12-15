@@ -353,7 +353,6 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
                 test_script=args.test_script,
                 conda_env=args.conda_env,
                 logger=logger,
-                build_command=args.build_command,
             )
 
             # Run bisect
@@ -697,7 +696,6 @@ def _orchestrate_workflow(
                     test_script=state.test_script,
                     conda_env=state.conda_env,
                     logger=logger,
-                    build_command=state.build_command,
                 )
 
                 # Use the Triton commit from pair testing

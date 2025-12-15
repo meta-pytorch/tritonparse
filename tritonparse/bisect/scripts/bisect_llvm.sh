@@ -44,20 +44,12 @@ Optional Environment Variables (with defaults):
   CONDA_ENV        Conda environment name (default: triton_bisect)
   TEST_ARGS        Arguments to test script (default: empty)
   LOG_DIR          Log directory (default: ./bisect_logs in Triton dir)
-  BUILD_COMMAND    Build command (default: LLVM_COMMIT_HASH=<hash> make dev-install-llvm)
   COMPAT_MODE      Compatibility check mode (default: 0)
                    - 1: Test exit 0 or 1 = compatible (good), others = incompatible (bad)
                         Use this to find first incompatible LLVM commit
                    - 0: Pass through test exit code (0=good, 1=bad, 125=skip)
                         Use this to find regression within compatible range
   PER_COMMIT_LOG   Write per-commit log files (default: 1, set to 0 to disable)
-  SKIP_BUILD_ERRORS  [DEV/TEST ONLY] Skip commits with build errors (default: 0)
-                   - 1: On build failure, exit 125 (skip) instead of 128 (abort)
-                   - 0: On build failure, exit 128 (abort bisect)
-                   WARNING: This option is intended ONLY for bisect module development
-                   and testing. In production use, if LLVM has commits that fail to
-                   build, the correct solution is to split the bisect range in
-                   commits.csv to avoid the problematic commits.
 
 Example:
   # Minimal usage
@@ -97,9 +89,7 @@ TEST_SCRIPT=${TEST_SCRIPT:-""}
 TEST_ARGS=${TEST_ARGS:-""}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
-BUILD_COMMAND=${BUILD_COMMAND:-""}
 PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
-SKIP_BUILD_ERRORS=${SKIP_BUILD_ERRORS:-0}  # [DEV/TEST ONLY] Set to 1 to skip build errors
 
 # Validate we're in LLVM repository
 if [ ! -d .git ]; then
@@ -216,13 +206,7 @@ cd "$TRITON_DIR" || {
 }
 
 # Always export LLVM_COMMIT_HASH so the build system knows which commit to use
-# This can be overridden by user's BUILD_COMMAND if they specify it inline
 export LLVM_COMMIT_HASH=$LLVM_COMMIT
-
-# Set default build command if not specified
-if [ -z "$BUILD_COMMAND" ]; then
-  BUILD_COMMAND="make dev-install-llvm"
-fi
 
 # Clean LLVM build directory to avoid CMake cache issues
 LLVM_BUILD_DIR="$TRITON_DIR/.llvm-project/build"

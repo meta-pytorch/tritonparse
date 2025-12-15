@@ -35,6 +35,11 @@ class LLVMBisector(BaseBisector):
 
     The LLVM repository is expected to be at {triton_dir}/llvm-project.
 
+    Note: Unlike TritonBisector, LLVMBisector does not support custom build commands.
+    The build process is handled by bisect_llvm.sh which splits into two phases:
+    - Phase 1: Build LLVM using scripts/build-llvm-project.sh
+    - Phase 2: Build Triton using make dev-install with LLVM env vars
+
     Example:
         >>> logger = BisectLogger("./logs")
         >>> bisector = LLVMBisector(
@@ -57,7 +62,6 @@ class LLVMBisector(BaseBisector):
         test_script: str,
         conda_env: str,
         logger: BisectLogger,
-        build_command: Optional[str] = None,
     ) -> None:
         """
         Initialize the LLVM bisector.
@@ -67,10 +71,10 @@ class LLVMBisector(BaseBisector):
             test_script: Path to the test script that determines pass/fail.
             conda_env: Name of the conda environment to use for builds.
             logger: BisectLogger instance for logging.
-            build_command: Custom build command. Defaults to "make dev-install-llvm".
-                          Note: The script will set LLVM_COMMIT_HASH automatically.
         """
-        super().__init__(triton_dir, test_script, conda_env, logger, build_command)
+        # LLVM bisect doesn't use build_command - the build is handled
+        # by bisect_llvm.sh with fixed two-phase build process
+        super().__init__(triton_dir, test_script, conda_env, logger, build_command=None)
         self.llvm_dir = self.triton_dir / "llvm-project"
         # Store triton_commit for use in _prepare_before_bisect
         self._triton_commit: Optional[str] = None

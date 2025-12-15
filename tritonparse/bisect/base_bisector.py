@@ -195,17 +195,24 @@ class BaseBisector(ABC):
         """
         Get the base environment variables common to all bisectors.
 
+        Note: BUILD_COMMAND is only included if set. For LLVMBisector,
+        build_command is None because bisect_llvm.sh uses a fixed
+        two-phase build process.
+
         Returns:
             Dictionary of base environment variables.
         """
-        return {
+        env = {
             "TRITON_DIR": str(self.triton_dir),
             "TEST_SCRIPT": str(self.test_script),
             "CONDA_ENV": self.conda_env,
-            "BUILD_COMMAND": self.build_command,
             "LOG_DIR": str(self.logger.log_dir),
             "PER_COMMIT_LOG": "0",  # Disable per-commit logs in Python mode
         }
+        # Only include BUILD_COMMAND if it's set (not used by LLVMBisector)
+        if self.build_command:
+            env["BUILD_COMMAND"] = self.build_command
+        return env
 
     def _parse_bisect_result(self, output: str) -> str:
         """
