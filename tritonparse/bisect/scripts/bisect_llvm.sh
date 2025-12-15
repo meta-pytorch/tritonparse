@@ -231,41 +231,81 @@ if [ -d "$LLVM_BUILD_DIR" ]; then
   rm -rf "$LLVM_BUILD_DIR"
 fi
 
-# Build Triton with specific LLVM commit
+# ============================================================
+# Build Phase 1: Build LLVM
+# ============================================================
 echo "" | log_output
-echo "Building Triton with LLVM $SHORT_LLVM..." | log_output
-BUILD_START=$(date +%s)
+echo "=== Phase 1: Building LLVM $SHORT_LLVM ===" | log_output
+LLVM_BUILD_START=$(date +%s)
 
 if [ -n "$LOG_FILE" ]; then
-  eval "$BUILD_COMMAND" 2>&1 | tee -a "$LOG_FILE"
-  BUILD_CODE=${PIPESTATUS[0]}
+  LLVM_BUILD_PATH="$LLVM_BUILD_DIR" scripts/build-llvm-project.sh 2>&1 | tee -a "$LOG_FILE"
+  LLVM_BUILD_CODE=${PIPESTATUS[0]}
 else
-  eval "$BUILD_COMMAND" 2>&1
-  BUILD_CODE=$?
+  LLVM_BUILD_PATH="$LLVM_BUILD_DIR" scripts/build-llvm-project.sh 2>&1
+  LLVM_BUILD_CODE=$?
 fi
 
-BUILD_END=$(date +%s)
-BUILD_TIME=$((BUILD_END - BUILD_START))
-echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | log_output
+LLVM_BUILD_END=$(date +%s)
+LLVM_BUILD_TIME=$((LLVM_BUILD_END - LLVM_BUILD_START))
+echo "LLVM build completed in ${LLVM_BUILD_TIME}s, exit code: $LLVM_BUILD_CODE" | log_output
 
-if [ $BUILD_CODE -ne 0 ]; then
-  echo "Build failed" | log_output
+if [ $LLVM_BUILD_CODE -ne 0 ]; then
+  # LLVM build failure - always skip, regardless of COMPAT_MODE
+  # This handles LLVM history bugs (e.g., APFloat.cpp compile error)
+  echo "LLVM build failed - skipping this commit" | log_output
+  echo "This is likely a known bug in LLVM history" | log_output
+  exit 125  # skip - let bisect try adjacent commits
+fi
+
+# ============================================================
+# Build Phase 2: Build Triton with LLVM
+# ============================================================
+echo "" | log_output
+echo "=== Phase 2: Building Triton with LLVM ===" | log_output
+TRITON_BUILD_START=$(date +%s)
+
+if [ -n "$LOG_FILE" ]; then
+  TRITON_BUILD_WITH_CLANG_LLD=1 \
+  TRITON_BUILD_WITH_CCACHE=0 \
+  LLVM_INCLUDE_DIRS="$LLVM_BUILD_DIR/include" \
+  LLVM_LIBRARY_DIR="$LLVM_BUILD_DIR/lib" \
+  LLVM_SYSPATH="$LLVM_BUILD_DIR" \
+  make dev-install 2>&1 | tee -a "$LOG_FILE"
+  TRITON_BUILD_CODE=${PIPESTATUS[0]}
+else
+  TRITON_BUILD_WITH_CLANG_LLD=1 \
+  TRITON_BUILD_WITH_CCACHE=0 \
+  LLVM_INCLUDE_DIRS="$LLVM_BUILD_DIR/include" \
+  LLVM_LIBRARY_DIR="$LLVM_BUILD_DIR/lib" \
+  LLVM_SYSPATH="$LLVM_BUILD_DIR" \
+  make dev-install 2>&1
+  TRITON_BUILD_CODE=$?
+fi
+
+TRITON_BUILD_END=$(date +%s)
+TRITON_BUILD_TIME=$((TRITON_BUILD_END - TRITON_BUILD_START))
+echo "Triton build completed in ${TRITON_BUILD_TIME}s, exit code: $TRITON_BUILD_CODE" | log_output
+
+# Calculate total build time
+BUILD_TIME=$((LLVM_BUILD_TIME + TRITON_BUILD_TIME))
+BUILD_CODE=$TRITON_BUILD_CODE
+
+if [ $TRITON_BUILD_CODE -ne 0 ]; then
+  echo "Triton build failed" | log_output
   if [ "$COMPAT_MODE" = "1" ]; then
-    echo "COMPAT_MODE: Build failed - INCOMPATIBLE" | log_output
-    exit 1   # bad - incompatible
-  elif [ "$SKIP_BUILD_ERRORS" = "1" ]; then
-    # [DEV/TEST ONLY] Skip this commit instead of aborting
-    # WARNING: This is for bisect module development only.
-    # In production, split the range in commits.csv to avoid problematic commits.
-    echo "SKIP_BUILD_ERRORS: Skipping this commit due to build failure" | log_output
-    exit 125  # skip - let bisect try adjacent commits
+    # COMPAT_MODE: Finding first incompatible LLVM commit
+    echo "COMPAT_MODE: Triton build failed - INCOMPATIBLE" | log_output
+    exit 1   # bad - this LLVM is incompatible with Triton
   else
-    echo "ERROR: Build failed in normal bisect mode" | log_output
-    echo "This is unexpected - all commits in the bisect range should be buildable" | log_output
+    # Normal bisect mode: Triton should not fail to build
+    # (assuming good/bad commits were validated before starting bisect)
+    echo "ERROR: Triton build failed in bisect mode" | log_output
+    echo "This is unexpected - Triton should build with all LLVM commits in the bisect range" | log_output
     echo "Please verify:" | log_output
     echo "  1. Your good/bad commits were validated before starting bisect" | log_output
-    echo "  2. Build environment has all required dependencies" | log_output
-    exit 128  # abort bisect - build failure is unexpected in normal mode
+    echo "  2. The LLVM commit range in commits.csv is correct" | log_output
+    exit 128  # abort bisect - Triton build failure is unexpected
   fi
 fi
 
