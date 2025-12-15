@@ -51,6 +51,13 @@ Optional Environment Variables (with defaults):
                    - 0: Pass through test exit code (0=good, 1=bad, 125=skip)
                         Use this to find regression within compatible range
   PER_COMMIT_LOG   Write per-commit log files (default: 1, set to 0 to disable)
+  SKIP_BUILD_ERRORS  [DEV/TEST ONLY] Skip commits with build errors (default: 0)
+                   - 1: On build failure, exit 125 (skip) instead of 128 (abort)
+                   - 0: On build failure, exit 128 (abort bisect)
+                   WARNING: This option is intended ONLY for bisect module development
+                   and testing. In production use, if LLVM has commits that fail to
+                   build, the correct solution is to split the bisect range in
+                   commits.csv to avoid the problematic commits.
 
 Example:
   # Minimal usage
@@ -92,6 +99,7 @@ LOG_DIR=${LOG_DIR:-./bisect_logs}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 BUILD_COMMAND=${BUILD_COMMAND:-""}
 PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
+SKIP_BUILD_ERRORS=${SKIP_BUILD_ERRORS:-0}  # [DEV/TEST ONLY] Set to 1 to skip build errors
 
 # Validate we're in LLVM repository
 if [ ! -d .git ]; then
@@ -245,6 +253,12 @@ if [ $BUILD_CODE -ne 0 ]; then
   if [ "$COMPAT_MODE" = "1" ]; then
     echo "COMPAT_MODE: Build failed - INCOMPATIBLE" | log_output
     exit 1   # bad - incompatible
+  elif [ "$SKIP_BUILD_ERRORS" = "1" ]; then
+    # [DEV/TEST ONLY] Skip this commit instead of aborting
+    # WARNING: This is for bisect module development only.
+    # In production, split the range in commits.csv to avoid problematic commits.
+    echo "SKIP_BUILD_ERRORS: Skipping this commit due to build failure" | log_output
+    exit 125  # skip - let bisect try adjacent commits
   else
     echo "ERROR: Build failed in normal bisect mode" | log_output
     echo "This is unexpected - all commits in the bisect range should be buildable" | log_output

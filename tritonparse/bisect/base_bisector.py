@@ -292,6 +292,15 @@ class BaseBisector(ABC):
         env = self._get_base_env_vars()
         env.update(self._get_extra_env_vars())
 
+        # Log bisect range for debugging
+        self.logger.info("")
+        self.logger.info("=" * 40)
+        self.logger.info("BISECT RANGE")
+        self.logger.info(f"  Good: {good_commit}")
+        self.logger.info(f"  Bad:  {bad_commit}")
+        self.logger.info("=" * 40)
+        self.logger.info("")
+
         # Step 6: Execute git bisect sequence
         result = self.executor.run_git_bisect_sequence(
             repo_path=str(self.target_repo_dir),

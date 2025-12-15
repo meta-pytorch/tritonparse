@@ -43,8 +43,8 @@ Optional Environment Variables (with defaults):
 Exit Codes (for git bisect):
   0   - Good commit (test passed)
   1   - Bad commit (test failed)
-  125 - Skip (build failed, git will try adjacent commits)
-  128 - Abort (configuration error, stops bisect)
+  125 - Skip (currently unused, reserved for future use)
+  128 - Abort (build failed or configuration error, stops bisect)
 
 Example:
   # Basic usage
@@ -194,7 +194,7 @@ echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | log_output
 
 if [ $BUILD_CODE -ne 0 ]; then
   echo "Build FAILED" | log_output
-  exit 125
+  exit 128
 fi
 
 echo "" | log_output
