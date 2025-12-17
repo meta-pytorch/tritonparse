@@ -110,7 +110,10 @@ def main():
         )
     elif args.func == "info":
         info_command(
-            input_path=args.input, kernel_name=args.kernel, skip_logger=True
+            input_path=args.input,
+            kernel_name=args.kernel,
+            skip_logger=True,
+            args_list=args.args_list,
         )  # Already logged above
     else:
         raise RuntimeError(f"Unknown command: {args.func}")
