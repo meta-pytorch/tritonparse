@@ -20,6 +20,7 @@ MAX_RETRIES=3
 RETRY_DELAY=5
 CURL_TIMEOUT=10
 PACKAGE_NAME="${PACKAGE_NAME:-tritonparse}"
+PACKAGE_PATH="${PACKAGE_PATH:-}"  # Optional: subdirectory to check (e.g., "python/")
 
 # Dependencies: This script requires 'jq' and 'curl' to be installed.
 # These are pre-installed on ubuntu-latest GitHub Actions runners.
@@ -99,7 +100,13 @@ main() {
     echo "Last nightly published at: $SINCE_DATE"
 
     # Step 6: Check for new commits since last nightly
-    COMMITS_SINCE=$(git log --since="$SINCE_DATE" --oneline | wc -l)
+    # If PACKAGE_PATH is set, only check commits in that subdirectory
+    if [ -n "$PACKAGE_PATH" ]; then
+        echo "Checking commits in path: $PACKAGE_PATH"
+        COMMITS_SINCE=$(git log --since="$SINCE_DATE" --oneline -- "$PACKAGE_PATH" | wc -l)
+    else
+        COMMITS_SINCE=$(git log --since="$SINCE_DATE" --oneline | wc -l)
+    fi
 
     if [ "$COMMITS_SINCE" -eq 0 ]; then
         echo "No new commits since last nightly, skipping publish"
