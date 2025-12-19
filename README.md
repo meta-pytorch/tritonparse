@@ -62,8 +62,12 @@ pip install triton
 import tritonparse.structured_logging
 import tritonparse.utils
 
-# Initialize logging
-tritonparse.structured_logging.init("./logs/", enable_trace_launch=True)
+# Initialize logging with full tracing options
+tritonparse.structured_logging.init(
+    "./logs/",
+    enable_trace_launch=True,                 # Capture kernel launch events (enables torch.compile tracing automatically)
+    enable_more_tensor_information=True,      # Optional: collect tensor statistics (min/max/mean/std)
+)
 
 # Your Triton/PyTorch code here
 # ... your kernels ...
@@ -71,6 +75,8 @@ tritonparse.structured_logging.init("./logs/", enable_trace_launch=True)
 # Parse and generate trace files
 tritonparse.utils.unified_parse("./logs/", out="./parsed_output")
 ```
+
+> **💡 Note**: `enable_trace_launch=True` automatically enables tracing for both native Triton kernels (`@triton.jit`) and `torch.compile` / TorchInductor kernels.
 
 <details>
 <summary>📝 Example output (click to expand)</summary>
@@ -144,6 +150,9 @@ result = reproduce(
 | **[🔧 Developer Guide](https://github.com/meta-pytorch/tritonparse/wiki/04.-Developer-Guide)** | Contributing and architecture overview |
 | **[📝 Code Formatting](https://github.com/meta-pytorch/tritonparse/wiki/05.-Code-Formatting)** | Formatting standards and tools |
 | **[❓ FAQ](https://github.com/meta-pytorch/tritonparse/wiki/06.-FAQ)** | Quick answers and troubleshooting |
+| **[⚙️ Environment Variables](https://github.com/meta-pytorch/tritonparse/wiki/07.-Environment-Variables-Reference)** | Complete environment variable reference |
+| **[📖 Python API Reference](https://github.com/meta-pytorch/tritonparse/wiki/08.-Python-API-Reference)** | Full API documentation |
+| **[🔄 Reproducer Guide](https://github.com/meta-pytorch/tritonparse/wiki/09.-Reproducer-Guide)** | Comprehensive kernel reproducer guide |
 
 ## 📊 Understanding Triton Compilation
 
