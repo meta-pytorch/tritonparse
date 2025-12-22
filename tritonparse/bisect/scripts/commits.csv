@@ -1,6 +1,15 @@
 triton_commit,llvm_commit_last_compatible
-# the first commit before the llvmp bump commit
-83fbc0e2fcc7b1f3082deeb011abf3d5468e39a4, 570885128351868c1308bb22e8ca351d318bc4a1
+
+# === LLVM_BUMP_START ===
+# bump_commit: 6ca2dda
+# range_start: 570885128351868c1308bb22e8ca351d318bc4a1
+# range_end: bc773632355b3cebde350b0341624e88be40b744
+# generated_at: 2024-12-22 (manually created)
+# description: First LLVM bump coverage for triton fork
+#
+# Note: First triton_commit (83fbc0e2...) is llvm_bump~1
+#       Last triton_commit (6ca2dda) is the llvm_bump commit itself
+83fbc0e2fcc7b1f3082deeb011abf3d5468e39a4,570885128351868c1308bb22e8ca351d318bc4a1
 ffebd7e2d3bdcda6339293fba056a380b2cfd2a9,77618a9253d22ed9010eef561dcff68b61c39115
 2a0a37c6f2af0113605ef4b26b14cfe1645a1d85,418c5de19bbda6cc4dfdd8625465e2385561d75f
 882d006f46e4a428bdb6e7c1ddf287d20635a84b,e10db1594feefbeb0a9642d83b00f4a164f0104c
@@ -8,5 +17,5 @@ ffebd7e2d3bdcda6339293fba056a380b2cfd2a9,77618a9253d22ed9010eef561dcff68b61c3911
 10e1b59231765c47d70821c9e7e2d5bcd4e1e0f5,8e7b02fc0cd5f63a14f4117866f860b7f174baf3
 28d6b1e6b144cee745688e822a6c535525606bc9,067f87c5830337a5d9fa8a5ea7f16df7591a8b73
 a4d790349ea9d7f8f71bdd38daaf55767eed4b03,bcb48aa5b2cfc75967c734a97201e0c91273169d
-# the last one to include the llvmp bump commit
 6ca2dda,bc773632355b3cebde350b0341624e88be40b744
+# === LLVM_BUMP_END ===
