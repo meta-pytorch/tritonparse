@@ -1,7 +1,7 @@
 // (c) Meta Platforms, Inc. and affiliates.
 
 import React, { useCallback, useMemo, useRef } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group, Separator } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
 import {
@@ -15,7 +15,7 @@ import { getDisplayLanguage } from "./TritonIRs";
 /**
  * Props for a single code panel
  */
-interface PanelProps {
+interface CodePanelProps {
     code?: IRFile;
     content?: string;
     language?: string;
@@ -26,8 +26,8 @@ interface PanelProps {
  * Props for the CodeComparisonView component
  */
 interface CodeComparisonViewProps {
-    leftPanel: PanelProps;
-    rightPanel: PanelProps;
+    leftPanel: CodePanelProps;
+    rightPanel: CodePanelProps;
     py_code_info?: PythonSourceCodeInfo;
     showPythonSource?: boolean;
     pythonMapping?: Record<string, SourceMapping>;
@@ -431,7 +431,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     // ==================== Render ====================
 
     return (
-        <PanelGroup direction="horizontal" style={{ height: '100%' }}>
+        <Group orientation="horizontal" style={{ height: '100%' }}>
             {/* Left Panel */}
             <Panel defaultSize={33} minSize={20}>
                 <div style={{
@@ -466,7 +466,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 </div>
             </Panel>
 
-            <PanelResizeHandle style={{
+            <Separator style={{
                 width: "4px",
                 backgroundColor: "#ddd",
                 cursor: "col-resize"
@@ -509,7 +509,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             {/* Python Source Panel (Optional) */}
             {showPythonSource && py_code_info && (
                 <>
-                    <PanelResizeHandle style={{
+                    <Separator style={{
                         width: "4px",
                         backgroundColor: "#ddd",
                         cursor: "col-resize"
@@ -559,7 +559,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     </Panel>
                 </>
             )}
-        </PanelGroup>
+        </Group>
     );
 };
 
