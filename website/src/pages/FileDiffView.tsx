@@ -139,12 +139,12 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         sess.setLeftFromUrl(url, processed);
         // default to first kernel when loading new source
         setLeftIdx(0);
-        try { sess.setLeftIdx(0); } catch {}
+          try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
         const leftHash = window.__TRITONPARSE_leftHash;
         if (leftHash) {
           const li = findKernelIndexByHash(leftHash, processed);
           if (li >= 0) setLeftIdx(li);
-          try { if (li >= 0) sess.setLeftIdx(li); } catch {}
+          try { if (li >= 0) sess.setLeftIdx(li); } catch { /* Session may not be ready */ }
         }
       } catch (e) {
         console.warn("[FDV] loadLeft(URL) error:", e);
@@ -201,7 +201,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         }
         sess.setLeftIdx(Math.max(0, leftIdx));
       }
-    } catch {}
+    } catch { /* Ignore hydration errors - session state may be stale */ }
   }, [sess, kernelsLeft, leftLoadedUrl, leftIdx]);
 
   // Hydrate right from session when returning from preview (ensure right side is restored without reloading URL)
@@ -218,7 +218,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
           setRightLoadedFromLocal(true);
         }
       }
-    } catch {}
+    } catch { /* Ignore session restore errors */ }
   }, [sess.right]);
 
   // Compute union ir types and choose default ir if needed
@@ -434,16 +434,16 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       sess.setLeftFromLocal(processed);
       // select first by default
       setLeftIdx(0);
-      try { sess.setLeftIdx(0); } catch {}
+      try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
       const leftHash = window.__TRITONPARSE_leftHash;
       if (leftHash) {
         const li = findKernelIndexByHash(leftHash, processed);
         setLeftIdx(li >= 0 ? li : 0);
-        try { if (li >= 0) sess.setLeftIdx(li); } catch {}
+        try { if (li >= 0) sess.setLeftIdx(li); } catch { /* Session may not be ready */ }
       } else {
         setLeftIdx(0);
       }
-    } catch {}
+    } catch { /* Ignore file load errors */ }
   };
 
   return (
@@ -565,7 +565,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <select
               className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
               value={leftIdx}
-              onChange={(e) => { const v = parseInt(e.target.value); setLeftIdx(v); try { sess.setLeftIdx(v); } catch {} }}
+              onChange={(e) => { const v = parseInt(e.target.value); setLeftIdx(v); try { sess.setLeftIdx(v); } catch { /* Ignore */ } }}
               disabled={leftArrayResolved.length === 0}
             >
               {leftArrayResolved.map((k, i) => (
@@ -580,7 +580,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <select
               className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
               value={rightIdx}
-              onChange={(e) => { const v = parseInt(e.target.value); setRightIdx(v); try { sess.setRightIdx(v); } catch {} }}
+              onChange={(e) => { const v = parseInt(e.target.value); setRightIdx(v); try { sess.setRightIdx(v); } catch { /* Ignore */ } }}
               disabled={kernelsRight.length === 0}
             >
               {kernelsRight.map((k, i) => (
