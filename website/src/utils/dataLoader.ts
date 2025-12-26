@@ -77,7 +77,8 @@ export interface KernelMetadata {
     enable_fp_fusion?: boolean;
     launch_cooperative_grid?: boolean;
     supported_fp8_dtypes?: string[];
-    [key: string]: any; // For other metadata properties
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any; // For other metadata properties - dynamic keys from trace
 }
 
 /**
@@ -91,7 +92,7 @@ export interface LaunchRange {
 /**
  * Distribution value with count and launch information
  */
-export interface DistributionValue<T = any> {
+export interface DistributionValue<T = unknown> {
     value: T;
     count: number;
     launches: LaunchRange[];
@@ -105,14 +106,15 @@ export interface SummaryDiff {
     summary_text: string;
 }
 
-export interface DistributionDiff<T = any> {
+export interface DistributionDiff<T = unknown> {
     diff_type: "distribution";
     values: DistributionValue<T>[];
 }
 
 export interface ArgumentDiff {
     diff_type: "argument_diff";
-    sames?: Record<string, any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sames?: Record<string, any>; // Dynamic argument values from trace
     diffs?: Record<string, SummaryDiff | DistributionDiff>;
 }
 
@@ -147,7 +149,8 @@ export interface CompilationMetadata {
     global_scratch_align?: number;
     global_scratch_size?: number;
     hash?: string;
-    ir_override?: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ir_override?: any; // Dynamic IR override structure from trace
     launch_cooperative_grid?: boolean;
     launch_pdl?: boolean;
     max_num_imprecise_acc_default?: number;
@@ -156,7 +159,8 @@ export interface CompilationMetadata {
     num_ctas?: number;
     num_stages?: number;
     num_warps?: number;
-    ptx_options?: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ptx_options?: any; // Dynamic PTX options from trace
     ptx_version?: number | null;
     sanitize_overflow?: boolean;
     shared?: number;
@@ -166,11 +170,13 @@ export interface CompilationMetadata {
         arch?: number;
         warp_size?: number;
     };
-    tensordesc_meta?: any[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    tensordesc_meta?: any[]; // Dynamic tensor descriptor metadata
     tmem_size?: number;
     triton_version?: string;
     warp_size?: number;
-    [key: string]: any; // Allow additional unknown fields
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any; // Allow additional unknown fields from trace
 }
 
 export interface IRAnalysisData {
@@ -184,9 +190,11 @@ export interface IRAnalysisData {
  */
 export interface ExtractedArg {
     type: string;
-    value?: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    value?: any; // Dynamic value from trace - type varies
     length?: number;
-    [key: string]: any; // Allow additional unknown fields
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any; // Allow additional unknown fields from trace
 }
 
 /**
@@ -201,7 +209,8 @@ export interface LaunchSamesData {
     compilation_metadata?: CompilationMetadata;
     timestamp?: string;
     extracted_args?: Record<string, ExtractedArg>;
-    [key: string]: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any; // Dynamic fields from trace
 }
 
 /**
@@ -316,7 +325,8 @@ function isGzipFile(buffer: ArrayBuffer): boolean {
  * @returns A promise that resolves to an array of LogEntry objects
  */
 async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promise<LogEntry[]> {
-    const reader = stream.pipeThrough(new TextDecoderStream() as any).getReader();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reader = (stream.pipeThrough(new TextDecoderStream()) as any).getReader();
     let buffer = '';
     const entries: LogEntry[] = [];
 

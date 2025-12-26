@@ -2,8 +2,43 @@ import React, { useState } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
+/**
+ * Stack frame in a stack trace
+ */
+interface StackFrame {
+  filename: string;
+  line: number;
+  name: string;
+  line_code?: string;
+}
+
+/**
+ * Launch range for distribution values
+ */
+interface LaunchRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Distribution value item
+ */
+interface StackDistributionValue {
+  value: StackFrame[];
+  count: number;
+  launches: LaunchRange[];
+}
+
+/**
+ * Stack diff with distribution type
+ */
+interface StackDiff {
+  diff_type: string;
+  values: StackDistributionValue[];
+}
+
 // A single frame of a stack trace
-const StackTraceFrame: React.FC<{ frame: any }> = ({ frame }) => (
+const StackTraceFrame: React.FC<{ frame: StackFrame }> = ({ frame }) => (
   <div className="font-mono text-xs break-all">
     <span className="text-gray-500">{frame.filename}</span>:
     <span className="font-semibold text-blue-600">{frame.line}</span> in{" "}
@@ -28,7 +63,7 @@ const StackTraceFrame: React.FC<{ frame: any }> = ({ frame }) => (
 );
 
 
-const StackDiffViewer: React.FC<{ stackDiff: any }> = ({ stackDiff }) => {
+const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = ({ stackDiff }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   if (!stackDiff || stackDiff.diff_type !== 'distribution') {
@@ -55,9 +90,9 @@ const StackDiffViewer: React.FC<{ stackDiff: any }> = ({ stackDiff }) => {
       </h5>
       {!isCollapsed && (
          <div className="space-y-2">
-          {stackDiff.values.map((item: any, index: number) => {
+          {stackDiff.values.map((item: StackDistributionValue, index: number) => {
             const launchRanges = item.launches
-              .map((r: any) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
+              .map((r: LaunchRange) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
               .join(", ");
             
             return (
@@ -66,7 +101,7 @@ const StackDiffViewer: React.FC<{ stackDiff: any }> = ({ stackDiff }) => {
                   Variant seen {item.count} times (in launches: {launchRanges})
                 </p>
                 <div className="space-y-1 bg-gray-50 p-1 rounded">
-                   {Array.isArray(item.value) ? item.value.map((frame: any, frameIndex: number) => (
+                   {Array.isArray(item.value) ? item.value.map((frame: StackFrame, frameIndex: number) => (
                     <StackTraceFrame key={frameIndex} frame={frame} />
                   )) : <p>Invalid stack format</p>}
                 </div>

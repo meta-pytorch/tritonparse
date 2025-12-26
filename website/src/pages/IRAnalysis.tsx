@@ -6,6 +6,15 @@ interface IRAnalysisProps {
   selectedKernel: number;
 }
 
+/**
+ * Loop schedule entry with prologue, loop body, and epilogue
+ */
+interface LoopSchedule {
+  prologue?: string[];
+  loop_body?: string[];
+  epilogue?: string[];
+}
+
 const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   if (kernels.length === 0) {
     return (
@@ -98,7 +107,7 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
               Software Pipelining Schedule
             </h3>
 
-            {loop_schedule.map((schedule: any, loopIndex: number) => {
+            {loop_schedule.map((schedule: LoopSchedule, loopIndex: number) => {
               const prologue = schedule?.prologue || [];
               const loopBody = schedule?.loop_body || [];
               const epilogue = schedule?.epilogue || [];

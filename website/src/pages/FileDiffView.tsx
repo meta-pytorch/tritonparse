@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DiffComparisonView from "../components/DiffComparisonView";
 import { useFileDiffSession } from "../context/FileDiffSession";
 import { ProcessedKernel, loadLogData, loadLogDataFromFile, processKernelData, getIRType } from "../utils/dataLoader";
+import "../types/global.d.ts";
 
 type DiffMode = "single" | "all";
 
@@ -113,14 +114,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     // Left/Right kernel index by hash
     const leftHash = params.get(PARAM_KERNEL_HASH_A);
     const rightHash = params.get(PARAM_KERNEL_HASH_B);
-    if (leftHash) (window as any).__TRITONPARSE_leftHash = leftHash;
+    if (leftHash) window.__TRITONPARSE_leftHash = leftHash;
     const li = findKernelIndexByHash(leftHash, kernelsLeft);
     if (li >= 0) setLeftIdx(li);
 
     // right index will be set after right kernels loaded
     if (rightHash) {
       // store temporarily in dataset
-      (window as any).__TRITONPARSE_rightHash = rightHash;
+      window.__TRITONPARSE_rightHash = rightHash;
     }
     // Note: leftLoadedUrl is intentionally omitted - we only read URL params on mount
     // and when kernelsLeft changes, not when the prop changes
@@ -139,7 +140,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         // default to first kernel when loading new source
         setLeftIdx(0);
         try { sess.setLeftIdx(0); } catch {}
-        const leftHash = (window as any).__TRITONPARSE_leftHash as string | undefined;
+        const leftHash = window.__TRITONPARSE_leftHash;
         if (leftHash) {
           const li = findKernelIndexByHash(leftHash, processed);
           if (li >= 0) setLeftIdx(li);
@@ -167,13 +168,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         setKernelsRight(processed);
         sess.setRightFromUrl(url, processed);
         // set right index by hash if present
-        const rightHash = (window as any).__TRITONPARSE_rightHash as string | undefined;
+        const rightHash = window.__TRITONPARSE_rightHash;
         if (rightHash) {
           const ri = findKernelIndexByHash(rightHash, processed);
           if (ri >= 0) setRightIdx(ri);
         }
-      } catch (e: any) {
-        setErrorRight(e?.message || String(e));
+      } catch (e: unknown) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        setErrorRight(errorMessage);
       } finally {
         setLoadingRight(false);
       }
@@ -401,15 +403,16 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       setRightLoadedUrl(null); // do not persist json_b_url when loaded from local file
       sess.setRightFromLocal(processed);
       // select the first kernel or restore by hash if available
-      const rightHash = (window as any).__TRITONPARSE_rightHash as string | undefined;
+      const rightHash = window.__TRITONPARSE_rightHash;
       if (rightHash) {
         const ri = findKernelIndexByHash(rightHash, processed);
         setRightIdx(ri >= 0 ? ri : 0);
       } else {
         setRightIdx(0);
       }
-    } catch (e: any) {
-      setErrorRight(e?.message || String(e));
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setErrorRight(errorMessage);
     } finally {
       setLoadingRight(false);
     }
@@ -432,7 +435,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       // select first by default
       setLeftIdx(0);
       try { sess.setLeftIdx(0); } catch {}
-      const leftHash = (window as any).__TRITONPARSE_leftHash as string | undefined;
+      const leftHash = window.__TRITONPARSE_leftHash;
       if (leftHash) {
         const li = findKernelIndexByHash(leftHash, processed);
         setLeftIdx(li >= 0 ? li : 0);
@@ -632,7 +635,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               </label>
               <label className="inline-flex items-center gap-1 text-sm">
                 <span>Wrap</span>
-                <select className="border border-gray-300 rounded px-2 py-1" value={wordWrap} onChange={(e) => setWordWrap(e.target.value as any)}>
+                <select className="border border-gray-300 rounded px-2 py-1" value={wordWrap} onChange={(e) => setWordWrap(e.target.value as "off" | "on")}>
                   <option value="off">off</option>
                   <option value="on">on</option>
                 </select>
