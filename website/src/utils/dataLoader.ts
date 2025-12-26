@@ -288,7 +288,7 @@ export function parseLogData(textData: string): LogEntry[] {
                 if (parsedLine && typeof parsedLine === 'object') {
                     entries.push(parsedLine);
                 }
-            } catch (e) {
+            } catch {
                 console.warn(`Failed to parse line as JSON: ${line.substring(0, 100)}...`);
                 // Continue processing other lines even if one fails
             }
@@ -339,7 +339,7 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
                     if (parsedLine && typeof parsedLine === 'object') {
                         entries.push(parsedLine);
                     }
-                } catch (e) {
+                } catch {
                     console.warn(`Failed to parse final line as JSON: ${buffer.substring(0, 100)}...`);
                 }
             }
@@ -357,7 +357,7 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
                 if (parsedLine && typeof parsedLine === 'object') {
                     entries.push(parsedLine);
                 }
-            } catch (e) {
+            } catch {
                 console.warn(`Failed to parse line as JSON: ${line.substring(0, 100)}...`);
             }
         }

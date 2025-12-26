@@ -15,7 +15,7 @@ export const checkFbDirectoryExists = async (): Promise<boolean> => {
     
     // Only consider it successful if we get 200 AND it's not HTML fallback
     return response.ok && !isHtmlFallback;
-  } catch (error) {
+  } catch {
     // If the request fails, the directory likely doesn't exist
     return false;
   }

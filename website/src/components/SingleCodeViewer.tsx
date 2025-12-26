@@ -54,11 +54,11 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
         // Find all lines that map to the same TTGIR line
         const relatedLines = Object.entries(sourceMapping)
           .filter(
-            ([_, mapping]) =>
+            ([key, mapping]) =>
               mapping.ttgir_line === clickedMapping.ttgir_line &&
-              parseInt(lineKey, 10) !== parseInt(_, 10) // Skip the clicked line itself
+              parseInt(lineKey, 10) !== parseInt(key, 10) // Skip the clicked line itself
           )
-          .map(([line, _]) => parseInt(line, 10));
+          .map(([line]) => parseInt(line, 10));
 
         if (relatedLines.length > 0) {
           // Include the clicked line and any related lines
