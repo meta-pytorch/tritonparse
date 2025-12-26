@@ -10,7 +10,7 @@ import {
     SourceMapping,
     getIRType,
 } from "../utils/dataLoader";
-import { getDisplayLanguage } from "./TritonIRs";
+import { getDisplayLanguage } from "../utils/irLanguage";
 
 /**
  * Props for a single code panel

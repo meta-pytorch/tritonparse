@@ -139,7 +139,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         sess.setLeftFromUrl(url, processed);
         // default to first kernel when loading new source
         setLeftIdx(0);
-          try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
+        try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
         const leftHash = window.__TRITONPARSE_leftHash;
         if (leftHash) {
           const li = findKernelIndexByHash(leftHash, processed);
