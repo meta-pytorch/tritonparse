@@ -1,8 +1,25 @@
 import React, { useState } from 'react';
 import { isTensorArg, extractTensorMetadata, formatTensorSummary } from '../utils/tensor';
 
+interface LaunchRange {
+    start: number;
+    end: number;
+}
+
+interface DistributionValue {
+    value: unknown;
+    count: number;
+    launches: LaunchRange[];
+}
+
+interface DistributionData {
+    diff_type: 'summary' | 'distribution';
+    summary_text?: string;
+    values?: DistributionValue[];
+}
+
 // Renders the value distribution (e.g., "16 (2 times, in launches: 1-2)")
-const DistributionCell: React.FC<{ data: any }> = ({ data }) => {
+const DistributionCell: React.FC<{ data: DistributionData | null }> = ({ data }) => {
     if (!data) return null;
     if (data.diff_type === 'summary') {
         return <span className="text-gray-500 italic">{data.summary_text}</span>;
@@ -10,9 +27,9 @@ const DistributionCell: React.FC<{ data: any }> = ({ data }) => {
     if (data.diff_type === 'distribution' && data.values) {
         return (
             <ul className="list-none m-0 p-0 space-y-1">
-                {data.values.map((item: any, index: number) => {
+                {data.values.map((item: DistributionValue, index: number) => {
                     const launchRanges = item.launches
-                        .map((r: any) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
+                        .map((r: LaunchRange) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
                         .join(', ');
                     return (
                         <li key={index}>
@@ -30,6 +47,7 @@ const DistributionCell: React.FC<{ data: any }> = ({ data }) => {
 // Renders a single row in the ArgumentViewer table
 const ArgumentRow: React.FC<{
   argName: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- argData contains dynamic data from trace
   argData: any;
   isDiffViewer?: boolean;
 }> = ({ argName, argData, isDiffViewer = false }) => {
@@ -114,7 +132,7 @@ const ArgumentRow: React.FC<{
                                                 </span>
                                                 <div className="flex-1">
                                                     <DistributionCell
-                                                        data={value}
+                                                        data={value as DistributionData | null}
                                                     />
                                                 </div>
                                             </div>
@@ -241,7 +259,7 @@ const ArgumentRow: React.FC<{
     );
 };
 
-// Main container component
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- args contain dynamic data from trace
 const ArgumentViewer: React.FC<{ args: Record<string, any>; isDiffViewer?: boolean; }> = ({ args, isDiffViewer = false }) => {
     if (!args || Object.keys(args).length === 0) {
         return <div className="text-sm text-gray-500 p-2">No arguments to display.</div>;
@@ -260,7 +278,7 @@ const ArgumentViewer: React.FC<{ args: Record<string, any>; isDiffViewer?: boole
                     <div className="flex-1">Value</div>
                 </div>
             )}
-            
+
             {/* Rows */}
             <div>
                 {Object.entries(args).map(([argName, argData]) => (

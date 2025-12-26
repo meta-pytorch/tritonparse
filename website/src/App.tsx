@@ -94,7 +94,8 @@ function App() {
         }
       }
     });
-  }, []); // Empty dependency array means this runs once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- handleUrlSelected is stable but ESLint cannot verify it
+  }, []);
 
   /**
    * Generic data loading function that handles both URLs and local files

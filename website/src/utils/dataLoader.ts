@@ -325,8 +325,8 @@ function isGzipFile(buffer: ArrayBuffer): boolean {
  * @returns A promise that resolves to an array of LogEntry objects
  */
 async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promise<LogEntry[]> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const reader = (stream.pipeThrough(new TextDecoderStream()) as any).getReader();
+    // @ts-expect-error TextDecoderStream types are incompatible with pipeThrough in some TS versions
+    const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = '';
     const entries: LogEntry[] = [];
 

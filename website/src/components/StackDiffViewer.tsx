@@ -29,14 +29,6 @@ interface StackDistributionValue {
   launches: LaunchRange[];
 }
 
-/**
- * Stack diff with distribution type
- */
-interface StackDiff {
-  diff_type: string;
-  values: StackDistributionValue[];
-}
-
 // A single frame of a stack trace
 const StackTraceFrame: React.FC<{ frame: StackFrame }> = ({ frame }) => (
   <div className="font-mono text-xs break-all">
@@ -63,7 +55,8 @@ const StackTraceFrame: React.FC<{ frame: StackFrame }> = ({ frame }) => (
 );
 
 
-const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = ({ stackDiff }) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- stackDiff contains dynamic data from trace
+const StackDiffViewer: React.FC<{ stackDiff: any }> = ({ stackDiff }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   if (!stackDiff || stackDiff.diff_type !== 'distribution') {

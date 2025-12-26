@@ -194,10 +194,10 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       if (sessLeftLen === 0 && kernelsLeft.length > 0) {
         if (leftLoadedUrl) {
           sess.setLeftFromUrl(leftLoadedUrl, kernelsLeft);
-          
+
         } else {
           sess.setLeftFromLocal(kernelsLeft);
-          
+
         }
         sess.setLeftIdx(Math.max(0, leftIdx));
       }
@@ -651,5 +651,3 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
 };
 
 export default FileDiffView;
-
-

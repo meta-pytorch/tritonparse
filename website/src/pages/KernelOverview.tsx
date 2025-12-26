@@ -421,7 +421,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                 <h4 className="text-md font-semibold mb-2 text-gray-800">
                   Differing Fields
                 </h4>
-                <DiffViewer diffs={kernel.launchDiff.diffs} />
+                <DiffViewer diffs={(kernel.launchDiff.diffs ?? {}) as Record<string, unknown>} />
               </div>
             </div>
           </div>

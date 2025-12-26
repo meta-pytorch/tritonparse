@@ -17,6 +17,46 @@ interface DiffComparisonViewProps {
   options?: DiffOptions;
 }
 
+// Monaco editor types vary by version, so we need to use a loose type for the editor options
+interface MonacoEditorOptions {
+  readOnly: boolean;
+  renderSideBySide: boolean;
+  renderOverviewRuler: boolean;
+  renderIndicators: boolean;
+  diffWordWrap: "off" | "on";
+  wordWrap: "off" | "on" | "wordWrapColumn" | "bounded";
+  wordWrapOverride1: "off" | "on" | "inherit";
+  wordWrapOverride2: "off" | "on" | "inherit";
+  wordWrapMinified: boolean;
+  wrappingStrategy: "simple" | "advanced";
+  originalEditable: boolean;
+  ignoreTrimWhitespace: boolean;
+  hideUnchangedRegions?: { enabled: boolean; revealLineCount: number };
+  diffAlgorithm: "legacy" | "advanced";
+  scrollbar: { vertical: "auto" | "hidden" | "visible"; horizontal: "auto" | "hidden" | "visible"; horizontalScrollbarSize: number };
+  minimap: { enabled: boolean };
+  scrollBeyondLastLine: boolean;
+  automaticLayout: boolean;
+}
+
+// Monaco diff editor interface (minimal types for our usage)
+interface MonacoDiffEditor {
+  getOriginalEditor?: () => MonacoSubEditor | undefined;
+  getModifiedEditor?: () => MonacoSubEditor | undefined;
+  setModel?: (model: unknown) => void;
+  dispose?: () => void;
+  getDomNode?: () => HTMLElement | undefined;
+  onDidUpdateDiff?: (callback: () => void) => void;
+}
+
+interface MonacoSubEditor {
+  updateOptions?: (options: Record<string, unknown>) => void;
+  setModel?: (model: unknown) => void;
+  layout?: () => void;
+  onDidLayoutChange?: (callback: () => void) => void;
+  onDidChangeModel?: (callback: () => void) => void;
+}
+
 const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
   leftContent,
   rightContent,
@@ -32,7 +72,7 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
         }
       : undefined;
 
-    const opts = {
+    const opts: MonacoEditorOptions = {
       readOnly: true,
       renderSideBySide: true,
       renderOverviewRuler: true,
@@ -48,11 +88,11 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
       // Ensure even original (left) honors wrapping consistently
       originalEditable: false,
       ignoreTrimWhitespace: options?.ignoreWhitespace ?? true,
-      // @ts-ignore - monaco types may vary by version; it's safe to pass through
+      // Monaco types may vary by version; these options are valid at runtime
       hideUnchangedRegions: hideUnchanged,
-      // @ts-ignore - prefer advanced algorithm if available
+      // Prefer advanced algorithm if available
       diffAlgorithm: "advanced",
-      // @ts-ignore - hide horizontal scrollbar when wrapping
+      // Hide horizontal scrollbar when wrapping
       scrollbar: {
         vertical: 'auto',
         horizontal: 'hidden',
@@ -62,11 +102,11 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       automaticLayout: true,
-    } as any;
+    };
     return opts;
   }, [options]);
 
-  const editorRef = useRef<any>(null);
+  const editorRef = useRef<MonacoDiffEditor | null>(null);
 
   // Keep both panes in sync when options change
   useEffect(() => {
@@ -76,26 +116,30 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
       const wrap = options?.wordWrap ?? "on";
       const original = editor.getOriginalEditor?.();
       const modified = editor.getModifiedEditor?.();
-      const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', scrollbar: { horizontal: 'hidden', horizontalScrollbarSize: 0 } } as any;
+      const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', scrollbar: { horizontal: 'hidden', horizontalScrollbarSize: 0 } };
       original?.updateOptions?.(shared);
       modified?.updateOptions?.(shared);
-    } catch {}
+    } catch { /* Monaco may throw if editor is disposed */ }
   }, [options?.wordWrap]);
 
   // Ensure diff editor is fully disposed on unmount to avoid Monaco race conditions
   useEffect(() => {
     return () => {
       try {
-        const editor: any = editorRef.current;
+        const editor = editorRef.current;
         if (editor) {
-          try { editor.setModel?.(null); } catch {}
-          try { editor.getOriginalEditor?.()?.setModel?.(null); } catch {}
-          try { editor.getModifiedEditor?.()?.setModel?.(null); } catch {}
-          try { editor.dispose?.(); } catch {}
+          try { editor.setModel?.(null); } catch { /* ignore */ }
+          try { editor.getOriginalEditor?.()?.setModel?.(null); } catch { /* ignore */ }
+          try { editor.getModifiedEditor?.()?.setModel?.(null); } catch { /* ignore */ }
+          try { editor.dispose?.(); } catch { /* ignore */ }
         }
-      } catch {}
-      editorRef.current = null as any;
-      try { (window as any).__DIFF = undefined; } catch {}
+      } catch { /* ignore cleanup errors */ }
+      editorRef.current = null;
+      try {
+        // Clean up any global state
+        const win = window as { __DIFF?: unknown };
+        win.__DIFF = undefined;
+      } catch { /* ignore */ }
     };
   }, []);
 
@@ -105,7 +149,7 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
     if (typeof height === 'string') {
       const pxMatch = height.match(/(\d+)px$/);
       if (pxMatch) {
-        try { return parseInt(pxMatch[1], 10); } catch { /* ignore */ }
+        try { return parseInt(pxMatch[1], 10); } catch { /* fallthrough */ }
       }
 
       // Support calc(100vh - Xrem)
@@ -142,12 +186,12 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
         onMouseUp={() => {
           // Capture final height after drag (optional state sync)
           try {
-            const node = (editorRef.current as any)?.getDomNode?.();
-            if (node && (node as HTMLElement).parentElement) {
-              const h = (node as HTMLElement).parentElement!.clientHeight;
+            const node = editorRef.current?.getDomNode?.();
+            if (node?.parentElement) {
+              const h = node.parentElement.clientHeight;
               if (h > 0) setContainerHeight(h);
             }
-          } catch {}
+          } catch { /* ignore resize errors */ }
         }}
       >
       <DiffEditor
@@ -158,40 +202,42 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
         options={monacoOptions}
         theme="light"
         // Ensure both panes use the same wrapping and scrollbar behavior
-        onMount={(editor: any) => {
+        onMount={(editor) => {
           try {
-            editorRef.current = editor;
+            // Cast to our interface for type-safe access
+            const diffEditor = editor as unknown as MonacoDiffEditor;
+            editorRef.current = diffEditor;
 
-            const applyWrap = (_when: string) => {
+            const applyWrap = () => {
               try {
                 const wrap = options?.wordWrap ?? "on";
-                const original = editor.getOriginalEditor?.();
-                const modified = editor.getModifiedEditor?.();
-                const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', wrappingIndent: 'same', scrollbar: { horizontal: 'hidden', horizontalScrollbarSize: 0 } } as any;
+                const original = diffEditor.getOriginalEditor?.();
+                const modified = diffEditor.getModifiedEditor?.();
+                const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', wrappingIndent: 'same', scrollbar: { horizontal: 'hidden', horizontalScrollbarSize: 0 } };
                 original?.updateOptions?.(shared);
                 modified?.updateOptions?.(shared);
                 // Force layout after changing wrap
-                try { original?.layout?.(); } catch {}
-                try { modified?.layout?.(); } catch {}
-              } catch (e) {
+                try { original?.layout?.(); } catch { /* ignore */ }
+                try { modified?.layout?.(); } catch { /* ignore */ }
+              } catch {
                 // swallow errors
               }
             };
 
             // Apply at several timing points to avoid initialization overwrites
-            applyWrap('onMount immediate');
-            requestAnimationFrame(() => applyWrap('onMount rAF'));
-            setTimeout(() => applyWrap('onMount t=0'), 0);
-            setTimeout(() => applyWrap('onMount t=100'), 100);
-            setTimeout(() => applyWrap('onMount t=300'), 300);
+            applyWrap();
+            requestAnimationFrame(() => applyWrap());
+            setTimeout(() => applyWrap(), 0);
+            setTimeout(() => applyWrap(), 100);
+            setTimeout(() => applyWrap(), 300);
 
             // Re-apply on diff/layout/model changes
-            try { editor.onDidUpdateDiff?.(() => applyWrap('onDidUpdateDiff')); } catch {}
-            try { editor.getOriginalEditor?.()?.onDidLayoutChange?.(() => applyWrap('original onDidLayoutChange')); } catch {}
-            try { editor.getModifiedEditor?.()?.onDidLayoutChange?.(() => applyWrap('modified onDidLayoutChange')); } catch {}
-            try { editor.getOriginalEditor?.()?.onDidChangeModel?.(() => applyWrap('original onDidChangeModel')); } catch {}
-            try { editor.getModifiedEditor?.()?.onDidChangeModel?.(() => applyWrap('modified onDidChangeModel')); } catch {}
-          } catch (e) {
+            try { diffEditor.onDidUpdateDiff?.(() => applyWrap()); } catch { /* ignore */ }
+            try { diffEditor.getOriginalEditor?.()?.onDidLayoutChange?.(() => applyWrap()); } catch { /* ignore */ }
+            try { diffEditor.getModifiedEditor?.()?.onDidLayoutChange?.(() => applyWrap()); } catch { /* ignore */ }
+            try { diffEditor.getOriginalEditor?.()?.onDidChangeModel?.(() => applyWrap()); } catch { /* ignore */ }
+            try { diffEditor.getModifiedEditor?.()?.onDidChangeModel?.(() => applyWrap()); } catch { /* ignore */ }
+          } catch {
             // swallow errors
           }
         }}
@@ -203,5 +249,3 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
 };
 
 export default DiffComparisonView;
-
-

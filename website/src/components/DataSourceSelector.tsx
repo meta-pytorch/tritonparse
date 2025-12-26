@@ -45,7 +45,7 @@ const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({ onFileSelected,
       new URL(url);
       setError(null);
       onUrlSelected(url);
-    } catch (err) {
+    } catch {
       setError("Please enter a valid URL");
     }
   };
