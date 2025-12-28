@@ -32,26 +32,30 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   const getCount = (info: Record<string, number> | undefined, key: string): string => { return info?.[key]?.toString() ?? "N/A"; };
 
   // Helper function to get BlockPingpong category display info
-  const getCategoryDisplay = (category: string): { label: string; description: string } => {
+  const getCategoryDisplay = (category: string): { label: string; color: string; description: string } => {
     switch (category) {
       case "pingpong_small":
         return {
           label: "Small (1 PP Cluster)",
+          color: "bg-blue-100 text-blue-800 border-blue-200",
           description: "numWarps=4, uses setprio interleaving without cond_barrier"
         };
       case "pingpong_medium":
         return {
           label: "Medium (2 PP Clusters)",
+          color: "bg-green-100 text-green-800 border-green-200",
           description: "numWarps=8, uses amdgpu.cond_barrier with 2 dot operations"
         };
       case "pingpong_large":
         return {
           label: "Large (4 PP Clusters)",
+          color: "bg-purple-100 text-purple-800 border-purple-200",
           description: "numWarps=8, uses amdgpu.cond_barrier with 4 dot operations"
         };
       default:
         return {
           label: "None",
+          color: "bg-gray-100 text-gray-600 border-gray-200",
           description: "No BlockPingpong scheduling detected"
         };
     }
@@ -132,7 +136,7 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
                   {/* Category Badge */}
                   <div className="mb-4">
                     <span className="text-sm font-medium text-gray-600 mr-2">Category:</span>
-                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border">
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${getCategoryDisplay(blockpingpong.category).color}`}>
                       {getCategoryDisplay(blockpingpong.category).label}
                     </span>
                   </div>
