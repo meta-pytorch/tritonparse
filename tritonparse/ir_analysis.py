@@ -1,11 +1,259 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import logging
+import re
+from dataclasses import asdict, dataclass
+from enum import Enum
 
 from .sourcemap_utils import load_ir_contents
 
 
 logger = logging.getLogger("IRAnalysis")
+
+
+class BlockPingpongCategory(Enum):
+    """BlockPingpong scheduling categories based on numWarps and PP clusters.
+
+    Categories are derived from the MLIR test file:
+    https://github.com/triton-lang/triton/blob/main/test/TritonGPU/amd/amd-block-pingpong.mlir
+    """
+
+    # numWarps=4, 1 PP cluster - uses setprio interleaving without cond_barrier
+    PINGPONG_SMALL = "pingpong_small"
+
+    # numWarps=8, 2 PP clusters - uses amdgpu.cond_barrier with 2 dot ops
+    PINGPONG_MEDIUM = "pingpong_medium"
+
+    # numWarps=8, 4 PP clusters - uses amdgpu.cond_barrier with 4 dot ops
+    PINGPONG_LARGE = "pingpong_large"
+
+    # No BlockPingpong detected
+    NONE = "none"
+
+
+@dataclass
+class BlockPingpongResult:
+    """Result of BlockPingpong detection and categorization."""
+
+    category: BlockPingpongCategory = BlockPingpongCategory.NONE
+    detected: bool = False
+    num_warps: int | None = None
+    num_pp_clusters: int | None = None
+    cond_barrier_count: int = 0
+    setprio_count: int = 0
+    dot_count: int = 0
+
+
+def _count_dots_in_loop(lines: list[str]) -> int:
+    """
+    Count tt.dot operations within scf.for loops.
+
+    Args:
+        lines: List of lines from the TTGIR content.
+
+    Returns:
+        Number of tt.dot operations found within loops.
+    """
+    loop_nesting = 0
+    loop_dot_count = 0
+    for line in lines:
+        if "scf.for" in line:
+            loop_nesting += 1
+        elif "scf.yield" in line:
+            if loop_nesting > 0:
+                loop_nesting -= 1
+        elif loop_nesting > 0 and "tt.dot " in line:
+            loop_dot_count += 1
+    return loop_dot_count
+
+
+def _determine_category(
+    has_cond_barrier: bool,
+    setprio_count: int,
+    sched_barrier_count: int,
+    lines: list[str],
+    ttgir_content: str,
+) -> tuple[BlockPingpongCategory, int | None, bool]:
+    """
+    Determine the BlockPingpong category based on pattern analysis.
+
+    Args:
+        has_cond_barrier: Whether cond_barrier operations are present.
+        setprio_count: Number of setprio operations.
+        sched_barrier_count: Number of sched_barrier operations.
+        lines: List of lines from the TTGIR content.
+        ttgir_content: The full TTGIR content string.
+
+    Returns:
+        Tuple of (category, num_pp_clusters, detected).
+    """
+    # Check for pingpong_small pattern (numWarps=4, 1 PP cluster)
+    pingpong_small_pattern = [
+        "local_load",
+        "setprio",
+        "tt.load",
+        "rocdl.sched.barrier",
+        "local_load",
+        "setprio",
+        "tt.load",
+        "rocdl.sched.barrier",
+        "setprio",
+        "tt.dot",
+        "setprio",
+    ]
+
+    if has_cond_barrier:
+        # 2 or 4 PP clusters (numWarps=8)
+        if setprio_count > 0:
+            loop_dot_count = _count_dots_in_loop(lines)
+            if loop_dot_count >= 4:
+                return BlockPingpongCategory.PINGPONG_LARGE, 4, True
+            else:
+                return BlockPingpongCategory.PINGPONG_MEDIUM, 2, True
+        else:
+            # Handle the case where cond_barrier exists without setprio operations
+            return BlockPingpongCategory.NONE, 0, False
+    elif setprio_count > 0 and sched_barrier_count > 0:
+        # Check for pingpong_small pattern (1 PP cluster, numWarps=4)
+        if _check_ordered_pattern(ttgir_content, pingpong_small_pattern):
+            return BlockPingpongCategory.PINGPONG_SMALL, 1, True
+
+    return BlockPingpongCategory.NONE, None, False
+
+
+def detect_blockpingpong_category(ttgir_content: str) -> BlockPingpongResult:
+    """
+    Detect BlockPingpong scheduling category from TTGIR content.
+
+    The detection is based on ordered pattern matching derived from the MLIR CHECK
+    patterns in amd-block-pingpong.mlir.
+
+    Categories:
+    - pingpong_small (numWarps=4, 1 PP cluster):
+      Pattern: local_load → setprio 1 → tt.load → sched.barrier → local_load →
+               setprio 0 → tt.load → sched.barrier → setprio 1 → tt.dot → setprio 0
+
+    - pingpong_medium (numWarps=8, 2 PP clusters):
+      Pattern: amdgpu.cond_barrier + 2 dot operations with setprio interleaving
+
+    - pingpong_large (numWarps=8, 4 PP clusters):
+      Pattern: amdgpu.cond_barrier + 4 dot operations with setprio interleaving
+
+    Args:
+        ttgir_content: The TTGIR content as a string.
+
+    Returns:
+        BlockPingpongResult with detection details.
+    """
+    if not ttgir_content:
+        return BlockPingpongResult()
+
+    lines = ttgir_content.split("\n")
+
+    # Count key operations
+    cond_barrier_count = sum(1 for line in lines if "cond_barrier" in line)
+    setprio_count = sum(1 for line in lines if "rocdl.s.setprio" in line)
+    sched_barrier_count = sum(1 for line in lines if "rocdl.sched.barrier" in line)
+    dot_count = sum(1 for line in lines if "tt.dot " in line)
+
+    # Extract numWarps from module attributes if present
+    num_warps = None
+    for line in lines:
+        if '"triton_gpu.num-warps"' in line:
+            match = re.search(r'"triton_gpu.num-warps"\s*=\s*(\d+)', line)
+            if match:
+                num_warps = int(match.group(1))
+                break
+
+    # Check for cond_barrier presence (indicates 2 or 4 PP clusters)
+    has_cond_barrier = cond_barrier_count > 0
+
+    # Determine category based on pattern analysis
+    category, num_pp_clusters, detected = _determine_category(
+        has_cond_barrier,
+        setprio_count,
+        sched_barrier_count,
+        lines,
+        ttgir_content,
+    )
+
+    return BlockPingpongResult(
+        category=category,
+        detected=detected,
+        num_warps=num_warps,
+        num_pp_clusters=num_pp_clusters,
+        cond_barrier_count=cond_barrier_count,
+        setprio_count=setprio_count,
+        dot_count=dot_count,
+    )
+
+
+def _check_ordered_pattern(content: str, pattern: list[str]) -> bool:
+    """
+    Check if the content contains the pattern elements in order.
+
+    Args:
+        content: The content to search.
+        pattern: List of strings to find in order.
+
+    Returns:
+        True if all pattern elements are found in order.
+    """
+    pos = 0
+    for element in pattern:
+        idx = content.find(element, pos)
+        if idx == -1:
+            return False
+        pos = idx + len(element)
+    return True
+
+
+def _result_to_dict(result: BlockPingpongResult) -> dict[str, any]:
+    """
+    Convert a BlockPingpongResult to a dictionary with enum values converted.
+
+    Args:
+        result: The BlockPingpongResult instance.
+
+    Returns:
+        Dictionary representation with category as string value.
+    """
+    result_dict = asdict(result)
+    result_dict["category"] = result.category.value
+    return result_dict
+
+
+def find_blockpingpong_scheduling(
+    ttgir_key: str,
+    file_content: dict[str, str],
+    file_path: dict[str, str],
+) -> dict[str, any]:
+    """
+    Detect and categorize BlockPingpong scheduling from TTGIR content.
+
+    Args:
+        ttgir_key: Key for the TTGIR file.
+        file_content: Dictionary mapping file keys to content.
+        file_path: Dictionary mapping file keys to file paths.
+
+    Returns:
+        A dictionary containing:
+        - "detected": Whether BlockPingpong was detected
+        - "category": The BlockPingpong category name
+        - "num_warps": Number of warps (4 or 8)
+        - "num_pp_clusters": Number of PP clusters (1, 2, or 4)
+        - "cond_barrier_count": Number of cond_barrier operations
+        - "setprio_count": Number of setprio operations
+        - "dot_count": Number of dot operations
+    """
+    ttgir_content = load_ir_contents(ttgir_key, file_content, file_path)
+
+    if not ttgir_content:
+        return _result_to_dict(BlockPingpongResult())
+
+    result = detect_blockpingpong_category(ttgir_content)
+
+    return _result_to_dict(result)
 
 
 def process_amd_bufferop(ir_content: str, io_keys: list[str]) -> dict[str, int]:
@@ -424,4 +672,13 @@ def _generate_ir_analysis(entry: str):
         )
         if loop_schedule:
             ir_analysis["loop_schedules"] = loop_schedule
+
+    # Add BlockPingpong scheduling detection for AMD (only if TTGIR is available)
+    if ttgir_key:
+        blockpingpong_info = find_blockpingpong_scheduling(
+            ttgir_key, file_content, file_path
+        )
+        if blockpingpong_info:
+            ir_analysis["blockpingpong"] = blockpingpong_info
+
     return ir_analysis
