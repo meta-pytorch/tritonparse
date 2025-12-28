@@ -173,10 +173,34 @@ export interface CompilationMetadata {
     [key: string]: any; // Allow additional unknown fields
 }
 
+export interface PingpongOccurrence {
+    ttgir_line: number;
+    ttir_line: number | null;
+    python_line: number | null;
+    python_source: string | null;
+}
+
+export interface PingpongSchedulingData {
+    count: number;
+    occurrences: PingpongOccurrence[];
+}
+
+export interface BlockPingpongData {
+    detected: boolean;
+    category: string;
+    num_warps: number | null;
+    num_pp_clusters: number | null;
+    cond_barrier_count: number;
+    setprio_count: number;
+    dot_count: number;
+}
+
 export interface IRAnalysisData {
     // Mapping from IR stage -> <IO type -> count>
     io_counts?: Record<string, Record<string, number>>;
     loop_schedules?: [Record<string, [string]>];
+    pingpong_scheduling?: PingpongSchedulingData;
+    blockpingpong?: BlockPingpongData;
 }
 
 /**
@@ -240,6 +264,7 @@ export interface LogEntry {
     diffs?: LaunchDiffData;
     sames?: LaunchSamesData;
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    pingpong_analysis?: PingpongSchedulingData; // Pingpong scheduling analysis data
 }
 
 /**
@@ -256,6 +281,7 @@ export interface ProcessedKernel {
     metadata?: KernelMetadata; // Compilation metadata
     launchDiff?: LogEntry; // Aggregated launch event differences
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    pingpong_analysis?: PingpongSchedulingData; // Pingpong scheduling analysis data
 }
 
 /**
@@ -527,6 +553,15 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 kernel.ir_analysis = entry.ir_analysis!; // Attach the ir_analysis
             } else {
                 console.warn(`Could not find matching kernel for ir_analysis hash: ${hash}`);
+            }
+        }
+        if (entry.event_type === "pingpong_analysis") {
+            const hash = entry.hash;
+            if (hash && kernelsByHash.has(hash)) {
+                const kernel = kernelsByHash.get(hash)!;
+                kernel.pingpong_analysis = entry.pingpong_analysis!; // Attach the pingpong_analysis
+            } else {
+                console.warn(`Could not find matching kernel for pingpong_analysis hash: ${hash}`);
             }
         }
     }

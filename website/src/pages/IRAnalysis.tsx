@@ -28,7 +28,9 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   const ttgir_info = io_counts?.["amd_ttgir_bufferops_count"];
   const amdgcn_info = io_counts?.["amd_gcn_bufferops_count"];
   const loop_schedule = kernel.ir_analysis?.loop_schedules;
+  const blockpingpong = kernel.ir_analysis?.blockpingpong;
   const getCount = (info: Record<string, number> | undefined, key: string): string => { return info?.[key]?.toString() ?? "N/A"; };
+
 
   return (
     <div className="p-6">
@@ -88,6 +90,34 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
                   </>
                 )}
               </div>
+            </div>
+          </>
+        )}
+
+        {/* BlockPingpong Scheduling Section */}
+        {blockpingpong && (
+          <>
+            <h3 className="text-lg font-medium mb-3 text-gray-800">
+              BlockPingpong Scheduling Analysis
+            </h3>
+
+            <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-6">
+              {blockpingpong.detected ? (
+                <div className="grid grid-cols-[repeat(auto-fit,_minmax(150px,_1fr))] gap-3">
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium text-gray-500">Detected</span>
+                    <span className="font-mono text-sm">Yes</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium text-gray-500">Category</span>
+                    <span className="font-mono text-sm">{blockpingpong.category}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-gray-500 text-sm">
+                  No BlockPingpong scheduling detected.
+                </div>
+              )}
             </div>
           </>
         )}
