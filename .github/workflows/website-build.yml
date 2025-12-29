@@ -33,6 +33,10 @@ jobs:
         working-directory: ./website
         run: npm ci
 
+      - name: Run ESLint
+        working-directory: ./website
+        run: npm run lint
+
       - name: Build website
         working-directory: ./website
         run: npm run build
