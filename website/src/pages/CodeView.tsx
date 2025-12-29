@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useMemo } from "react";
 import { ProcessedKernel, getIRType } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
 import { getDisplayLanguage } from "../utils/irLanguage";
@@ -12,104 +12,50 @@ interface CodeViewProps {
   selectedKernel?: number; // Index of the currently selected kernel
 }
 
+/**
+ * Helper function to find default IR files for left and right panels
+ */
+function findDefaultIRFiles(irFiles: string[]): { left: string; right: string } {
+  let left = "";
+  let right = "";
+
+  const ttgirFile = irFiles.find(key => key.toLowerCase().includes("ttgir"));
+  if (ttgirFile) {
+    left = ttgirFile;
+  } else if (irFiles.length > 0) {
+    left = irFiles[0];
+  }
+
+  const ptxFile = irFiles.find(key => key.toLowerCase().includes("ptx"));
+  if (ptxFile) {
+    right = ptxFile;
+  } else if (irFiles.length > 1) {
+    right = irFiles[1];
+  } else if (irFiles.length === 1) {
+    right = irFiles[0];
+  }
+
+  return { left, right };
+}
 
 /**
- * CodeView component that shows a side-by-side comparison of different IR files
- * from the same kernel (typically TTGIR and PTX)
+ * Inner component that manages IR selection state
+ * This is keyed by selectedKernel in the parent, so it remounts when kernel changes
  */
-const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
+const CodeViewInner: React.FC<{
+  kernel: ProcessedKernel;
+  irFiles: string[];
+  defaultIRFiles: { left: string; right: string };
+}> = ({ kernel, irFiles, defaultIRFiles }) => {
   // States to track selected IR files for left and right panels
-  const [leftIR, setLeftIR] = useState<string>("");
-  const [rightIR, setRightIR] = useState<string>("");
+  // Initialize with defaults - component remounts when kernel changes
+  const [leftIR, setLeftIR] = useState<string>(defaultIRFiles.left);
+  const [rightIR, setRightIR] = useState<string>(defaultIRFiles.right);
 
   // State to track if Python source code should be shown
   const [showPythonSource, setShowPythonSource] = useState<boolean>(true);
 
-  // State to track the last selected kernel to detect changes
-  const [lastSelectedKernel, setLastSelectedKernel] = useState<number>(selectedKernel);
-
-  // Compute derived values (may be undefined if no valid kernel)
-  const kernel = kernels && kernels.length > 0 && selectedKernel >= 0
-    ? kernels[selectedKernel]
-    : undefined;
-  const irFiles = kernel ? Object.keys(kernel.irFiles) : [];
   const hasPythonSource = !!kernel?.pythonSourceInfo?.code;
-
-  // Reset selections when kernel changes
-  useEffect(() => {
-    if (selectedKernel !== lastSelectedKernel) {
-      setLeftIR("");
-      setRightIR("");
-      setLastSelectedKernel(selectedKernel);
-    }
-  }, [selectedKernel, lastSelectedKernel]);
-
-  // Set default IR files on initial render or when kernel changes
-  useEffect(() => {
-    // Skip if no valid kernel or both IR files are already selected
-    if (!kernel || (leftIR && rightIR)) {
-      return;
-    }
-
-    // Try to find TTGIR and PTX files as defaults
-    let defaultLeftIR = leftIR;
-    let defaultRightIR = rightIR;
-
-    // Only find defaults for empty selections
-    if (!defaultLeftIR) {
-      const ttgirFile = irFiles.find(key => key.toLowerCase().includes("ttgir"));
-      if (ttgirFile) {
-        defaultLeftIR = ttgirFile;
-      } else if (irFiles.length > 0) {
-        defaultLeftIR = irFiles[0];
-      }
-    }
-
-    if (!defaultRightIR) {
-      const ptxFile = irFiles.find(key => key.toLowerCase().includes("ptx"));
-      if (ptxFile) {
-        defaultRightIR = ptxFile;
-      } else if (irFiles.length > 1) {
-        defaultRightIR = irFiles[1];
-      } else if (irFiles.length === 1) {
-        defaultRightIR = irFiles[0];
-      }
-    }
-
-    if (!leftIR && defaultLeftIR) {
-      setLeftIR(defaultLeftIR);
-    }
-    if (!rightIR && defaultRightIR) {
-      setRightIR(defaultRightIR);
-    }
-  }, [kernel, irFiles, leftIR, rightIR]);
-
-  // Return a message if no kernel data is available
-  if (!kernel) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-gray-800">
-          No data available for code comparison
-        </div>
-      </div>
-    );
-  }
-
-  // Show message if no IR files are available
-  if (irFiles.length === 0) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <div className="bg-yellow-50 p-6 rounded-lg border border-yellow-200">
-          <h2 className="text-xl font-semibold text-yellow-800 mb-3">
-            No IR Files Available
-          </h2>
-          <p className="text-yellow-700">
-            No IR files found for this kernel. Please select a different kernel.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="p-6">
@@ -258,6 +204,67 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
         </div>
       )}
     </div>
+  );
+};
+
+/**
+ * CodeView component that shows a side-by-side comparison of different IR files
+ * from the same kernel (typically TTGIR and PTX)
+ */
+const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
+  // Compute derived values (may be undefined if no valid kernel)
+  const kernel = kernels && kernels.length > 0 && selectedKernel >= 0
+    ? kernels[selectedKernel]
+    : undefined;
+
+  // Memoize irFiles to ensure stable reference for dependency arrays
+  const irFiles = useMemo(
+    () => (kernel ? Object.keys(kernel.irFiles) : []),
+    [kernel]
+  );
+
+  // Compute default IR files
+  const defaultIRFiles = useMemo(() => {
+    if (irFiles.length === 0) return { left: "", right: "" };
+    return findDefaultIRFiles(irFiles);
+  }, [irFiles]);
+
+  // Return a message if no kernel data is available
+  if (!kernel) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-gray-800">
+          No data available for code comparison
+        </div>
+      </div>
+    );
+  }
+
+  // Show message if no IR files are available
+  if (irFiles.length === 0) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="bg-yellow-50 p-6 rounded-lg border border-yellow-200">
+          <h2 className="text-xl font-semibold text-yellow-800 mb-3">
+            No IR Files Available
+          </h2>
+          <p className="text-yellow-700">
+            No IR files found for this kernel. Please select a different kernel.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Use key prop to force remount when kernel changes
+  // This avoids calling setState in useEffect
+  return (
+    <CodeViewInner
+      key={`kernel-${selectedKernel}`}
+      kernel={kernel}
+      irFiles={irFiles}
+      defaultIRFiles={defaultIRFiles}
+    />
   );
 };
 

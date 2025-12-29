@@ -162,6 +162,7 @@ interface CodeViewerProps {
 
 /**
  * Maps our internal language names to syntax highlighter languages
+ * Note: Exported for use by other components.
  * @param language Internal language identifier
  * @returns Syntax highlighter language identifier
  */
@@ -199,7 +200,7 @@ const splitIntoLines = (code: string): string[] => {
  * @param wait The number of milliseconds to delay
  * @returns Debounced function
  */
-function debounce<T extends (...args: any[]) => any>(
+function debounce<T extends (...args: unknown[]) => unknown>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {
@@ -234,7 +235,7 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
     if (onLineClick) {
       onLineClick(lineNumber);
     }
-  }, [onLineClick, viewerId]);
+  }, [onLineClick]);
 
   // Initial scroll effect - use scrollIntoView for accuracy
   useEffect(() => {
@@ -439,14 +440,22 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
     });
   }, [lines.length, lineHeight]);
 
-  // Create a debounced version of the update function for scroll events
-  const debouncedUpdate = useRef(debounce(updateVisibleLines, 10)).current;
+  // Create a debounced version of the update function inside useEffect
+  // This avoids the refs-during-render warning
+  const debouncedUpdateRef = useRef<((...args: unknown[]) => void) | null>(null);
+
+  // Initialize the debounced function in useEffect
+  useEffect(() => {
+    debouncedUpdateRef.current = debounce(updateVisibleLines, 10);
+  }, [updateVisibleLines]);
 
   // Combined scroll handler that updates visible range and saves position
   const handleScroll = useCallback(() => {
     saveScrollPosition();
-    debouncedUpdate();
-  }, [debouncedUpdate, saveScrollPosition]);
+    if (debouncedUpdateRef.current) {
+      debouncedUpdateRef.current();
+    }
+  }, [saveScrollPosition]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -470,7 +479,7 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
     if (onLineClick) {
       onLineClick(lineNumber);
     }
-  }, [onLineClick, viewerId]);
+  }, [onLineClick]);
 
   // Map the language to the appropriate highlighter language
   const highlighterLanguage = mapLanguageToHighlighter(language);

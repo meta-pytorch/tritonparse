@@ -63,6 +63,7 @@ const StackTraceFrame: React.FC<{ frame: StackFrame }> = ({ frame }) => (
 );
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- stackDiff contains dynamic data from trace
 const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = ({ stackDiff }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
 

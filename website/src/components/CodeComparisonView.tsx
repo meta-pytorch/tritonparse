@@ -319,39 +319,44 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
     /**
      * Handle line click in left or right panel
-     * Calculates all required highlights in one go, then updates state once
      * @param lineNumber Line number clicked
-     * @param panel Which panel was clicked ('left' or 'right')
+     * @param panelType 'left' or 'right'
      */
     const handlePanelLineClick = useCallback(
-        (lineNumber: number, panel: 'left' | 'right') => {
-            const isLeftPanel = panel === 'left';
+        (lineNumber: number, panelType: 'left' | 'right') => {
+            const isLeftPanel = panelType === 'left';
+            const sourcePanel = isLeftPanel ? leftPanel_data : rightPanel_data;
+            const targetPanel = isLeftPanel ? rightPanel_data : leftPanel_data;
+            const sourceMapping = sourcePanel.sourceMapping;
 
-            // Get source and target panel data
-            const sourceData = isLeftPanel ? leftPanel_data : rightPanel_data;
-            const targetData = isLeftPanel ? rightPanel_data : leftPanel_data;
+            // Validate source mapping exists
+            if (!sourceMapping || !sourceMapping[lineNumber]) {
+                // Just highlight the clicked line, clear others
+                updateHighlights(panelType, [lineNumber]);
+                updateHighlights(isLeftPanel ? 'right' : 'left', []);
+                updateHighlights('python', []);
+                return;
+            }
 
-            // Step 1: Calculate target panel's mapped lines
+            // Find corresponding lines in target panel
             const targetLines = calculateMappedLines(
-                sourceData.sourceMapping,
+                sourceMapping,
                 lineNumber,
-                targetData.title
+                targetPanel.title
             );
 
-            // Step 2: Calculate Python panel's mapped lines
-            const pythonLines = showPythonSource && py_code_info
-                ? calculatePythonLines(
-                    sourceData.sourceMapping,
-                    lineNumber,
-                    pythonInfo
-                )
-                : [];
+            // Calculate Python lines if needed
+            let pythonLines: number[] = [];
+            if (showPythonSource && py_code_info?.code) {
+                pythonLines = calculatePythonLines(sourceMapping, lineNumber, pythonInfo);
+            }
 
             // Step 3: Update highlights via direct DOM manipulation (no re-render)
             updateHighlights('left', isLeftPanel ? [lineNumber] : targetLines);
             updateHighlights('right', isLeftPanel ? targetLines : [lineNumber]);
             updateHighlights('python', pythonLines);
         },
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHighlights is stable via refs
         [
             leftPanel_data,
             rightPanel_data,
@@ -403,6 +408,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             updateHighlights('right', rightLines);
             updateHighlights('python', [lineNumber]);
         },
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHighlights is stable via refs
         [
             pythonMapping,
             pythonInfo,
