@@ -38,7 +38,7 @@ const TritonIRs: React.FC<TritonIRsProps> = ({ irFiles, onViewIR }) => {
     <div className="bg-white rounded-lg p-4 mb-4 shadow-sm border border-gray-200">
       <h2 className="text-xl font-semibold mb-4 text-gray-800">Triton IRs</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {Object.entries(irFiles).map(([irType, _]) => (
+        {Object.keys(irFiles).map((irType) => (
           <div
             key={irType}
             className="bg-gray-50 rounded p-4 border border-gray-200 hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-colors"
