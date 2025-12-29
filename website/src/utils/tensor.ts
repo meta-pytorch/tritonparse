@@ -23,6 +23,7 @@ export interface TensorMetadata {
     /** Storage offset value (if surfaced) */
     storage_offset?: number;
     /** Allow unknown additional tensor attributes without breaking type checks */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     [key: string]: any;
 }
 
@@ -30,9 +31,11 @@ export interface TensorMetadata {
  * Determines whether an extracted argument represents a tensor.
  * Only checks for a string type equal to 'tensor' (case-insensitive).
  */
-export function isTensorArg(arg: any): boolean {
-    if (!arg || typeof arg.type !== 'string') return false;
-    return arg.type.trim().toLowerCase() === 'tensor';
+export function isTensorArg(arg: unknown): boolean {
+    if (!arg || typeof arg !== 'object') return false;
+    const argObj = arg as Record<string, unknown>;
+    if (typeof argObj.type !== 'string') return false;
+    return argObj.type.trim().toLowerCase() === 'tensor';
 }
 
 /**
@@ -41,9 +44,11 @@ export function isTensorArg(arg: any): boolean {
  * 2) The `value` field when present (nested)
  * The first defined occurrence of a field wins.
  */
-export function extractTensorMetadata(arg: any): TensorMetadata {
+export function extractTensorMetadata(arg: unknown): TensorMetadata {
     const meta: TensorMetadata = {};
-    const sources = [arg ?? {}, arg?.value ?? {}];
+    const argObj = (arg ?? {}) as Record<string, unknown>;
+    const valueObj = ((argObj?.value as Record<string, unknown>) ?? {}) as Record<string, unknown>;
+    const sources = [argObj, valueObj];
 
     // Safe lookup of a property across multiple source objects
     const pick = (key: string) => {
@@ -72,6 +77,7 @@ export function extractTensorMetadata(arg: any): TensorMetadata {
 
     for (const [targetKey, sourceKey] of keyMap) {
         const value = pick(sourceKey);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (value !== undefined) (meta as any)[targetKey] = value;
     }
 
@@ -85,11 +91,11 @@ export function extractTensorMetadata(arg: any): TensorMetadata {
 export function formatTensorSummary(meta: TensorMetadata): string {
     const parts: string[] = [];
 
-    const render = (value: any): string => Array.isArray(value)
+    const render = (value: unknown): string => Array.isArray(value)
         ? `[${value.join(', ')}]`
         : String(value);
 
-    const add = (label: string, value: any) => {
+    const add = (label: string, value: unknown) => {
         if (value !== undefined) parts.push(`${label}: ${render(value)}`);
     };
 

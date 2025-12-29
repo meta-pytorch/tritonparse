@@ -7,6 +7,7 @@
  * Safely imports a module by path, returning null if it doesn't exist
  * Uses string concatenation to bypass static analysis while maintaining proper path resolution
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function safeImport(modulePath: string): Promise<any | null> {
   try {
     // Adjust path to account for safeImport.ts being in the utils directory
