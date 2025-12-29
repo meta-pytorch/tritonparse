@@ -1,7 +1,7 @@
 {
   "name": "tritonparse-website",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,7 @@
     "prismjs": "^1.30.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "react-resizable-panels": "^4.0.15",
+    "react-resizable-panels": "^4.1.0",
     "react-syntax-highlighter": "^16.1.0",
     "react-window": "^2.2.3"
   },
@@ -36,7 +36,7 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.50.1",
+    "typescript-eslint": "^8.51.0",
     "vite": "^7.3.0"
   }
 }
