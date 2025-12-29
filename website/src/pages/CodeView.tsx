@@ -28,27 +28,16 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
   // State to track the last selected kernel to detect changes
   const [lastSelectedKernel, setLastSelectedKernel] = useState<number>(selectedKernel);
 
-  // Return a message if no kernel data is available
-  if (!kernels || kernels.length === 0 || selectedKernel < 0) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-gray-800">
-          No data available for code comparison
-        </div>
-      </div>
-    );
-  }
-
-  const kernel = kernels[selectedKernel];
-  const irFiles = Object.keys(kernel.irFiles);
-
-  // Check if Python source is available
-  const hasPythonSource = !!kernel.pythonSourceInfo?.code;
+  // Compute derived values (may be undefined if no valid kernel)
+  const kernel = kernels && kernels.length > 0 && selectedKernel >= 0
+    ? kernels[selectedKernel]
+    : undefined;
+  const irFiles = kernel ? Object.keys(kernel.irFiles) : [];
+  const hasPythonSource = !!kernel?.pythonSourceInfo?.code;
 
   // Reset selections when kernel changes
   useEffect(() => {
     if (selectedKernel !== lastSelectedKernel) {
-      // Only reset when switching between different kernels
       setLeftIR("");
       setRightIR("");
       setLastSelectedKernel(selectedKernel);
@@ -57,8 +46,8 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
 
   // Set default IR files on initial render or when kernel changes
   useEffect(() => {
-    // Skip setting defaults if both IR files are already selected
-    if (leftIR && rightIR) {
+    // Skip if no valid kernel or both IR files are already selected
+    if (!kernel || (leftIR && rightIR)) {
       return;
     }
 
@@ -68,7 +57,6 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
 
     // Only find defaults for empty selections
     if (!defaultLeftIR) {
-      // Look for TTGIR first
       const ttgirFile = irFiles.find(key => key.toLowerCase().includes("ttgir"));
       if (ttgirFile) {
         defaultLeftIR = ttgirFile;
@@ -78,25 +66,34 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
     }
 
     if (!defaultRightIR) {
-      // Look for PTX first
       const ptxFile = irFiles.find(key => key.toLowerCase().includes("ptx"));
       if (ptxFile) {
         defaultRightIR = ptxFile;
       } else if (irFiles.length > 1) {
         defaultRightIR = irFiles[1];
       } else if (irFiles.length === 1) {
-        defaultRightIR = irFiles[0]; // Use the same file if only one exists
+        defaultRightIR = irFiles[0];
       }
     }
 
-    // Only set state if needed
     if (!leftIR && defaultLeftIR) {
       setLeftIR(defaultLeftIR);
     }
     if (!rightIR && defaultRightIR) {
       setRightIR(defaultRightIR);
     }
-  }, [irFiles, leftIR, rightIR]);
+  }, [kernel, irFiles, leftIR, rightIR]);
+
+  // Return a message if no kernel data is available
+  if (!kernel) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-gray-800">
+          No data available for code comparison
+        </div>
+      </div>
+    );
+  }
 
   // Show message if no IR files are available
   if (irFiles.length === 0) {
