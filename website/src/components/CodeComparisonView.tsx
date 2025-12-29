@@ -271,10 +271,11 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     /**
      * Pure function: Calculate Python lines from IR source mapping
      * No external dependencies - all info passed via parameters
+     * Now returns absolute line numbers directly since Python panel displays with startingLineNumber
      * @param sourceMapping Source mapping record
      * @param lineNumber Line number in IR
      * @param pythonInfo Python file information
-     * @returns Array of Python line numbers
+     * @returns Array of Python line numbers (absolute)
      */
     const calculatePythonLines = useCallback(
         (
@@ -293,21 +294,18 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             const absoluteLine = Number(mapping.line);
 
-            if (pythonInfo.isFullFileMode) {
-                // Full file mode: use absolute line numbers directly
+            // Since Python panel now displays with startingLineNumber=start_line,
+            // we return absolute line numbers directly for both modes
+            const pythonLines = pythonInfo.code.split("\n");
+            const codeEndLine = pythonInfo.start_line + pythonLines.length - 1;
+
+            // Validate the line is within the displayed code range
+            if (absoluteLine >= pythonInfo.start_line && absoluteLine <= codeEndLine) {
                 return [absoluteLine];
             } else {
-                // Function mode: convert absolute to relative line numbers
-                const adjustedLine = absoluteLine - pythonInfo.start_line + 1;
-                const pythonLines = pythonInfo.code.split("\n");
-
-                if (adjustedLine >= 1 && adjustedLine <= pythonLines.length) {
-                    return [adjustedLine];
-                } else {
-                    console.error(
-                        `Adjusted line ${adjustedLine} is out of range (1-${pythonLines.length})`
-                    );
-                }
+                console.error(
+                    `Line ${absoluteLine} is out of range (${pythonInfo.start_line}-${codeEndLine})`
+                );
             }
 
             return [];
@@ -371,7 +369,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     /**
      * Handle line click in Python panel
      * Finds corresponding lines in both IR panels
-     * @param lineNumber Line number clicked in Python panel
+     * @param lineNumber Line number clicked in Python panel (now absolute line number)
      */
     const handlePythonLineClick = useCallback(
         (lineNumber: number) => {
@@ -383,12 +381,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 return;
             }
 
-            // Convert display line number to absolute line number
-            const absoluteLineNumber = pythonInfo.isFullFileMode
-                ? lineNumber
-                : lineNumber + pythonInfo.start_line - 1;
-
-            const mapping = pythonMapping[absoluteLineNumber.toString()];
+            // lineNumber is now the absolute line number since Python panel uses startingLineNumber
+            const mapping = pythonMapping[lineNumber.toString()];
             if (!mapping) {
                 // No mapping for this line: highlight clicked Python line, clear IR panels
                 updateHighlights('left', []);
@@ -399,15 +393,15 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             // Find corresponding lines in left panel
             const leftLines = calculateMappedLines(
-                { [absoluteLineNumber.toString()]: mapping },
-                absoluteLineNumber,
+                { [lineNumber.toString()]: mapping },
+                lineNumber,
                 leftPanel_data.title
             );
 
             // Find corresponding lines in right panel
             const rightLines = calculateMappedLines(
-                { [absoluteLineNumber.toString()]: mapping },
-                absoluteLineNumber,
+                { [lineNumber.toString()]: mapping },
+                lineNumber,
                 rightPanel_data.title
             );
 
@@ -419,7 +413,6 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHighlights is stable via refs
         [
             pythonMapping,
-            pythonInfo,
             calculateMappedLines,
             leftPanel_data.title,
             rightPanel_data.title,
@@ -553,7 +546,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                                 </div>
                             </div>
                             <div style={{ flex: 1, overflow: "hidden" }}>
-                                <CodeViewer
+                            <CodeViewer
                                     code={pythonInfo.code}
                                     language="python"
                                     height="100%"
@@ -561,12 +554,13 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                                     onLineClick={handlePythonLineClick}
                                     viewerId="python"
                                     sourceMapping={pythonMapping}
+                                    startingLineNumber={pythonInfo.start_line}
                                     functionStartLine={pythonInfo.function_start_line}
                                     functionEndLine={pythonInfo.function_end_line}
                                     initialScrollToLine={
                                         pythonInfo.isFullFileMode
                                             ? pythonInfo.function_start_line
-                                            : undefined
+                                            : pythonInfo.start_line
                                     }
                                 />
                             </div>

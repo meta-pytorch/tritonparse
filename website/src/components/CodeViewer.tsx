@@ -158,6 +158,7 @@ interface CodeViewerProps {
   functionEndLine?: number; // Function definition end line (for highlighting in full file mode)
   initialScrollToLine?: number; // Line number to scroll to on initial render
   onScrollComplete?: () => void; // Callback fired when initial scroll completes
+  startingLineNumber?: number; // Starting line number for display (default: 1)
 }
 
 /**
@@ -586,6 +587,7 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
   onScrollComplete,
   functionStartLine,
   functionEndLine,
+  startingLineNumber = 1,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
@@ -645,8 +647,12 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
         language={highlighterLanguage}
         style={theme === "light" ? oneLight : oneDark}
         showLineNumbers
+        startingLineNumber={startingLineNumber}
         wrapLines
         lineProps={(lineNumber) => {
+          // lineNumber from SyntaxHighlighter already includes startingLineNumber offset
+          // so it represents the actual/absolute line number to display and use
+
           // Check if line is in function range
           const isInFunctionRange =
             functionStartLine !== undefined &&
