@@ -122,6 +122,9 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       // store temporarily in dataset
       (window as any).__TRITONPARSE_rightHash = rightHash;
     }
+    // Note: leftLoadedUrl is intentionally omitted - we only read URL params on mount
+    // and when kernelsLeft changes, not when the prop changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kernelsLeft]);
 
   // Load left URL when set (internal to FileDiffView)
@@ -149,6 +152,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     if (leftLoadedUrlLocal) {
       loadLeft(leftLoadedUrlLocal);
     }
+    // Note: sess is stable (from context) and doesn't need to trigger re-runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leftLoadedUrlLocal]);
 
   // Load right URL when set
@@ -176,6 +181,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     if (rightLoadedUrl) {
       loadRight(rightLoadedUrl);
     }
+    // Note: sess is stable (from context) and doesn't need to trigger re-runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rightLoadedUrl]);
 
   // Hydrate session left from App props when coming from homepage/top bar load (including local file)
