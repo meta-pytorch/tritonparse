@@ -376,6 +376,10 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     const handlePythonLineClick = useCallback(
         (lineNumber: number) => {
             if (!pythonMapping) {
+                // No mapping available: highlight clicked Python line, clear IR panels
+                updateHighlights('left', []);
+                updateHighlights('right', []);
+                updateHighlights('python', [lineNumber]);
                 return;
             }
 
@@ -386,6 +390,10 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             const mapping = pythonMapping[absoluteLineNumber.toString()];
             if (!mapping) {
+                // No mapping for this line: highlight clicked Python line, clear IR panels
+                updateHighlights('left', []);
+                updateHighlights('right', []);
+                updateHighlights('python', [lineNumber]);
                 return;
             }
 
@@ -414,7 +422,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             pythonInfo,
             calculateMappedLines,
             leftPanel_data.title,
-            rightPanel_data.title
+            rightPanel_data.title,
+            updateHighlights
         ]
     );
 
