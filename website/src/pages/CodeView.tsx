@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { ProcessedKernel, getIRType } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
-import { getDisplayLanguage } from "../components/TritonIRs";
+import { getDisplayLanguage } from "../utils/irLanguage";
 import { mapLanguageToHighlighter } from "../components/CodeViewer";
 
 /**

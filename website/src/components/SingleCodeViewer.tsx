@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import CodeViewer from "./CodeViewer";
 import { IRFile } from "../utils/dataLoader";
-import { getDisplayLanguage } from "./TritonIRs";
+import { getDisplayLanguage } from "../utils/irLanguage";
 import CopyCodeButton from "./CopyCodeButton";
 
 /**
