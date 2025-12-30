@@ -22,8 +22,9 @@ from tritonparse.reproducer.consolidated_result import AnalysisStats, Consolidat
 from tritonparse.reproducer.import_info import ImportInfo
 from tritonparse.reproducer.import_parser import ImportParser
 from tritonparse.reproducer.import_resolver import ImportResolver
+from tritonparse.tp_logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("multi_file_analyzer")
 
 
 def _auto_detect_code_root(entry_file: str) -> str:

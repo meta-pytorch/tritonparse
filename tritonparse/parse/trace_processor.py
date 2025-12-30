@@ -2,10 +2,11 @@
 
 import gzip
 import json
-import logging
 import os
 from collections import defaultdict
 from typing import Any, Dict, List
+
+from tritonparse.tp_logger import get_logger
 
 from .event_diff import _generate_launch_diff
 from .ir_analysis import _generate_ir_analysis
@@ -17,7 +18,7 @@ from .ir_parser import (
 from .mapper import create_bidirectional_mapping, create_python_mapping
 from .sourcemap_utils import get_file_extension, load_ir_contents
 
-logger = logging.getLogger("SourceMapping")
+logger = get_logger("SourceMapping")
 
 
 def generate_source_mappings(
