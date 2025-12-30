@@ -1,12 +1,13 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import logging
 import os
 import re
 from collections import defaultdict
 from typing import Any, Dict, List
 
-logger = logging.getLogger("SourceMapping")
+from tritonparse.tp_logger import get_logger
+
+logger = get_logger("SourceMapping")
 
 # the definition of the #loc directive. they are in the bottom of the IR files
 # Example:#loc2 = loc("/tmp/torchinductor_yhao/yp/abcdef.py":20:28)

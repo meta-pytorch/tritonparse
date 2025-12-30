@@ -1,11 +1,11 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Tuple
 
+from tritonparse.tp_logger import get_logger
 
-logger = logging.getLogger("SourceMapping")
+logger = get_logger("SourceMapping")
 
 
 def create_python_mapping(

@@ -1,14 +1,14 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import logging
 import re
 from dataclasses import asdict, dataclass
 from enum import Enum
 
+from tritonparse.tp_logger import get_logger
+
 from .sourcemap_utils import load_ir_contents
 
-
-logger = logging.getLogger("IRAnalysis")
+logger = get_logger("IRAnalysis")
 
 
 class BlockPingpongCategory(Enum):

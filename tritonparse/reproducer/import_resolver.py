@@ -1,7 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 """
-ImportResolver: Resolves Python import statements to file paths.
+Import resolver module for Python static analysis.
 
 This module provides functionality to resolve import statements to their
 corresponding file paths using Python's importlib system, without actually
@@ -9,11 +9,12 @@ importing the modules (no side effects).
 """
 
 import importlib.util
-import logging
 import sys
 from importlib.machinery import ModuleSpec
 
-logger = logging.getLogger(__name__)
+from tritonparse.tp_logger import get_logger
+
+logger = get_logger("import_resolver")
 
 
 class ImportResolver:

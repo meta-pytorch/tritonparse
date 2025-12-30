@@ -1,9 +1,10 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import logging
 from typing import Any, Dict, List
 
-logger = logging.getLogger("SourceMapping")
+from tritonparse.tp_logger import get_logger
+
+logger = get_logger("SourceMapping")
 
 
 def get_file_extension(filename: str) -> str:
