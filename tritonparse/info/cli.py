@@ -11,13 +11,13 @@ import argparse
 import tempfile
 from typing import Any, Dict, Optional
 
-from tritonparse.common import is_fbcode
 from tritonparse.info.kernel_query import (
     find_similar_kernels,
     list_kernels_fast,
     list_launches_for_kernel,
 )
 from tritonparse.info.parse_helper import parse_and_compress_raw_log
+from tritonparse.shared_vars import is_fbcode
 from tritonparse.tools.prettify_ndjson import load_ndjson
 
 

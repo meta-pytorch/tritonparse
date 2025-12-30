@@ -22,14 +22,15 @@ import torch._inductor.config as inductor_config
 import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
 import tritonparse.context_manager
+import tritonparse.parse.utils
 import tritonparse.reproducer.orchestrator
 import tritonparse.structured_logging
-import tritonparse.utils
 from triton import knobs  # @manual=//triton:triton
 from triton.compiler import ASTSource, IRSource  # @manual=//triton:triton
 from triton.knobs import CompileTimes  # @manual=//triton:triton
-from tritonparse.common import is_fbcode
-from tritonparse.shared_vars import TEST_KEEP_OUTPUT
+from tritonparse.parse.ir_parser import extract_loc_definitions
+from tritonparse.parse.trace_processor import generate_source_mappings
+from tritonparse.shared_vars import is_fbcode, TEST_KEEP_OUTPUT
 from tritonparse.structured_logging import convert, extract_python_source_info
 from tritonparse.tools.disasm import is_nvdisasm_available
 
@@ -162,8 +163,6 @@ class TestTritonparseCPU(unittest.TestCase):
 
     def test_callsite_parsing(self):
         """Test parsing of callsite locations in TTIR/TTGIR"""
-        from tritonparse.ir_parser import extract_loc_definitions
-        from tritonparse.trace_processor import generate_source_mappings
 
         # Test MLIR callsite location definitions
         ir_with_callsite = """
@@ -267,7 +266,6 @@ module {
 
     def test_loc_alias_parsing(self):
         """Test parsing of location aliases in TTIR/TTGIR"""
-        from tritonparse.ir_parser import extract_loc_definitions
 
         # Test case 1: Bare #loc reference (no number)
         ir_with_bare_loc = """
@@ -1001,7 +999,7 @@ class TestTritonparseCUDA(unittest.TestCase):
         )
 
         # Test parsing functionality
-        tritonparse.utils.unified_parse(
+        tritonparse.parse.utils.unified_parse(
             source=temp_dir_logs, out=temp_dir_parsed, overwrite=True
         )
         try:
@@ -1519,7 +1517,7 @@ class TestTritonparseCUDA(unittest.TestCase):
             print("All kernels executed.")
 
             # Use unified_parse to process the generated logs
-            tritonparse.utils.unified_parse(
+            tritonparse.parse.utils.unified_parse(
                 source=log_path, out=parsed_output_path, overwrite=True
             )
 

@@ -60,7 +60,7 @@ pip install triton
 
 ```python
 import tritonparse.structured_logging
-import tritonparse.utils
+import tritonparse.parse.utils
 
 # Initialize logging with full tracing options
 tritonparse.structured_logging.init(
@@ -73,7 +73,7 @@ tritonparse.structured_logging.init(
 # ... your kernels ...
 
 # Parse and generate trace files
-tritonparse.utils.unified_parse("./logs/", out="./parsed_output")
+tritonparse.parse.utils.unified_parse("./logs/", out="./parsed_output")
 ```
 
 > **💡 Note**: `enable_trace_launch=True` automatically enables tracing for both native Triton kernels (`@triton.jit`) and `torch.compile` / TorchInductor kernels.
