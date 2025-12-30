@@ -6,9 +6,10 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from tritonparse.shared_vars import is_fbcode
+
 from .common import (
     copy_local_to_tmpdir,
-    is_fbcode,
     parse_logs,
     print_parsed_files_summary,
     RankConfig,

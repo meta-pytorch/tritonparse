@@ -3,11 +3,11 @@
 import argparse
 from importlib.metadata import PackageNotFoundError, version
 
-from .common import is_fbcode
 from .info.cli import _add_info_args, info_command
+from .parse.utils import _add_parse_args, unified_parse
 from .reproducer.cli import _add_reproducer_args
 from .reproducer.orchestrator import reproduce
-from .utils import _add_parse_args, unified_parse
+from .shared_vars import is_fbcode
 
 
 def _get_package_version() -> str:

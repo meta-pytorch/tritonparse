@@ -12,8 +12,8 @@ import os
 import torch
 import triton
 import triton.language as tl
+import tritonparse.parse.utils
 import tritonparse.structured_logging
-import tritonparse.utils
 
 log_path = "./logs"
 tritonparse.structured_logging.init(log_path, enable_trace_launch=True)
@@ -75,6 +75,6 @@ def test_tensor_add():
 if __name__ == "__main__":
     test_tensor_add()
     # Use improved unified_parse with explicit output directory
-    tritonparse.utils.unified_parse(
+    tritonparse.parse.utils.unified_parse(
         source=log_path, out="./parsed_output", overwrite=True
     )

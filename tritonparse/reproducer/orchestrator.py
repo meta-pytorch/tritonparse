@@ -3,7 +3,6 @@
 from pathlib import Path
 from typing import Optional
 
-from tritonparse.common import is_fbcode
 from tritonparse.info.kernel_query import find_launch_index_by_kernel
 from tritonparse.reproducer.ingestion.ndjson import build_context_bundle
 from tritonparse.reproducer.placeholder_replacer import (
@@ -13,6 +12,7 @@ from tritonparse.reproducer.placeholder_replacer import (
 from tritonparse.reproducer.templates.loader import load_template_code
 from tritonparse.reproducer.types import KernelImportMode
 from tritonparse.reproducer.utils import determine_output_paths, format_python_code
+from tritonparse.shared_vars import is_fbcode
 from tritonparse.tools.prettify_ndjson import load_ndjson, save_prettified_json
 from tritonparse.tp_logger import logger
 
