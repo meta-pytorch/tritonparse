@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { ChevronRightIcon } from './icons';
 
 /**
  * Stack frame in a stack trace
@@ -78,16 +79,10 @@ const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = (
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
         Stack Traces
-        {/* Dropdown arrow icon */}
-        <svg
+        <ChevronRightIcon
           className={`w-4 h-4 ml-2 transform transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path>
-        </svg>
+          strokeWidth={2}
+        />
       </h5>
       {!isCollapsed && (
          <div className="space-y-2">

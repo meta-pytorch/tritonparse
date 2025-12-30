@@ -3,6 +3,7 @@ import CodeViewer from "./CodeViewer";
 import { IRFile } from "../utils/dataLoader";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import CopyCodeButton from "./CopyCodeButton";
+import { ArrowLeftIcon } from "./icons";
 
 /**
  * Props for the SingleCodeViewer component
@@ -89,19 +90,7 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
           onClick={onBack}
           className="text-blue-600 hover:text-blue-800 flex items-center mr-4"
         >
-          {/* Back arrow SVG icon */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5 mr-1"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path
-              fillRule="evenodd"
-              d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"
-              clipRule="evenodd"
-            />
-          </svg>
+          <ArrowLeftIcon className="h-5 w-5 mr-1" />
           Back
         </button>
         <div>

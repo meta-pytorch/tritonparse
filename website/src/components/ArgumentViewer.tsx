@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { isTensorArg, extractTensorMetadata, formatTensorSummary } from '../utils/tensor';
+import { ChevronRightIcon } from './icons';
 
 interface LaunchRange {
     start: number;
@@ -71,22 +72,12 @@ const ArgumentRow: React.FC<{
                     </div>
                     <div className="flex-1 text-gray-500 italic text-sm flex items-center">
                         Complex argument with internal differences
-                        {/* Chevron icon for collapsibles */}
-                        <svg
+                        <ChevronRightIcon
                             className={`w-4 h-4 ml-2 transform transition-transform ${
                                 isCollapsed ? "" : "rotate-90"
                             }`}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth="2"
-                                d="M9 5l7 7-7 7"
-                            ></path>
-                        </svg>
+                            strokeWidth={2}
+                        />
                     </div>
                 </div>
                 {!isCollapsed && (
@@ -169,22 +160,12 @@ const ArgumentRow: React.FC<{
                             aria-controls={`tensor-details-${argName}`}
                         >
                             Details
-                            {/* Chevron icon for collapsibles */}
-                            <svg
+                            <ChevronRightIcon
                                 className={`w-3 h-3 ml-1 transform transition-transform ${
                                     showDetails ? "" : "rotate-90"
                                 }`}
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth="2"
-                                    d="M9 5l7 7-7 7"
-                                ></path>
-                            </svg>
+                                strokeWidth={2}
+                            />
                         </button>
                     </div>
                 </div>
