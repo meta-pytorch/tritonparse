@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { DocumentDuplicateIcon, DocumentPlusIcon, LinkIcon } from "./icons";
 
 interface WelcomeScreenProps {
   loadDefaultData: () => void;
@@ -76,23 +77,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
           style={{ cursor: "pointer" }}
         >
           <div className="bg-blue-50 p-3 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-4">
-            {/* This SVG icon represents a document or file with a copy/duplicate action.
-                It shows one document being copied to another, symbolizing the "Default Example"
-                functionality where a sample file is loaded for the user. */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-6 w-6 text-blue-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"
-              />
-            </svg>
+            <DocumentDuplicateIcon className="h-6 w-6 text-blue-500" />
           </div>
           <h3 className="text-lg font-medium text-gray-800 mb-2">Default Example</h3>
           <p className="text-sm text-gray-600">Load the included example Triton log file</p>
@@ -107,23 +92,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
           onDrop={handleDrop}
         >
           <div className="bg-green-50 p-3 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-4">
-            {/* This SVG icon represents a document with a plus sign, symbolizing the "Local File"
-                functionality where users can add/upload their own file from their device.
-                The plus sign indicates the action of adding a new file to the application. */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-6 w-6 text-green-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-              />
-            </svg>
+            <DocumentPlusIcon className="h-6 w-6 text-green-500" />
           </div>
           <h3 className="text-lg font-medium text-gray-800 mb-2">Local File</h3>
           <p className="text-sm text-gray-600 mb-4">
@@ -146,23 +115,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
           style={{ cursor: "pointer" }}
         >
           <div className="bg-purple-50 p-3 rounded-full w-12 h-12 flex items-center justify-center mx-auto mb-4">
-            {/* This SVG icon represents a link or chain, symbolizing the "Remote URL"
-                functionality where users can load data from an external web address.
-                The chain links indicate connectivity to external resources on the internet. */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-6 w-6 text-purple-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-              />
-            </svg>
+            <LinkIcon className="h-6 w-6 text-purple-500" />
           </div>
           <h3 className="text-lg font-medium text-gray-800 mb-2">Remote URL</h3>
           <p className="text-sm text-gray-600">Load a Triton log file from a URL</p>

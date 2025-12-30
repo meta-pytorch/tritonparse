@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PaperClipIcon, LinkIcon } from "./icons";
 
 interface DataSourceSelectorProps {
   onFileSelected: (file: File) => void;
@@ -61,19 +62,7 @@ const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({ onFileSelected,
               isLoading ? "opacity-50 cursor-not-allowed" : ""
             }`}
           >
-            {/* SVG icon representing a paperclip/attachment for the file upload button */}
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className="h-5 w-5 mr-2 text-gray-500"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-            >
-              <path
-                fillRule="evenodd"
-                d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z"
-                clipRule="evenodd"
-              />
-            </svg>
+            <PaperClipIcon className="h-5 w-5 mr-2 text-gray-500" />
             Open Local File
           </label>
           <input
@@ -95,19 +84,7 @@ const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({ onFileSelected,
           }`}
           disabled={isLoading}
         >
-          {/* SVG icon representing a link/chain for the URL input button */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5 mr-2 text-gray-500"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path
-              fillRule="evenodd"
-              d="M12.586 4.586a2 2 0 112.828 2.828l-3 3a2 2 0 01-2.828 0 1 1 0 00-1.414 1.414 4 4 0 005.656 0l3-3a4 4 0 00-5.656-5.656l-1.5 1.5a1 1 0 101.414 1.414l1.5-1.5zm-5 5a2 2 0 012.828 0 1 1 0 101.414-1.414 4 4 0 00-5.656 0l-3 3a4 4 0 105.656 5.656l1.5-1.5a1 1 0 10-1.414-1.414l-1.5 1.5a2 2 0 11-2.828-2.828l3-3z"
-              clipRule="evenodd"
-            />
-          </svg>
+          <LinkIcon className="h-5 w-5 mr-2 text-gray-500" />
           Load from URL
         </button>
       </div>
