@@ -30,6 +30,7 @@ class ContextBundle:
     tensor_args: Dict[str, Any]
     raw_launch_event: Dict[str, Any]
     raw_comp_event: Dict[str, Any]
+    source_repo_dir: Optional[str] = None
 
 
 def get_launch_and_compilation_events(

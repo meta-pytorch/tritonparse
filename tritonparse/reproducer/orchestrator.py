@@ -27,6 +27,7 @@ def reproduce(
     replacer: Optional[PlaceholderReplacer] = None,
     kernel_import: KernelImportMode = KernelImportMode.DEFAULT,
     skip_logger: bool = False,
+    source_repo_dir: Optional[str] = None,
 ) -> dict[str, str]:
     """
     Generate a reproducer script from NDJSON trace file.
@@ -46,6 +47,7 @@ def reproduce(
         replacer: Optional custom PlaceholderReplacer instance. If None, uses DefaultPlaceholderReplacer.
         kernel_import: Kernel import mode (DEFAULT or COPY).
         skip_logger: Whether to skip usage logging (default: False).
+        source_repo_dir: Optional path to the source repository directory to map the file paths in production back.
     """
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
@@ -69,6 +71,8 @@ def reproduce(
 
     # Build context bundle from the specified launch event
     context_bundle = build_context_bundle(events, line_index)
+    context_bundle.source_repo_dir = source_repo_dir
+
     logger.debug(
         f"Built context bundle for kernel: {context_bundle.kernel_info.function_name}"
     )
