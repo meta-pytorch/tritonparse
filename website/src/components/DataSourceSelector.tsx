@@ -5,13 +5,31 @@ interface DataSourceSelectorProps {
   onFileSelected: (file: File) => void;
   onUrlSelected: (url: string) => void;
   isLoading: boolean;
+  showUrlInput?: boolean;
+  onShowUrlInputChange?: (show: boolean) => void;
 }
 
 /**
  * Component for selecting data sources - either local file or URL
  */
-const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({ onFileSelected, onUrlSelected, isLoading }) => {
-  const [showUrlInput, setShowUrlInput] = useState(false);
+const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({
+  onFileSelected,
+  onUrlSelected,
+  isLoading,
+  showUrlInput: externalShowUrlInput,
+  onShowUrlInputChange,
+}) => {
+  const [internalShowUrlInput, setInternalShowUrlInput] = useState(false);
+
+  // Use external state if provided, otherwise use internal state
+  const showUrlInput = externalShowUrlInput ?? internalShowUrlInput;
+  const setShowUrlInput = (value: boolean) => {
+    if (onShowUrlInputChange) {
+      onShowUrlInputChange(value);
+    } else {
+      setInternalShowUrlInput(value);
+    }
+  };
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
 

@@ -40,6 +40,8 @@ function App() {
   const [dataLoaded, setDataLoaded] = useState<boolean>(false);
   // Track the loaded data source URL
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  // Track if URL input is shown
+  const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
 
   /**
    * Helper function to find a kernel by its hash
@@ -224,18 +226,14 @@ function App() {
    * Opens the URL input field
    */
   const openUrlInput = () => {
-    // Find the URL button and click it to activate the input field
-    const urlButton = document.querySelector('button:has(svg path[d*="12.586 4.586"])');
-    if (urlButton && urlButton instanceof HTMLElement) {
-      urlButton.click();
-      // Focus on the input field
-      setTimeout(() => {
-        const urlInput = document.querySelector('input[type="url"]');
-        if (urlInput && urlInput instanceof HTMLInputElement) {
-          urlInput.focus();
-        }
-      }, 100);
-    }
+    setShowUrlInput(true);
+    // Focus on the input field after it becomes visible
+    setTimeout(() => {
+      const urlInput = document.querySelector('input[type="url"]');
+      if (urlInput && urlInput instanceof HTMLInputElement) {
+        urlInput.focus();
+      }
+    }, 100);
   };
 
   /**
@@ -495,6 +493,8 @@ function App() {
               onFileSelected={handleFileSelected}
               onUrlSelected={handleUrlSelected}
               isLoading={loading}
+              showUrlInput={showUrlInput}
+              onShowUrlInputChange={setShowUrlInput}
             />
 
             {/* Tab navigation: File Diff button placed as the last (rightmost) button */}
