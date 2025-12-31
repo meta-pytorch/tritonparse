@@ -617,28 +617,36 @@ class MultiFileCallGraphAnalyzer:
         all_functions: dict[str, str],
         function_to_file: dict[str, str],
     ) -> None:
-        """Extract function source code directly from AST node with source location comment."""
+        """Extract function source code directly from AST node with source location comment.
+
+        Uses ast.unparse() for proper indentation handling. This is the preferred
+        AST-level approach as it automatically handles nested function definitions
+        and always outputs code at column 0.
+
+        Note: ast.unparse() does not preserve comments. The original comments
+        in the source code will be lost in the extracted version.
+        """
         node = analyzer.func_nodes[func_name]
 
-        if not analyzer.source_code:
-            with open(file_path) as f:
-                analyzer.source_code = f.read()
-
-        source_lines = analyzer.source_code.splitlines(keepends=True)
-
+        # Get line numbers for the source location comment
         if node.decorator_list:
             start_line = node.decorator_list[0].lineno
         else:
             start_line = node.lineno
-
         end_line = node.end_lineno
 
+        # Use ast.unparse() to generate properly indented source code
+        # This handles nested functions, class methods, etc. automatically
+        func_source = ast.unparse(node)
+
+        # Add source location comment
         if start_line is not None and end_line is not None:
-            func_source = "".join(source_lines[start_line - 1 : end_line])
-            # Add source location comment
             source_comment = f"# Source: {file_path}:{start_line}-{end_line}\n"
             all_functions[func_name] = source_comment + func_source
-            function_to_file[func_name] = file_path
+        else:
+            all_functions[func_name] = func_source
+
+        function_to_file[func_name] = file_path
 
     def _collect_all_imports(self) -> list[ImportInfo]:
         """Collect all imports from visited files."""
