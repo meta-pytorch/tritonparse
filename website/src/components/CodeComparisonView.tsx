@@ -448,9 +448,9 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     flexDirection: "column",
                     position: "relative"
                 }}>
-                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                        <span>{leftPanel_data.title}</span>
-                        <div className="flex items-center gap-2">
+                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center min-w-0">
+                        <span className="truncate flex-1 min-w-0 mr-2" title={leftPanel_data.title}>{leftPanel_data.title}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
                             <span className="text-sm bg-blue-700 px-2 py-1 rounded">
                                 {leftPanel_data.displayLanguage}
                             </span>
@@ -488,9 +488,9 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     flexDirection: "column",
                     position: "relative"
                 }}>
-                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                        <span>{rightPanel_data.title}</span>
-                        <div className="flex items-center gap-2">
+                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center min-w-0">
+                        <span className="truncate flex-1 min-w-0 mr-2" title={rightPanel_data.title}>{rightPanel_data.title}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
                             <span className="text-sm bg-blue-700 px-2 py-1 rounded">
                                 {rightPanel_data.displayLanguage}
                             </span>
@@ -529,13 +529,13 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                             flexDirection: "column",
                             position: "relative"
                         }}>
-                            <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                                <span>
+                            <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center min-w-0">
+                                <span className="truncate flex-1 min-w-0 mr-2" title={pythonInfo.isFullFileMode ? "Python Source (Full File)" : "Python Source"}>
                                     {pythonInfo.isFullFileMode
                                         ? "Python Source (Full File)"
                                         : "Python Source"}
                                 </span>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-shrink-0">
                                     <span className="text-sm bg-blue-700 px-2 py-1 rounded">
                                         python
                                     </span>
