@@ -2,6 +2,10 @@
 
 # Run tritonparse tests
 # This script runs the test suite with proper environment setup
+#
+# Test structure:
+#   tests/cpu/  - CPU-only tests (no GPU required)
+#   tests/gpu/  - GPU tests (require CUDA)
 
 set -e
 
@@ -29,70 +33,53 @@ conda activate "$CONDA_ENV"
 # export TORCHINDUCTOR_FX_GRAPH_CACHE=0
 # export TRITONPARSE_DEBUG=1
 
+# Build verbose flag
+if [ "$VERBOSE" = "true" ]; then
+    VERBOSE_FLAG="-v"
+else
+    VERBOSE_FLAG=""
+fi
+
 # Build unittest command based on test type
 case "$TEST_TYPE" in
 "cpu")
-    echo "Running CPU tests only..."
+    echo "Running CPU tests only (tests/cpu/)..."
     if [ "$COVERAGE" = "true" ]; then
         echo "Running with coverage..."
-        if [ "$VERBOSE" = "true" ]; then
-            coverage run -m unittest tests.test_tritonparse.TestTritonparseCPU -v
-        else
-            coverage run -m unittest tests.test_tritonparse.TestTritonparseCPU
-        fi
+        coverage run -m unittest discover -s tests/cpu -t . $VERBOSE_FLAG
         coverage report
         coverage xml
     else
-        if [ "$VERBOSE" = "true" ]; then
-            python -m unittest tests.test_tritonparse.TestTritonparseCPU -v
-        else
-            python -m unittest tests.test_tritonparse.TestTritonparseCPU
-        fi
+        python -m unittest discover -s tests/cpu -t . $VERBOSE_FLAG
     fi
     ;;
-"cuda")
-    echo "Running CUDA tests only..."
+"cuda"|"gpu")
+    echo "Running GPU tests only (tests/gpu/)..."
     export CUDA_VISIBLE_DEVICES=0
     if [ "$COVERAGE" = "true" ]; then
         echo "Running with coverage..."
-        if [ "$VERBOSE" = "true" ]; then
-            coverage run -m unittest tests.test_tritonparse.TestTritonparseCUDA -v
-        else
-            coverage run -m unittest tests.test_tritonparse.TestTritonparseCUDA
-        fi
+        coverage run -m unittest discover -s tests/gpu -t . $VERBOSE_FLAG
         coverage report
         coverage xml
     else
-        if [ "$VERBOSE" = "true" ]; then
-            python -m unittest tests.test_tritonparse.TestTritonparseCUDA -v
-        else
-            python -m unittest tests.test_tritonparse.TestTritonparseCUDA
-        fi
+        python -m unittest discover -s tests/gpu -t . $VERBOSE_FLAG
     fi
     ;;
 "all")
-    echo "Running all tests..."
+    echo "Running all tests (tests/cpu/ + tests/gpu/)..."
     export CUDA_VISIBLE_DEVICES=0
     if [ "$COVERAGE" = "true" ]; then
         echo "Running with coverage..."
-        if [ "$VERBOSE" = "true" ]; then
-            coverage run -m unittest tests.test_tritonparse -v
-        else
-            coverage run -m unittest tests.test_tritonparse
-        fi
+        coverage run -m unittest discover -s tests -t . $VERBOSE_FLAG
         coverage report
         coverage xml
     else
-        if [ "$VERBOSE" = "true" ]; then
-            python -m unittest tests.test_tritonparse -v
-        else
-            python -m unittest tests.test_tritonparse
-        fi
+        python -m unittest discover -s tests -t . $VERBOSE_FLAG
     fi
     ;;
 *)
     echo "Unknown test type: $TEST_TYPE"
-    echo "Available options: cpu, cuda, all"
+    echo "Available options: cpu, cuda (or gpu), all"
     exit 1
     ;;
 esac

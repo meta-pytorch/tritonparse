@@ -1,7 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from abc import ABC
-
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 

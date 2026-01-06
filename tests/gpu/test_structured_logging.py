@@ -14,6 +14,7 @@ import shutil
 import tempfile
 import unittest
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Union
 
 import torch
@@ -21,13 +22,11 @@ import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
 import tritonparse.parse.utils
 import tritonparse.structured_logging
-
 from tests.test_utils import GPUTestBase
 from triton.compiler import ASTSource, IRSource  # @manual=//triton:triton
 from triton.knobs import CompileTimes  # @manual=//triton:triton
-
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT
-from tritonparse.structured_logging import extract_python_source_info
+from tritonparse.structured_logging import convert, extract_python_source_info
 from tritonparse.tools.disasm import is_nvdisasm_available
 
 
@@ -83,6 +82,55 @@ class TestStructuredLogging(GPUTestBase):
         self.assertIn("python_source", trace_data)
         self.assertIn("file_path", trace_data["python_source"])
         triton.knobs.compilation.listener = None
+
+    def test_convert(self):
+        """Test convert function with various data types"""
+        # Test with primitive types
+        self.assertEqual(convert(42), 42)
+        self.assertEqual(convert("hello"), "hello")
+        self.assertEqual(convert(3.14), 3.14)
+        self.assertIsNone(convert(None))
+        self.assertTrue(convert(True))
+
+        # Test with a dictionary
+        test_dict = {"a": 1, "b": "string", "c": 3.14}
+        self.assertEqual(convert(test_dict), test_dict)
+
+        # Test with a list
+        test_list = [1, "string", 3.14]
+        self.assertEqual(convert(test_list), test_list)
+
+        # Test with a dataclass
+        @dataclass
+        class TestDataClass:
+            x: int
+            y: str
+            z: float
+
+        test_dataclass = TestDataClass(x=42, y="hello", z=3.14)
+        expected_dict = {"x": 42, "y": "hello", "z": 3.14}
+        self.assertEqual(convert(test_dataclass), expected_dict)
+
+        # Test with nested structures
+        @dataclass
+        class NestedDataClass:
+            name: str
+            value: int
+
+        nested_structure = {
+            "simple_key": "simple_value",
+            "list_key": [1, 2, NestedDataClass(name="test", value=42)],
+            "dict_key": {"nested_key": NestedDataClass(name="nested", value=100)},
+        }
+
+        expected_nested = {
+            "simple_key": "simple_value",
+            "list_key": [1, 2, {"name": "test", "value": 42}],
+            "dict_key": {"nested_key": {"name": "nested", "value": 100}},
+        }
+
+        self.assertEqual(convert(nested_structure), expected_nested)
+        print("✓ Convert function tests passed")
 
     def test_whole_workflow(self):
         """Test unified_parse functionality including SASS extraction"""

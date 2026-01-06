@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 
 import tritonparse.reproducer.orchestrator
-
 from tests.test_utils import (
     cleanup_temp_dir,
     get_test_ndjson_file,

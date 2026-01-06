@@ -5,7 +5,6 @@ import unittest
 from io import StringIO
 
 from tests.test_utils import get_test_ndjson_file
-
 from tritonparse.info.cli import info_command
 
 

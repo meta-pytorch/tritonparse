@@ -19,7 +19,6 @@ from pathlib import Path
 import torch
 import triton  # @manual=//triton:triton
 import tritonparse.structured_logging
-
 from tests.test_utils import GPUTestBase, skip_in_fbcode
 from tritonparse.reproducer.orchestrator import reproduce
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT

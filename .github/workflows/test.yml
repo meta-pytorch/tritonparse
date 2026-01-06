@@ -56,6 +56,8 @@ jobs:
               run: |
                   make lint-check || (echo "❌ Linting failed. Please run 'make format' to fix formatting issues, then commit the changes." && echo "📖 For detailed formatting guide, see: https://github.com/meta-pytorch/tritonparse/wiki/05.-Code-Formatting" && exit 1)
 
+    # GPU tests - runs on GPU runner with full Triton from source
+    # Note: CPU tests (tests/cpu/) are run as part of GPU jobs with TEST_TYPE=all
     test-from-source:
         runs-on: 4-core-ubuntu-gpu-t4
         timeout-minutes: 120

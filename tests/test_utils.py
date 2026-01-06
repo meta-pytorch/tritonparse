@@ -8,7 +8,6 @@ from pathlib import Path
 
 import torch
 from triton import knobs  # @manual=//triton:triton
-
 from tritonparse import structured_logging
 from tritonparse.shared_vars import is_fbcode, TEST_KEEP_OUTPUT
 

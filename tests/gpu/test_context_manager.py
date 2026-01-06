@@ -19,10 +19,8 @@ import torch._inductor.config as inductor_config
 import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
 import tritonparse.context_manager
-
 from tests.test_utils import clear_all_caches, GPUTestBase
 from triton import knobs  # @manual=//triton:triton
-
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT
 
 

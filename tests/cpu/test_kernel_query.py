@@ -3,7 +3,6 @@
 import unittest
 
 from tests.test_utils import get_test_ndjson_file
-
 from tritonparse.info.kernel_query import (
     find_launch_index_by_kernel,
     find_similar_kernels,
