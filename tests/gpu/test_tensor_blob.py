@@ -8,7 +8,6 @@ import unittest
 import torch
 import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
-
 import tritonparse.context_manager
 import tritonparse.structured_logging
 from tests.test_utils import GPUTestBase
