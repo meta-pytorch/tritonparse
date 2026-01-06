@@ -1,10 +1,4 @@
-"""
-Comprehensive tests for tritonparse using unittest.
-Test Plan:
-```
-TORCHINDUCTOR_FX_GRAPH_CACHE=0 TRITONPARSE_DEBUG=1 python -m unittest tests.test_tritonparse -v
-```
-"""
+"""Test TensorBlobManager functionality."""
 
 import os
 import shutil
@@ -14,123 +8,16 @@ import unittest
 import torch
 import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
-import tritonparse.context_manager
-from triton import knobs  # @manual=//triton:triton
 
+import tritonparse.context_manager
+import tritonparse.structured_logging
+from tests.test_utils import GPUTestBase
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT
 
 
-def create_fresh_triton_cache():
-    """Create a fresh Triton cache directory and return cache management context"""
-    cache_dir = tempfile.mkdtemp(prefix="triton_cache_")
-    return cache_dir, knobs.cache.scope()
+class TestTensorBlob(GPUTestBase):
+    """Test TensorBlobManager functionality."""
 
-
-def setup_fresh_triton_environment(cache_dir):
-    """Setup fresh Triton environment with isolated cache"""
-    # Set up isolated cache directory
-    original_cache_dir = getattr(knobs.cache, "dir", None)
-    knobs.cache.dir = cache_dir
-
-    # Save and reset compilation settings
-    original_always_compile = knobs.compilation.always_compile
-    knobs.compilation.always_compile = True
-
-    # Reset hooks to clean state
-    original_jit_cache_hook = knobs.runtime.jit_cache_hook
-    original_jit_post_compile_hook = knobs.runtime.jit_post_compile_hook
-    original_launch_enter_hook = knobs.runtime.launch_enter_hook
-    original_compilation_listener = knobs.compilation.listener
-
-    knobs.runtime.jit_cache_hook = None
-    knobs.runtime.jit_post_compile_hook = None
-    knobs.runtime.launch_enter_hook = None
-    knobs.compilation.listener = None
-
-    return {
-        "original_cache_dir": original_cache_dir,
-        "original_always_compile": original_always_compile,
-        "original_jit_cache_hook": original_jit_cache_hook,
-        "original_jit_post_compile_hook": original_jit_post_compile_hook,
-        "original_launch_enter_hook": original_launch_enter_hook,
-        "original_compilation_listener": original_compilation_listener,
-    }
-
-
-def restore_triton_environment(original_settings):
-    """Restore original Triton environment settings"""
-    if original_settings["original_cache_dir"] is not None:
-        knobs.cache.dir = original_settings["original_cache_dir"]
-
-    knobs.compilation.always_compile = original_settings["original_always_compile"]
-    knobs.runtime.jit_cache_hook = original_settings["original_jit_cache_hook"]
-    knobs.runtime.jit_post_compile_hook = original_settings[
-        "original_jit_post_compile_hook"
-    ]
-    knobs.runtime.launch_enter_hook = original_settings["original_launch_enter_hook"]
-    knobs.compilation.listener = original_settings["original_compilation_listener"]
-
-
-class TestTritonparseCUDA(unittest.TestCase):
-    """CUDA tests (require GPU)"""
-
-    def setUp(self):
-        """Set up triton hooks and compilation settings"""
-        # Check if CUDA is available
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        self.cuda_device = torch.device("cuda:0")
-
-        # Set up fresh Triton cache environment
-        self.triton_cache_dir, self.cache_scope = create_fresh_triton_cache()
-        self.cache_scope.__enter__()  # Enter the cache scope context
-        self.original_triton_settings = setup_fresh_triton_environment(
-            self.triton_cache_dir
-        )
-
-        # Save original settings for restoration
-        self.prev_listener = knobs.compilation.listener
-        self.prev_always_compile = knobs.compilation.always_compile
-        self.prev_jit_post_compile_hook = knobs.runtime.jit_post_compile_hook
-        self.prev_launch_enter_hook = knobs.runtime.launch_enter_hook
-
-    def tearDown(self):
-        """Restore original triton settings"""
-        # Always restore original settings, even if test fails
-        try:
-            # Restore Triton environment
-            restore_triton_environment(self.original_triton_settings)
-
-            # Exit cache scope and cleanup
-            self.cache_scope.__exit__(None, None, None)
-            if os.path.exists(self.triton_cache_dir):
-                shutil.rmtree(self.triton_cache_dir, ignore_errors=True)
-
-        except Exception as e:
-            print(f"Warning: Failed to cleanup Triton environment: {e}")
-
-    def setup_test_with_fresh_cache(self):
-        """Setup individual test with completely fresh cache"""
-        # Create a new cache directory for this specific test
-        test_cache_dir = tempfile.mkdtemp(prefix="triton_test_cache_")
-
-        # Save current cache dir and set new one
-        prev_cache_dir = knobs.cache.dir
-        knobs.cache.dir = test_cache_dir
-
-        return test_cache_dir, prev_cache_dir
-
-    def cleanup_test_cache(self, test_cache_dir, prev_cache_dir):
-        """Cleanup test-specific cache"""
-        # Restore previous cache dir
-        knobs.cache.dir = prev_cache_dir
-
-        # Cleanup test cache directory
-        if os.path.exists(test_cache_dir):
-            shutil.rmtree(test_cache_dir, ignore_errors=True)
-
-    @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
     def test_tensor_blob_manager(self):
         """Test TensorBlobManager functionality with context manager"""
 
