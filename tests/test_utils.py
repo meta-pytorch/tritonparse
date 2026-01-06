@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 from triton import knobs  # @manual=//triton:triton
 
+from tritonparse import structured_logging
 from tritonparse.shared_vars import is_fbcode, TEST_KEEP_OUTPUT
 
 
@@ -165,6 +166,9 @@ class GPUTestBase(unittest.TestCase):
 
     def setUp(self):
         """Set up triton hooks and compilation settings."""
+        # Clear any global logging state from previous tests
+        structured_logging.clear_logging_config()
+
         if not torch.cuda.is_available():
             self.skipTest("GPU not available")
 
@@ -192,6 +196,9 @@ class GPUTestBase(unittest.TestCase):
                 shutil.rmtree(self.triton_cache_dir, ignore_errors=True)
         except Exception as e:
             print(f"Warning: Failed to cleanup Triton environment: {e}")
+        finally:
+            # Always clear logging config to prevent state pollution between tests
+            structured_logging.clear_logging_config()
 
     def setup_test_with_fresh_cache(self):
         """Setup individual test with completely fresh cache."""
