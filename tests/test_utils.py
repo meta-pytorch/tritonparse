@@ -36,6 +36,20 @@ def get_test_ndjson_file():
     return gz_file
 
 
+def get_sass_test_file(filename: str) -> Path:
+    """Get path to SASS test data file.
+
+    Args:
+        filename: Name of the file in sass_test_data directory (e.g., "test_kernel.sass")
+
+    Returns:
+        Path to the test file
+    """
+    test_file = Path(__file__).parent / "example_output/sass_test_data" / filename
+    assert test_file.exists(), f"Test file not found: {test_file}"
+    return test_file
+
+
 def setup_temp_reproduce_dir():
     """Setup temporary directory for reproduce tests."""
     temp_dir = tempfile.mkdtemp()
