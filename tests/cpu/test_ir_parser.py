@@ -2,7 +2,9 @@
 
 import unittest
 
-from tritonparse.parse.ir_parser import extract_loc_definitions
+from tests.test_utils import get_sass_test_file
+from tritonparse.parse.ir_parser import extract_loc_definitions, extract_sass_mappings
+from tritonparse.parse.mapper import create_bidirectional_mapping, create_ir_mapping
 from tritonparse.parse.trace_processor import generate_source_mappings
 
 
@@ -126,6 +128,107 @@ module {
         assert "def_line" in locs["20"]
 
         print("✓ All loc alias parsing tests passed")
+
+    def test_extract_sass_mappings(self):
+        """Test SASS source mapping extraction from real SASS file."""
+        sass_content = get_sass_test_file("test_kernel.sass").read_text()
+
+        mappings = extract_sass_mappings(sass_content)
+
+        # Basic validation: should have mapping results
+        self.assertGreater(len(mappings), 0, "Should extract at least one mapping")
+
+        # Verify first SASS instruction (line 4: /*0000*/ LDC R1...)
+        # Maps to line 140 in the source file
+        self.assertIn("4", mappings)
+        self.assertIn("file", mappings["4"])
+        self.assertEqual(
+            mappings["4"]["file"],
+            "/home/test/tritonparse/tests/gpu/test_structured_logging.py",
+        )
+        self.assertEqual(mappings["4"]["line"], 140)
+        self.assertEqual(mappings["4"]["column"], 0)  # SASS has no column info
+
+        # Verify second SASS instruction (line 7: /*0010*/ S2R R0...)
+        # Maps to line 143 in the source file
+        self.assertIn("7", mappings)
+        self.assertEqual(mappings["7"]["line"], 143)
+
+        # Verify .nv_debug_ptx_txt lines are skipped
+        for line_num, mapping in mappings.items():
+            self.assertNotIn(
+                ".nv_debug_ptx_txt",
+                mapping["file"],
+                f"Line {line_num} should not map to .nv_debug_ptx_txt",
+            )
+
+        # Verify SASS instruction line format is correctly identified (/*hexaddr*/ format)
+        for line_num in mappings.keys():
+            self.assertTrue(
+                line_num.isdigit(), f"Line number should be integer: {line_num}"
+            )
+
+        print("✓ SASS parsing tests passed")
+
+    def test_sass_fuzzy_matching(self):
+        """Test that ignore_column parameter enables fuzzy matching."""
+        # Simulate SASS (column=0) and PTX (column=24) mappings
+        sass_map = {
+            "10": {"file": "/test.py", "line": 100, "column": 0, "sass_line": 10}
+        }
+        ptx_map = {"5": {"file": "/test.py", "line": 100, "column": 24, "ptx_line": 5}}
+
+        # Without ignore_column: should have no match (columns differ)
+        result_strict = create_ir_mapping(sass_map, ptx_map, ignore_column=False)
+        self.assertEqual(
+            len(result_strict), 0, "Strict matching should fail when columns differ"
+        )
+
+        # With ignore_column: should match successfully
+        result_fuzzy = create_ir_mapping(sass_map, ptx_map, ignore_column=True)
+        self.assertIn("10", result_fuzzy)
+        self.assertEqual(result_fuzzy["10"], [5])
+
+        print("✓ SASS fuzzy matching tests passed")
+
+    def test_sass_bidirectional_mapping(self):
+        """Test automatic fuzzy matching when source or target is SASS."""
+        sass_map = {
+            "10": {"file": "/test.py", "line": 100, "column": 0, "sass_line": 10}
+        }
+        ptx_map = {"5": {"file": "/test.py", "line": 100, "column": 24, "ptx_line": 5}}
+
+        # Call bidirectional mapping (source_type="sass" should auto-enable ignore_column)
+        create_bidirectional_mapping(sass_map, ptx_map, "sass", "ptx")
+
+        # Verify forward mapping (sass -> ptx)
+        self.assertIn("ptx_lines", sass_map["10"])
+        self.assertIn(5, sass_map["10"]["ptx_lines"])
+
+        # Verify reverse mapping (ptx -> sass)
+        self.assertIn("sass_lines", ptx_map["5"])
+        self.assertIn(10, ptx_map["5"]["sass_lines"])
+
+        print("✓ SASS bidirectional mapping tests passed")
+
+    def test_sass_integration_with_trace_processor(self):
+        """Test SASS integration in full trace processing pipeline."""
+        sass_content = get_sass_test_file("test_kernel.sass").read_text()
+
+        # Directly test generate_source_mappings
+        mappings = generate_source_mappings(sass_content, "sass")
+
+        self.assertIsInstance(mappings, dict)
+        self.assertGreater(len(mappings), 0)
+
+        # Verify mapping structure
+        first_key = next(iter(mappings))
+        first_mapping = mappings[first_key]
+        self.assertIn("file", first_mapping)
+        self.assertIn("line", first_mapping)
+        self.assertEqual(first_mapping["column"], 0)
+
+        print("✓ SASS integration tests passed")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,78 @@
+Function:test_kernel
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 140
+	//## File ".nv_debug_ptx_txt", line 19
+        /*0000*/                   LDC R1, c[0x0][0x28] ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 143
+	//## File ".nv_debug_ptx_txt", line 37
+        /*0010*/                   S2R R0, SR_TID.X ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 148
+	//## File ".nv_debug_ptx_txt", line 57
+        /*0020*/                   LDC.64 R4, c[0x0][0x218] ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 144
+	//## File ".nv_debug_ptx_txt", line 43
+        /*0030*/                   ULDC UR4, c[0x0][0x220] ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 146
+	//## File ".nv_debug_ptx_txt", line 51
+        /*0040*/                   BSSY B0, `(.L_x_0) ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 141
+	//## File ".nv_debug_ptx_txt", line 32
+        /*0050*/                   S2R R7, SR_CTAID.X ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 146
+	//## File ".nv_debug_ptx_txt", line 51
+        /*0060*/                   CS2R R2, SRZ ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 143
+	//## File ".nv_debug_ptx_txt", line 38
+        /*0070*/                   SHF.L.U32 R0, R0, 0x1, RZ ;
+	//## File ".nv_debug_ptx_txt", line 39
+        /*0080*/                   LOP3.LUT R0, R0, 0xfe, RZ, 0xc0, !PT ;
+	//## File ".nv_debug_ptx_txt", line 41
+        /*0090*/                   LEA R7, R7, R0, 0x8 ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 144
+	//## File ".nv_debug_ptx_txt", line 43
+        /*00a0*/                   ISETP.GE.AND P0, PT, R7.reuse, UR4, PT ;
+	//## File ".nv_debug_ptx_txt", line 19
+        /*00b0*/                   ULDC.64 UR4, c[0x0][0x208] ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 148
+	//## File ".nv_debug_ptx_txt", line 57
+        /*00c0*/                   IMAD.WIDE R4, R7, 0x4, R4 ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 146
+	//## File ".nv_debug_ptx_txt", line 51
+        /*00d0*/               @P0 BRA `(.L_x_1) ;
+	//## File ".nv_debug_ptx_txt", line 46
+        /*00e0*/                   LDC.64 R2, c[0x0][0x210] ;
+        /*00f0*/                   IMAD.WIDE R2, R7, 0x4, R2 ;
+	//## File ".nv_debug_ptx_txt", line 51
+        /*0100*/                   LDG.E.64 R2, desc[UR4][R2.64] ;
+.L_x_1:
+        /*0110*/                   BSYNC B0 ;
+.L_x_0:
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 148
+	//## File ".nv_debug_ptx_txt", line 60
+        /*0120*/               @P0 EXIT ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 147
+	//## File ".nv_debug_ptx_txt", line 54
+        /*0130*/                   FADD R2, R2, 1 ;
+	//## File ".nv_debug_ptx_txt", line 55
+        /*0140*/                   FADD R3, R3, 1 ;
+	//## File "/home/test/tritonparse/tests/gpu/test_structured_logging.py", line 148
+	//## File ".nv_debug_ptx_txt", line 60
+        /*0150*/                   STG.E.64 desc[UR4][R4.64], R2 ;
+	//## File ".nv_debug_ptx_txt", line 63
+        /*0160*/                   EXIT ;
+.L_x_2:
+        /*0170*/                   BRA `(.L_x_2);
+        /*0180*/                   NOP;
+        /*0190*/                   NOP;
+        /*01a0*/                   NOP;
+        /*01b0*/                   NOP;
+        /*01c0*/                   NOP;
+        /*01d0*/                   NOP;
+        /*01e0*/                   NOP;
+        /*01f0*/                   NOP;
+.L_x_3:
+
+
+//--------------------- SYMBOLS --------------------------
+
+	.type		.nv.reservedSmem.offset0,@object
+	.size		.nv.reservedSmem.offset0,0x4
