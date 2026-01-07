@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DiffComparisonView from "../components/DiffComparisonView";
 import { useFileDiffSession } from "../context/FileDiffSession";
 import { ProcessedKernel, loadLogData, loadLogDataFromFile, processKernelData, getIRType } from "../utils/dataLoader";
+import "../types/global.d.ts";
 
 type DiffMode = "single" | "all";
 
@@ -56,6 +57,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   const [leftKernelsFromLocal, setLeftKernelsFromLocal] = useState<ProcessedKernel[]>([]);
   const [leftLoadedUrlLocal, setLeftLoadedUrlLocal] = useState<string | null>(null);
   const [leftLoadedFromLocal, setLeftLoadedFromLocal] = useState<boolean>(false);
+  const [loadingLeft, setLoadingLeft] = useState<boolean>(false);
+  const [errorLeft, setErrorLeft] = useState<string | null>(null);
 
   // Right source state
   const [kernelsRight, setKernelsRight] = useState<ProcessedKernel[]>([]);
@@ -113,21 +116,26 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     // Left/Right kernel index by hash
     const leftHash = params.get(PARAM_KERNEL_HASH_A);
     const rightHash = params.get(PARAM_KERNEL_HASH_B);
-    if (leftHash) (window as any).__TRITONPARSE_leftHash = leftHash;
+    if (leftHash) window.__TRITONPARSE_leftHash = leftHash;
     const li = findKernelIndexByHash(leftHash, kernelsLeft);
     if (li >= 0) setLeftIdx(li);
 
     // right index will be set after right kernels loaded
     if (rightHash) {
       // store temporarily in dataset
-      (window as any).__TRITONPARSE_rightHash = rightHash;
+      window.__TRITONPARSE_rightHash = rightHash;
     }
+    // Note: leftLoadedUrl is intentionally omitted - we only read URL params on mount
+    // and when kernelsLeft changes, not when the prop changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kernelsLeft]);
 
   // Load left URL when set (internal to FileDiffView)
   useEffect(() => {
     async function loadLeft(url: string) {
       try {
+        setLoadingLeft(true);
+        setErrorLeft(null);
         const entries = await loadLogData(url);
         const processed = processKernelData(entries);
         setLeftKernelsFromUrl(processed);
@@ -135,20 +143,25 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         sess.setLeftFromUrl(url, processed);
         // default to first kernel when loading new source
         setLeftIdx(0);
-        try { sess.setLeftIdx(0); } catch {}
-        const leftHash = (window as any).__TRITONPARSE_leftHash as string | undefined;
+          try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
+        const leftHash = window.__TRITONPARSE_leftHash;
         if (leftHash) {
           const li = findKernelIndexByHash(leftHash, processed);
           if (li >= 0) setLeftIdx(li);
-          try { if (li >= 0) sess.setLeftIdx(li); } catch {}
+          try { if (li >= 0) sess.setLeftIdx(li); } catch { /* Session may not be ready */ }
         }
-      } catch (e) {
-        console.warn("[FDV] loadLeft(URL) error:", e);
+      } catch (e: unknown) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        setErrorLeft(errorMessage);
+      } finally {
+        setLoadingLeft(false);
       }
     }
     if (leftLoadedUrlLocal) {
       loadLeft(leftLoadedUrlLocal);
     }
+    // Note: sess is stable (from context) and doesn't need to trigger re-runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leftLoadedUrlLocal]);
 
   // Load right URL when set
@@ -162,13 +175,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         setKernelsRight(processed);
         sess.setRightFromUrl(url, processed);
         // set right index by hash if present
-        const rightHash = (window as any).__TRITONPARSE_rightHash as string | undefined;
+        const rightHash = window.__TRITONPARSE_rightHash;
         if (rightHash) {
           const ri = findKernelIndexByHash(rightHash, processed);
           if (ri >= 0) setRightIdx(ri);
         }
-      } catch (e: any) {
-        setErrorRight(e?.message || String(e));
+      } catch (e: unknown) {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        setErrorRight(errorMessage);
       } finally {
         setLoadingRight(false);
       }
@@ -176,6 +190,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     if (rightLoadedUrl) {
       loadRight(rightLoadedUrl);
     }
+    // Note: sess is stable (from context) and doesn't need to trigger re-runs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rightLoadedUrl]);
 
   // Hydrate session left from App props when coming from homepage/top bar load (including local file)
@@ -185,14 +201,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       if (sessLeftLen === 0 && kernelsLeft.length > 0) {
         if (leftLoadedUrl) {
           sess.setLeftFromUrl(leftLoadedUrl, kernelsLeft);
-          
+
         } else {
           sess.setLeftFromLocal(kernelsLeft);
-          
+
         }
         sess.setLeftIdx(Math.max(0, leftIdx));
       }
-    } catch {}
+    } catch { /* Ignore hydration errors - session state may be stale */ }
   }, [sess, kernelsLeft, leftLoadedUrl, leftIdx]);
 
   // Hydrate right from session when returning from preview (ensure right side is restored without reloading URL)
@@ -209,7 +225,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
           setRightLoadedFromLocal(true);
         }
       }
-    } catch {}
+    } catch { /* Ignore session restore errors */ }
   }, [sess.right]);
 
   // Compute union ir types and choose default ir if needed
@@ -394,15 +410,16 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       setRightLoadedUrl(null); // do not persist json_b_url when loaded from local file
       sess.setRightFromLocal(processed);
       // select the first kernel or restore by hash if available
-      const rightHash = (window as any).__TRITONPARSE_rightHash as string | undefined;
+      const rightHash = window.__TRITONPARSE_rightHash;
       if (rightHash) {
         const ri = findKernelIndexByHash(rightHash, processed);
         setRightIdx(ri >= 0 ? ri : 0);
       } else {
         setRightIdx(0);
       }
-    } catch (e: any) {
-      setErrorRight(e?.message || String(e));
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setErrorRight(errorMessage);
     } finally {
       setLoadingRight(false);
     }
@@ -416,6 +433,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   const handleLoadLeftLocal = async (file: File | null) => {
     if (!file) return;
     try {
+      setLoadingLeft(true);
+      setErrorLeft(null);
       const entries = await loadLogDataFromFile(file);
       const processed = processKernelData(entries);
       setLeftKernelsFromLocal(processed);
@@ -424,16 +443,21 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
       sess.setLeftFromLocal(processed);
       // select first by default
       setLeftIdx(0);
-      try { sess.setLeftIdx(0); } catch {}
-      const leftHash = (window as any).__TRITONPARSE_leftHash as string | undefined;
+      try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
+      const leftHash = window.__TRITONPARSE_leftHash;
       if (leftHash) {
         const li = findKernelIndexByHash(leftHash, processed);
         setLeftIdx(li >= 0 ? li : 0);
-        try { if (li >= 0) sess.setLeftIdx(li); } catch {}
+        try { if (li >= 0) sess.setLeftIdx(li); } catch { /* Session may not be ready */ }
       } else {
         setLeftIdx(0);
       }
-    } catch {}
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      setErrorLeft(errorMessage);
+    } finally {
+      setLoadingLeft(false);
+    }
   };
 
   return (
@@ -455,8 +479,9 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               <button
                 className="px-3 py-2 bg-blue-600 text-white rounded"
                 onClick={handleLoadLeft}
+                disabled={loadingLeft}
               >
-                Load
+                {loadingLeft ? "Loading..." : "Load"}
               </button>
             </div>
             <div className="flex items-center gap-2 mb-1">
@@ -465,6 +490,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
                 accept=".ndjson,.ndjson.gz,.gz,.jsonl"
                 className="block w-full text-sm text-gray-700"
                 onChange={(e) => handleLoadLeftLocal(e.target.files?.[0] || null)}
+                disabled={loadingLeft}
               />
             </div>
             {(leftLoadedUrlLocal || leftLoadedUrl || (leftLoadedFromLocal || kernelsLeft.length > 0)) && (
@@ -474,6 +500,9 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             )}
             {leftLoadedFromLocal && (
               <div className="text-gray-600 text-sm mb-2">(loaded from local file)</div>
+            )}
+            {errorLeft && (
+              <div className="text-red-600 text-sm mb-2">{errorLeft}</div>
             )}
             <div className="flex gap-2 mt-1">
               <button
@@ -555,7 +584,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <select
               className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
               value={leftIdx}
-              onChange={(e) => { const v = parseInt(e.target.value); setLeftIdx(v); try { sess.setLeftIdx(v); } catch {} }}
+              onChange={(e) => { const v = parseInt(e.target.value); setLeftIdx(v); try { sess.setLeftIdx(v); } catch { /* Ignore */ } }}
               disabled={leftArrayResolved.length === 0}
             >
               {leftArrayResolved.map((k, i) => (
@@ -570,7 +599,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <select
               className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
               value={rightIdx}
-              onChange={(e) => { const v = parseInt(e.target.value); setRightIdx(v); try { sess.setRightIdx(v); } catch {} }}
+              onChange={(e) => { const v = parseInt(e.target.value); setRightIdx(v); try { sess.setRightIdx(v); } catch { /* Ignore */ } }}
               disabled={kernelsRight.length === 0}
             >
               {kernelsRight.map((k, i) => (
@@ -625,7 +654,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               </label>
               <label className="inline-flex items-center gap-1 text-sm">
                 <span>Wrap</span>
-                <select className="border border-gray-300 rounded px-2 py-1" value={wordWrap} onChange={(e) => setWordWrap(e.target.value as any)}>
+                <select className="border border-gray-300 rounded px-2 py-1" value={wordWrap} onChange={(e) => setWordWrap(e.target.value as "off" | "on")}>
                   <option value="off">off</option>
                   <option value="on">on</option>
                 </select>
@@ -641,5 +670,3 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
 };
 
 export default FileDiffView;
-
-

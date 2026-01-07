@@ -2,8 +2,25 @@ import ArgumentViewer from "./ArgumentViewer";
 import React from "react";
 import StackDiffViewer from "./StackDiffViewer";
 
+interface LaunchRange {
+  start: number;
+  end: number;
+}
+
+interface DistributionValue {
+  value: unknown;
+  count: number;
+  launches: LaunchRange[];
+}
+
+interface DiffData {
+  diff_type: "summary" | "distribution";
+  summary_text?: string;
+  values?: DistributionValue[];
+}
+
 interface DiffViewerProps {
-  diffs: any;
+  diffs: Record<string, unknown>;
 }
 
 const DiffViewer: React.FC<DiffViewerProps> = ({ diffs }) => {
@@ -14,7 +31,7 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ diffs }) => {
   }
 
   // Separate different kinds of diffs
-  const extractedArgs = diffs.extracted_args;
+  const extractedArgs = diffs.extracted_args as Record<string, unknown> | undefined;
   const stackDiff = diffs.stack;
   const otherDiffs = Object.fromEntries(
     Object.entries(diffs).filter(
@@ -22,16 +39,16 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ diffs }) => {
     )
   );
 
-  const renderSimpleDiff = (_key: string, data: any) => {
+  const renderSimpleDiff = (_key: string, data: DiffData) => {
     if (data.diff_type === "summary") {
       return <p className="font-mono text-sm text-gray-800">{data.summary_text}</p>;
     }
-    if (data.diff_type === "distribution") {
+    if (data.diff_type === "distribution" && data.values) {
       return (
         <ul className="list-disc list-inside pl-2 text-sm">
-          {data.values.map((item: any, index: number) => {
+          {data.values.map((item: DistributionValue, index: number) => {
             const launchRanges = item.launches
-              .map((r: any) =>
+              .map((r: LaunchRange) =>
                 r.start === r.end
                   ? `${r.start}`
                   : `${r.start}-${r.end}`
@@ -80,17 +97,20 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ diffs }) => {
                 <span className="text-sm font-medium text-gray-600 block mb-1 break-all">
                   {key}
                 </span>
-                <div className="pl-4">{renderSimpleDiff(key, value)}</div>
+                <div className="pl-4">{renderSimpleDiff(key, value as DiffData)}</div>
               </div>
             ))}
           </div>
         </div>
       )}
-      
-      {stackDiff && <StackDiffViewer stackDiff={stackDiff} />}
+
+      {stackDiff ? (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        <StackDiffViewer stackDiff={stackDiff as any} />
+      ) : null}
 
     </div>
   );
 };
 
-export default DiffViewer; 
+export default DiffViewer;

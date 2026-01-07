@@ -1,6 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from abc import ABC
+from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
 from tritonparse.reproducer.function_extractor import extract_utility_functions
@@ -232,6 +233,7 @@ triton.autotune = _patched_autotune
                 dependent_source_map = get_dependent_source_map(
                     context_bundle.kernel_info.function_name,
                     context_bundle.kernel_info.file_path,
+                    context_bundle.source_repo_dir,
                 )
                 # Only add dependent functions if extraction was successful
                 if dependent_source_map:
@@ -283,7 +285,9 @@ triton.autotune = _patched_autotune
 
 
 def get_dependent_source_map(
-    function_name: str, file_path: str
+    function_name: str,
+    file_path: str,
+    source_repo_dir: Optional[str] = None,
 ) -> Optional[dict[str, str]]:
     """
     Extract dependent functions and their required imports.
@@ -295,9 +299,9 @@ def get_dependent_source_map(
     """
     from pathlib import Path
 
-    from tritonparse.tp_logger import logger
-
     source_path = Path(file_path)
+    if not source_path.exists() and source_repo_dir:
+        source_path = _map_file_path_to_source_repo(file_path, source_repo_dir)
     if not source_path.exists():
         return None
 
@@ -308,7 +312,7 @@ def get_dependent_source_map(
         )
 
         analyzer = MultiFileCallGraphAnalyzer(
-            entry_file=file_path,
+            entry_file=str(source_path),
             entry_function=function_name,
         )
         result = analyzer.analyze()
@@ -333,3 +337,27 @@ def get_dependent_source_map(
         # If AST analysis fails, continue without dependent functions
         logger.warning(f"Failed to extract dependent functions: {e}", exc_info=True)
         return None
+
+
+def _map_file_path_to_source_repo(
+    file_path: str, source_repo_dir: str
+) -> Optional[Path]:
+    """
+    Try to map the given file path to a path in fbsource.
+
+    Returns:
+        The mapped file path in fbsource, or None if mapping fails.
+    """
+
+    source_repo_path = Path(source_repo_dir)
+    if not source_repo_path.exists():
+        logger.warning(f"Source repo dir {source_repo_dir} does not exist")
+        return None
+
+    prod_file_path = Path(file_path)
+    for i in range(1, len(prod_file_path.parts)):
+        new_path = source_repo_path / Path("/".join(prod_file_path.parts[i:]))
+        if new_path.exists():
+            logger.info(f"Map file_path: {file_path} to {new_path}")
+            return new_path
+    return None

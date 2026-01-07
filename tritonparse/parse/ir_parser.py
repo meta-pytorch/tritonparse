@@ -1,12 +1,13 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import logging
 import os
 import re
 from collections import defaultdict
 from typing import Any, Dict, List
 
-logger = logging.getLogger("SourceMapping")
+from tritonparse.tp_logger import get_logger
+
+logger = get_logger("SourceMapping")
 
 # the definition of the #loc directive. they are in the bottom of the IR files
 # Example:#loc2 = loc("/tmp/torchinductor_yhao/yp/abcdef.py":20:28)
@@ -32,6 +33,10 @@ PTX_LOC_PATTERN = re.compile(
 AMDGCN_LOC_PATTERN = re.compile(
     r".*loc\s+(\d+)\s+(\d+)\s+(\d+)(?:\s+[^;]*)?;\s*(.+?):(\d+):(\d+)"
 )
+
+# the definition of the SASS source mapping pattern.
+# Example: //## File "/path/to/source.py", line 188
+SASS_LOC_PATTERN = re.compile(r'//## File "([^"]+)", line (\d+)')
 
 
 # alias loc definitions in TTGIR/TTIR
@@ -207,6 +212,61 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     return locations
 
 
+def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Extract source mappings from SASS content.
+
+    SASS format:
+        Function:kernel_name
+                //## File "/path/to/source.py", line 188
+                //## File ".nv_debug_ptx_txt", line 19    # Skip this line
+                        /*0000*/                   MOV R1, c[0x0][0x28] ;
+
+    Args:
+        sass_content (str): The content of the SASS file as a string.
+
+    Returns:
+        Dict[str, Dict[str, Any]]: A dictionary mapping line numbers to their corresponding
+        source file, line numbers, and column numbers.
+    """
+    mappings = {}
+    current_source_info = None
+
+    lines = sass_content.split("\n")
+
+    for line_num, line in enumerate(lines, 1):
+        # Skip lines related to .nv_debug_ptx_txt - these cannot be mapped to Python source
+        if ".nv_debug_ptx_txt" in line:
+            continue
+
+        # Check if this is a source location comment
+        match = SASS_LOC_PATTERN.match(line.strip())
+        if match:
+            file_path, source_line = match.groups()
+            current_source_info = {
+                "file": file_path,
+                "line": int(source_line),
+                "column": 0,  # SASS comments don't include column info
+            }
+            # Add the comment line itself to mappings so it can be highlighted
+            mappings[str(line_num)] = {
+                "file": file_path,
+                "line": int(source_line),
+                "column": 0,
+                "sass_line": line_num,
+            }
+        # Check if this is a SASS instruction line (contains /*address*/ format)
+        elif current_source_info and re.match(r".*\/\*[0-9a-fA-F]+\*\/.*", line):
+            mappings[str(line_num)] = {
+                "file": current_source_info["file"],
+                "line": current_source_info["line"],
+                "column": current_source_info["column"],
+                "sass_line": line_num,
+            }
+
+    return mappings
+
+
 def extract_code_locations(ir_content: str) -> Dict[int, str]:
     """
     Extracts code location mappings from the given IR content.
@@ -235,7 +295,7 @@ def extract_code_locations(ir_content: str) -> Dict[int, str]:
 
 
 def extract_ptx_amdgcn_mappings(
-    content: str, other_mappings: List[Any] = None, ir_type: str = "ptx"
+    content: str, other_mappings: List[Any] | None = None, ir_type: str = "ptx"
 ) -> Dict[str, Dict[str, Any]]:
     """
     Extract mappings from PTX code where `.loc` directives provide source file and line info.

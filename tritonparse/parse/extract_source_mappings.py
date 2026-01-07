@@ -14,12 +14,12 @@ and extracts bidirectional mappings between:
 """
 
 import argparse
-import logging
+
+from tritonparse.tp_logger import get_logger
 
 from .trace_processor import parse_single_file
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("SourceMapping")
+logger = get_logger("SourceMapping")
 
 
 def parse_args():

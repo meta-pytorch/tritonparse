@@ -1,7 +1,7 @@
 // (c) Meta Platforms, Inc. and affiliates.
 
-import React, { useCallback, useMemo, useRef } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import React, { useCallback, useMemo, useRef, useState } from "react";
+import { Panel, Group, Separator } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
 import {
@@ -10,12 +10,12 @@ import {
     SourceMapping,
     getIRType,
 } from "../utils/dataLoader";
-import { getDisplayLanguage } from "./TritonIRs";
+import { getDisplayLanguage } from "../utils/irLanguage";
 
 /**
  * Props for a single code panel
  */
-interface PanelProps {
+interface CodePanelProps {
     code?: IRFile;
     content?: string;
     language?: string;
@@ -26,8 +26,8 @@ interface PanelProps {
  * Props for the CodeComparisonView component
  */
 interface CodeComparisonViewProps {
-    leftPanel: PanelProps;
-    rightPanel: PanelProps;
+    leftPanel: CodePanelProps;
+    rightPanel: CodePanelProps;
     py_code_info?: PythonSourceCodeInfo;
     showPythonSource?: boolean;
     pythonMapping?: Record<string, SourceMapping>;
@@ -250,7 +250,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 { type: "ttir", property: "ttir_lines" },
                 { type: "ptx", property: "ptx_lines" },
                 { type: "llir", property: "llir_lines" },
-                { type: "amdgcn", property: "amdgcn_lines" }
+                { type: "amdgcn", property: "amdgcn_lines" },
+                { type: "sass", property: "sass_lines" }
             ];
 
             for (const { type, property } of irTypesToCheck) {
@@ -271,10 +272,11 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     /**
      * Pure function: Calculate Python lines from IR source mapping
      * No external dependencies - all info passed via parameters
+     * Now returns absolute line numbers directly since Python panel displays with startingLineNumber
      * @param sourceMapping Source mapping record
      * @param lineNumber Line number in IR
      * @param pythonInfo Python file information
-     * @returns Array of Python line numbers
+     * @returns Array of Python line numbers (absolute)
      */
     const calculatePythonLines = useCallback(
         (
@@ -293,21 +295,18 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             const absoluteLine = Number(mapping.line);
 
-            if (pythonInfo.isFullFileMode) {
-                // Full file mode: use absolute line numbers directly
+            // Since Python panel now displays with startingLineNumber=start_line,
+            // we return absolute line numbers directly for both modes
+            const pythonLines = pythonInfo.code.split("\n");
+            const codeEndLine = pythonInfo.start_line + pythonLines.length - 1;
+
+            // Validate the line is within the displayed code range
+            if (absoluteLine >= pythonInfo.start_line && absoluteLine <= codeEndLine) {
                 return [absoluteLine];
             } else {
-                // Function mode: convert absolute to relative line numbers
-                const adjustedLine = absoluteLine - pythonInfo.start_line + 1;
-                const pythonLines = pythonInfo.code.split("\n");
-
-                if (adjustedLine >= 1 && adjustedLine <= pythonLines.length) {
-                    return [adjustedLine];
-                } else {
-                    console.error(
-                        `Adjusted line ${adjustedLine} is out of range (1-${pythonLines.length})`
-                    );
-                }
+                console.error(
+                    `Line ${absoluteLine} is out of range (${pythonInfo.start_line}-${codeEndLine})`
+                );
             }
 
             return [];
@@ -319,39 +318,44 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
     /**
      * Handle line click in left or right panel
-     * Calculates all required highlights in one go, then updates state once
      * @param lineNumber Line number clicked
-     * @param panel Which panel was clicked ('left' or 'right')
+     * @param panelType 'left' or 'right'
      */
     const handlePanelLineClick = useCallback(
-        (lineNumber: number, panel: 'left' | 'right') => {
-            const isLeftPanel = panel === 'left';
+        (lineNumber: number, panelType: 'left' | 'right') => {
+            const isLeftPanel = panelType === 'left';
+            const sourcePanel = isLeftPanel ? leftPanel_data : rightPanel_data;
+            const targetPanel = isLeftPanel ? rightPanel_data : leftPanel_data;
+            const sourceMapping = sourcePanel.sourceMapping;
 
-            // Get source and target panel data
-            const sourceData = isLeftPanel ? leftPanel_data : rightPanel_data;
-            const targetData = isLeftPanel ? rightPanel_data : leftPanel_data;
+            // Validate source mapping exists
+            if (!sourceMapping || !sourceMapping[lineNumber]) {
+                // Just highlight the clicked line, clear others
+                updateHighlights(panelType, [lineNumber]);
+                updateHighlights(isLeftPanel ? 'right' : 'left', []);
+                updateHighlights('python', []);
+                return;
+            }
 
-            // Step 1: Calculate target panel's mapped lines
+            // Find corresponding lines in target panel
             const targetLines = calculateMappedLines(
-                sourceData.sourceMapping,
+                sourceMapping,
                 lineNumber,
-                targetData.title
+                targetPanel.title
             );
 
-            // Step 2: Calculate Python panel's mapped lines
-            const pythonLines = showPythonSource && py_code_info
-                ? calculatePythonLines(
-                    sourceData.sourceMapping,
-                    lineNumber,
-                    pythonInfo
-                )
-                : [];
+            // Calculate Python lines if needed
+            let pythonLines: number[] = [];
+            if (showPythonSource && py_code_info?.code) {
+                pythonLines = calculatePythonLines(sourceMapping, lineNumber, pythonInfo);
+            }
 
             // Step 3: Update highlights via direct DOM manipulation (no re-render)
             updateHighlights('left', isLeftPanel ? [lineNumber] : targetLines);
             updateHighlights('right', isLeftPanel ? targetLines : [lineNumber]);
             updateHighlights('python', pythonLines);
         },
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHighlights is stable via refs
         [
             leftPanel_data,
             rightPanel_data,
@@ -366,35 +370,39 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     /**
      * Handle line click in Python panel
      * Finds corresponding lines in both IR panels
-     * @param lineNumber Line number clicked in Python panel
+     * @param lineNumber Line number clicked in Python panel (now absolute line number)
      */
     const handlePythonLineClick = useCallback(
         (lineNumber: number) => {
             if (!pythonMapping) {
+                // No mapping available: highlight clicked Python line, clear IR panels
+                updateHighlights('left', []);
+                updateHighlights('right', []);
+                updateHighlights('python', [lineNumber]);
                 return;
             }
 
-            // Convert display line number to absolute line number
-            const absoluteLineNumber = pythonInfo.isFullFileMode
-                ? lineNumber
-                : lineNumber + pythonInfo.start_line - 1;
-
-            const mapping = pythonMapping[absoluteLineNumber.toString()];
+            // lineNumber is now the absolute line number since Python panel uses startingLineNumber
+            const mapping = pythonMapping[lineNumber.toString()];
             if (!mapping) {
+                // No mapping for this line: highlight clicked Python line, clear IR panels
+                updateHighlights('left', []);
+                updateHighlights('right', []);
+                updateHighlights('python', [lineNumber]);
                 return;
             }
 
             // Find corresponding lines in left panel
             const leftLines = calculateMappedLines(
-                { [absoluteLineNumber.toString()]: mapping },
-                absoluteLineNumber,
+                { [lineNumber.toString()]: mapping },
+                lineNumber,
                 leftPanel_data.title
             );
 
             // Find corresponding lines in right panel
             const rightLines = calculateMappedLines(
-                { [absoluteLineNumber.toString()]: mapping },
-                absoluteLineNumber,
+                { [lineNumber.toString()]: mapping },
+                lineNumber,
                 rightPanel_data.title
             );
 
@@ -403,12 +411,13 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             updateHighlights('right', rightLines);
             updateHighlights('python', [lineNumber]);
         },
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHighlights is stable via refs
         [
             pythonMapping,
-            pythonInfo,
             calculateMappedLines,
             leftPanel_data.title,
-            rightPanel_data.title
+            rightPanel_data.title,
+            updateHighlights
         ]
     );
 
@@ -428,10 +437,66 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         [handlePanelLineClick]
     );
 
+    // ==================== Scroll Tip State ====================
+
+    const [showScrollTip, setShowScrollTip] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('tritonparse_hideScrollTip') !== 'true';
+        }
+        return true;
+    });
+
+    const handleDismissScrollTip = useCallback(() => {
+        setShowScrollTip(false);
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('tritonparse_hideScrollTip', 'true');
+        }
+    }, []);
+
     // ==================== Render ====================
 
     return (
-        <PanelGroup direction="horizontal" style={{ height: '100%' }}>
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {showScrollTip && (
+                <div style={{
+                    backgroundColor: '#e7f3ff',
+                    borderBottom: '1px solid #b3d7ff',
+                    padding: '6px 16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '13px',
+                    color: '#0066cc',
+                    flexShrink: 0
+                }}>
+                    <span>
+                        💡 Tip: Use <kbd style={{
+                            backgroundColor: '#f0f0f0',
+                            border: '1px solid #ccc',
+                            borderRadius: '3px',
+                            padding: '2px 6px',
+                            fontFamily: 'monospace',
+                            fontSize: '12px',
+                            margin: '0 2px'
+                        }}>Shift</kbd> + Mouse Wheel to scroll horizontally
+                    </span>
+                    <button
+                        onClick={handleDismissScrollTip}
+                        style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '16px',
+                            color: '#666',
+                            padding: '0 4px'
+                        }}
+                        title="Dismiss tip"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+            <Group orientation="horizontal" style={{ flex: 1, minHeight: 0 }}>
             {/* Left Panel */}
             <Panel defaultSize={33} minSize={20}>
                 <div style={{
@@ -440,9 +505,9 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     flexDirection: "column",
                     position: "relative"
                 }}>
-                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                        <span>{leftPanel_data.title}</span>
-                        <div className="flex items-center gap-2">
+                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center min-w-0">
+                        <span className="truncate flex-1 min-w-0 mr-2" title={leftPanel_data.title}>{leftPanel_data.title}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
                             <span className="text-sm bg-blue-700 px-2 py-1 rounded">
                                 {leftPanel_data.displayLanguage}
                             </span>
@@ -466,7 +531,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 </div>
             </Panel>
 
-            <PanelResizeHandle style={{
+            <Separator style={{
                 width: "4px",
                 backgroundColor: "#ddd",
                 cursor: "col-resize"
@@ -480,9 +545,9 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     flexDirection: "column",
                     position: "relative"
                 }}>
-                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                        <span>{rightPanel_data.title}</span>
-                        <div className="flex items-center gap-2">
+                    <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center min-w-0">
+                        <span className="truncate flex-1 min-w-0 mr-2" title={rightPanel_data.title}>{rightPanel_data.title}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
                             <span className="text-sm bg-blue-700 px-2 py-1 rounded">
                                 {rightPanel_data.displayLanguage}
                             </span>
@@ -509,7 +574,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             {/* Python Source Panel (Optional) */}
             {showPythonSource && py_code_info && (
                 <>
-                    <PanelResizeHandle style={{
+                    <Separator style={{
                         width: "4px",
                         backgroundColor: "#ddd",
                         cursor: "col-resize"
@@ -521,13 +586,13 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                             flexDirection: "column",
                             position: "relative"
                         }}>
-                            <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center">
-                                <span>
+                            <div className="bg-blue-600 text-white p-2 font-medium flex justify-between items-center min-w-0">
+                                <span className="truncate flex-1 min-w-0 mr-2" title={pythonInfo.isFullFileMode ? "Python Source (Full File)" : "Python Source"}>
                                     {pythonInfo.isFullFileMode
                                         ? "Python Source (Full File)"
                                         : "Python Source"}
                                 </span>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-shrink-0">
                                     <span className="text-sm bg-blue-700 px-2 py-1 rounded">
                                         python
                                     </span>
@@ -538,7 +603,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                                 </div>
                             </div>
                             <div style={{ flex: 1, overflow: "hidden" }}>
-                                <CodeViewer
+                            <CodeViewer
                                     code={pythonInfo.code}
                                     language="python"
                                     height="100%"
@@ -546,12 +611,13 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                                     onLineClick={handlePythonLineClick}
                                     viewerId="python"
                                     sourceMapping={pythonMapping}
+                                    startingLineNumber={pythonInfo.start_line}
                                     functionStartLine={pythonInfo.function_start_line}
                                     functionEndLine={pythonInfo.function_end_line}
                                     initialScrollToLine={
                                         pythonInfo.isFullFileMode
                                             ? pythonInfo.function_start_line
-                                            : undefined
+                                            : pythonInfo.start_line
                                     }
                                 />
                             </div>
@@ -559,7 +625,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     </Panel>
                 </>
             )}
-        </PanelGroup>
+        </Group>
+        </div>
     );
 };
 

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useMemo, useRef, useState } from "react";
 import type { ProcessedKernel } from "../utils/dataLoader";
 

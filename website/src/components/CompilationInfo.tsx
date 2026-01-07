@@ -7,7 +7,7 @@ interface CompilationInfoProps {
     timestamp: string;
   };
   targets: string[];
-  options: Record<string, any>;
+  options: Record<string, unknown>;
   statistics: Record<string, number>;
 }
 

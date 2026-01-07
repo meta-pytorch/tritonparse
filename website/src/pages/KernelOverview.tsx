@@ -3,6 +3,7 @@ import ArgumentViewer from "../components/ArgumentViewer";
 import DiffViewer from "../components/DiffViewer";
 import { ProcessedKernel } from "../utils/dataLoader";
 import ToggleSwitch from "../components/ToggleSwitch";
+import { DocumentTextIcon, ChevronRightIcon } from "../components/icons";
 
 interface KernelOverviewProps {
   /** A list of all processed kernels available for viewing. */
@@ -18,7 +19,7 @@ interface KernelOverviewProps {
 /**
  * Determines if a metadata value is considered "long" and should be displayed at the end
  */
-const isLongValue = (value: any): boolean => {
+const isLongValue = (value: unknown): boolean => {
   const formattedString = formatMetadataValue(value);
   return formattedString.length > 50;
 };
@@ -28,7 +29,7 @@ const isLongValue = (value: any): boolean => {
  * @param value - The value to format
  * @returns Formatted string representation
  */
-const formatMetadataValue = (value: any): string => {
+const formatMetadataValue = (value: unknown): string => {
   if (value === null) {
     return "null";
   }
@@ -69,10 +70,20 @@ const MetadataItem: React.FC<MetadataItemProps> = ({
 );
 
 /**
+ * Stack entry interface for stack traces
+ */
+interface StackEntry {
+  filename: string | number | [string, number];
+  line: number;
+  name: string;
+  loc?: string;
+}
+
+/**
  * Gets the actual file path from a stack entry's filename
  * @param entry - The stack entry
  */
-const getSourceFilePath = (entry: any): string => {
+const getSourceFilePath = (entry: StackEntry): string => {
   if (typeof entry.filename === "string") {
     return entry.filename;
   }
@@ -245,7 +256,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
               <div className="grid grid-cols-[repeat(auto-fit,_minmax(180px,_1fr))] gap-3 mb-4">
                 {/* All short metadata fields */}
                 {Object.entries(kernel.metadata)
-                  .filter(([_key, value]) => !isLongValue(value))
+                  .filter(([, value]) => !isLongValue(value))
                   .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
                   .map(([key, value]) => {
                     return (
@@ -265,12 +276,12 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
               </div>
 
               {/* Long fields in separate section within same container */}
-              {Object.entries(kernel.metadata).filter(([_key, value]) =>
+              {Object.entries(kernel.metadata).filter(([, value]) =>
                 isLongValue(value)
               ).length > 0 && (
                 <div className="space-y-3 border-t border-gray-200 pt-4">
                   {Object.entries(kernel.metadata)
-                    .filter(([_key, value]) => isLongValue(value))
+                    .filter(([, value]) => isLongValue(value))
                     .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
                     .map(([key, value]) => (
                       <div key={key} className="w-full">
@@ -317,7 +328,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                   </h4>
                   <div className="font-mono text-sm bg-gray-100 p-2 rounded">
                     {kernel.launchDiff.launch_index_map
-                      .map((r: any) =>
+                      .map((r: { start: number; end: number }) =>
                         r.start === r.end
                           ? `${r.start}`
                           : `${r.start}-${r.end}`
@@ -385,7 +396,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                   </h4>
                   <div className="bg-white p-3 rounded-md border border-gray-200 overflow-auto resize-y h-80 min-h-24">
                     {Array.isArray(kernel.launchDiff.sames.stack) ? (
-                      kernel.launchDiff.sames.stack.map((entry: any, index: number) => (
+                      kernel.launchDiff.sames.stack.map((entry: StackEntry, index: number) => (
                         <div key={index} className="mb-1 font-mono text-sm">
                           <span className="text-blue-600">
                             {getSourceFilePath(entry)}
@@ -411,7 +422,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                 <h4 className="text-md font-semibold mb-2 text-gray-800">
                   Differing Fields
                 </h4>
-                <DiffViewer diffs={kernel.launchDiff.diffs} />
+                <DiffViewer diffs={(kernel.launchDiff.diffs ?? {}) as Record<string, unknown>} />
               </div>
             </div>
           </div>
@@ -436,7 +447,6 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
           </div>
         </div>
 
-        {/* Available IR Files */}
         <div>
           <h3 className="text-lg font-medium mb-2 text-gray-800">IR Files</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -448,21 +458,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
               >
                 <div className="flex items-start">
                   <div className="flex-shrink-0">
-                    {/* SVG icon representing a document/file */}
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-6 w-6 text-blue-600"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                      />
-                    </svg>
+                    <DocumentTextIcon className="h-6 w-6 text-blue-600" />
                   </div>
                   <div className="ml-4">
                     <h3 className="text-lg font-medium text-gray-800">
@@ -473,19 +469,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                     </p>
                   </div>
                   <div className="ml-auto">
-                    {/* Right arrow icon indicating clickable action */}
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5 text-gray-400"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
+                    <ChevronRightIcon className="h-5 w-5 text-gray-400" />
                   </div>
                 </div>
               </div>

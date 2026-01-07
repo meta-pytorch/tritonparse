@@ -9,8 +9,8 @@ reusing functionality from the parse module.
 
 from pathlib import Path
 
-from tritonparse.common import gzip_single_file
-from tritonparse.trace_processor import parse_single_file
+from tritonparse.parse.common import gzip_single_file
+from tritonparse.parse.trace_processor import parse_single_file
 
 
 def parse_and_compress_raw_log(

@@ -158,10 +158,12 @@ interface CodeViewerProps {
   functionEndLine?: number; // Function definition end line (for highlighting in full file mode)
   initialScrollToLine?: number; // Line number to scroll to on initial render
   onScrollComplete?: () => void; // Callback fired when initial scroll completes
+  startingLineNumber?: number; // Starting line number for display (default: 1)
 }
 
 /**
  * Maps our internal language names to syntax highlighter languages
+ * Note: Exported for use by other components.
  * @param language Internal language identifier
  * @returns Syntax highlighter language identifier
  */
@@ -177,6 +179,8 @@ export const mapLanguageToHighlighter = (language: string): string => {
     return 'ptx';
   } else if (lowerCaseLanguage.endsWith("amdgcn")) {
     return 'amdgcn';
+  } else if (lowerCaseLanguage.endsWith("sass")) {
+    return 'asm';  // SASS is NVIDIA assembly, use generic asm highlighting
   } else if (lowerCaseLanguage === "python") {
     return 'python';
   }
@@ -199,7 +203,7 @@ const splitIntoLines = (code: string): string[] => {
  * @param wait The number of milliseconds to delay
  * @returns Debounced function
  */
-function debounce<T extends (...args: any[]) => any>(
+function debounce<T extends (...args: unknown[]) => unknown>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {
@@ -234,7 +238,7 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
     if (onLineClick) {
       onLineClick(lineNumber);
     }
-  }, [onLineClick, viewerId]);
+  }, [onLineClick]);
 
   // Initial scroll effect - use scrollIntoView for accuracy
   useEffect(() => {
@@ -439,14 +443,22 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
     });
   }, [lines.length, lineHeight]);
 
-  // Create a debounced version of the update function for scroll events
-  const debouncedUpdate = useRef(debounce(updateVisibleLines, 10)).current;
+  // Create a debounced version of the update function inside useEffect
+  // This avoids the refs-during-render warning
+  const debouncedUpdateRef = useRef<((...args: unknown[]) => void) | null>(null);
+
+  // Initialize the debounced function in useEffect
+  useEffect(() => {
+    debouncedUpdateRef.current = debounce(updateVisibleLines, 10);
+  }, [updateVisibleLines]);
 
   // Combined scroll handler that updates visible range and saves position
   const handleScroll = useCallback(() => {
     saveScrollPosition();
-    debouncedUpdate();
-  }, [debouncedUpdate, saveScrollPosition]);
+    if (debouncedUpdateRef.current) {
+      debouncedUpdateRef.current();
+    }
+  }, [saveScrollPosition]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -470,7 +482,7 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
     if (onLineClick) {
       onLineClick(lineNumber);
     }
-  }, [onLineClick, viewerId]);
+  }, [onLineClick]);
 
   // Map the language to the appropriate highlighter language
   const highlighterLanguage = mapLanguageToHighlighter(language);
@@ -577,6 +589,7 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
   onScrollComplete,
   functionStartLine,
   functionEndLine,
+  startingLineNumber = 1,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
@@ -636,8 +649,12 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
         language={highlighterLanguage}
         style={theme === "light" ? oneLight : oneDark}
         showLineNumbers
+        startingLineNumber={startingLineNumber}
         wrapLines
         lineProps={(lineNumber) => {
+          // lineNumber from SyntaxHighlighter already includes startingLineNumber offset
+          // so it represents the actual/absolute line number to display and use
+
           // Check if line is in function range
           const isInFunctionRange =
             functionStartLine !== undefined &&

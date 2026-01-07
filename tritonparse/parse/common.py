@@ -1,8 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import gzip
-import importlib
-import importlib.util
 import json
 import os
 import re
@@ -12,19 +10,19 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Tuple
 
+from tritonparse.shared_vars import (
+    DEFAULT_TRACE_FILE_PREFIX_WITHOUT_USER as LOG_PREFIX,
+    is_fbcode,
+)
+from tritonparse.tp_logger import logger
+
 from .extract_source_mappings import parse_single_file
-from .shared_vars import DEFAULT_TRACE_FILE_PREFIX_WITHOUT_USER as LOG_PREFIX
-from .tp_logger import logger
 
 LOG_RANK_REGEX = re.compile(r"rank_(\d+)")
 
 
-def is_fbcode():
-    return importlib.util.find_spec("tritonparse.fb") is not None
-
-
 if is_fbcode():
-    from .fb.source_type import SourceType
+    from tritonparse.fb.source_type import SourceType
 else:
     from .source_type import SourceType
 

@@ -246,10 +246,14 @@ class CallGraph(ast.NodeVisitor):
         # Initialize reachable functions with backends
         reachable: Set[str] = set()
         for backend in self.backends:
-            # Add both the short name and any fully qualified names that match
+            # Add both the short name and any fully qualified names that EXACTLY match
+            # (i.e., the function's short name == backend)
+            # This prevents matching functions like "triton_concat_2D_jagged"
+            # when the backend is "concat_2D_jagged"
             reachable.add(backend)
             for func in self.local_functions:
-                if backend in func:
+                func_short_name = func.split(".")[-1]
+                if func_short_name == backend:
                     reachable.add(func)
 
         # Iteratively add callees until no new functions are added
@@ -308,17 +312,15 @@ class CallGraph(ast.NodeVisitor):
         # Remove backend functions from the result if they appear as callees
         for backend in self.backends:
             dependent_funcs.discard(backend)
-            # Also check for fully qualified backend names
+            # Also check for fully qualified backend names (module.function_name)
+            # Use exact match on the short name (after the last dot) to avoid
+            # matching functions that contain the backend name as a substring
+            # e.g., "triton_concat_2D_jagged" should NOT match backend "concat_2D_jagged"
             for func in list(dependent_funcs):
-                if backend in func and func in self.tracked_functions:
+                func_short_name = func.split(".")[-1]
+                if func_short_name == backend and func in self.tracked_functions:
                     # This is a backend function, remove it
-                    backend_qualified = None
-                    for tracked in self.tracked_functions:
-                        if backend in tracked and tracked in self.local_functions:
-                            backend_qualified = tracked
-                            break
-                    if backend_qualified and func == backend_qualified:
-                        dependent_funcs.discard(func)
+                    dependent_funcs.discard(func)
 
         return dependent_funcs
 
@@ -341,49 +343,44 @@ class CallGraph(ast.NodeVisitor):
         """Return source code for all dependent functions with source location comments.
 
         Extracts the source code of all functions that are transitively
-        called from the backend functions. Useful for creating standalone
-        reproducers or understanding function dependencies.
+        called from the backend functions using ast.unparse() for proper
+        indentation handling.
 
         Returns:
             Dictionary mapping function qualified names to their source code.
             Only includes functions that are defined in the analyzed file.
             Each function's source code is prefixed with a comment indicating
             the source file and line numbers.
+
+        Note:
+            ast.unparse() does not preserve comments from the original source.
         """
         dependent_funcs = self.get_dependent_functions()
         result: Dict[str, str] = {}
-
-        if not self.source_code:
-            # Source code wasn't stored during visit
-            with open(self.filename, "r") as f:
-                self.source_code = f.read()
-
-        source_lines = self.source_code.splitlines(keepends=True)
 
         for func_name in dependent_funcs:
             if func_name in self.func_nodes:
                 node = self.func_nodes[func_name]
 
-                # Determine starting line: if there are decorators, start from the first decorator
-                # Otherwise start from the function definition
+                # Determine starting line for the source comment
                 if node.decorator_list:
-                    # Get the first decorator's line number (1-indexed)
                     start_line = node.decorator_list[0].lineno
                 else:
-                    # No decorators, start from the function definition
                     start_line = node.lineno
 
-                # Get the end line of the function (1-indexed)
                 end_line = node.end_lineno
 
+                # Use ast.unparse() to generate properly indented source code
+                func_source = ast.unparse(node)
+
+                # Add source location comment
                 if start_line is not None and end_line is not None:
-                    # Convert to 0-indexed and extract source lines
-                    func_source = "".join(source_lines[start_line - 1 : end_line])
-                    # Add source location comment
                     source_comment = (
                         f"# Source: {self.filename}:{start_line}-{end_line}\n"
                     )
                     result[func_name] = source_comment + func_source
+                else:
+                    result[func_name] = func_source
 
         return result
 

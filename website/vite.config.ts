@@ -48,6 +48,13 @@ function resolveCommitSha(): string {
 // Compute once at config load; injected below via define.
 const gitSha = resolveCommitSha()
 
+// Check if this is an FB (internal) build
+// Set FB_BUILD=true environment variable when building for internal deployment
+const isFbBuild = process.env.FB_BUILD === 'true'
+
+// Internal wiki URL - only included in FB builds
+const internalWikiUrl = 'https://www.internalfb.com/wiki/Triton_Core/Tools/TritonParse/'
+
 export default defineConfig({
   plugins: [
     tailwindcss(),
@@ -80,6 +87,10 @@ export default defineConfig({
   define: {
     'import.meta.env.PACKAGE_VERSION': JSON.stringify(packageJson.version),
     'import.meta.env.PACKAGE_BUILD_DATE': JSON.stringify(buildDate),
-    'import.meta.env.GIT_COMMIT_SHA_SHORT': JSON.stringify(gitSha)
+    'import.meta.env.GIT_COMMIT_SHA_SHORT': JSON.stringify(gitSha),
+    // FB build flag - defaults to false, set FB_BUILD=true for internal builds
+    'import.meta.env.IS_FB_BUILD': JSON.stringify(isFbBuild),
+    // Internal wiki URL - only meaningful when IS_FB_BUILD is true
+    'import.meta.env.INTERNAL_WIKI_URL': JSON.stringify(isFbBuild ? internalWikiUrl : '')
   }
 })

@@ -1,0 +1,63 @@
+name: Website Build Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/website-build.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/website-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "website/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: ./website
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./website
+        run: npm run lint
+
+      - name: Build website
+        working-directory: ./website
+        run: npm run build
+
+      - name: Build standalone website
+        working-directory: ./website
+        run: npm run build:single
+
+      - name: Verify build output
+        run: |
+          if [ ! -d "website/dist" ]; then
+            echo "❌ Build failed: dist directory not found"
+            exit 1
+          fi
+          if [ ! -f "website/dist/index.html" ]; then
+            echo "❌ Build failed: index.html not found"
+            exit 1
+          fi
+          if [ ! -f "website/dist/standalone.html" ]; then
+            echo "❌ Build failed: standalone.html not found"
+            exit 1
+          fi
+          echo "✅ Build successful: all expected files present"
+          ls -la website/dist/
