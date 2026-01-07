@@ -28,7 +28,9 @@ def create_python_mapping(
 
 
 def create_ir_mapping(
-    source_map: Dict[str, Dict[str, Any]], target_map: Dict[str, Dict[str, Any]]
+    source_map: Dict[str, Dict[str, Any]],
+    target_map: Dict[str, Dict[str, Any]],
+    ignore_column: bool = False,
 ) -> Dict[str, List[int]]:
     """
     Create a mapping from source IR lines to target IR lines.
@@ -42,6 +44,8 @@ def create_ir_mapping(
             line, and column information.
         target_map (Dict[str, Dict[str, Any]]): A dictionary mapping target IR line numbers to their source file,
             line, and column information.
+        ignore_column (bool): If True, match only on file and line, ignoring column.
+            This is useful for SASS mappings which don't have column information.
 
     Returns:
         Dict[str, List[int]]: A dictionary mapping source IR line numbers to lists of corresponding target IR line numbers.
@@ -51,14 +55,24 @@ def create_ir_mapping(
     # Build a mapping from source file locations to target lines
     for tgt_line, tgt_info in target_map.items():
         if "file" in tgt_info and "line" in tgt_info:
-            key = f"{tgt_info['file']}:{tgt_info['line']}:{tgt_info.get('column', 0)}"
+            if ignore_column:
+                key = f"{tgt_info['file']}:{tgt_info['line']}"
+            else:
+                key = (
+                    f"{tgt_info['file']}:{tgt_info['line']}:{tgt_info.get('column', 0)}"
+                )
             source_to_target[key].append(int(tgt_line))
 
     # Map source lines to target lines
     mapping = {}
     for src_line, src_info in source_map.items():
         if "file" in src_info and "line" in src_info:
-            key = f"{src_info['file']}:{src_info['line']}:{src_info.get('column', 0)}"
+            if ignore_column:
+                key = f"{src_info['file']}:{src_info['line']}"
+            else:
+                key = (
+                    f"{src_info['file']}:{src_info['line']}:{src_info.get('column', 0)}"
+                )
             if key in source_to_target:
                 mapping[src_line] = sorted(source_to_target[key])
 
@@ -80,11 +94,15 @@ def create_bidirectional_mapping(
     Args:
         source_map: Dictionary mapping source IR line numbers to source locations
         target_map: Dictionary mapping target IR line numbers to source locations
-        source_type: String identifier for the source IR type (e.g., 'ttir', 'ttgir', 'ptx')
-        target_type: String identifier for the target IR type (e.g., 'ttir', 'ttgir', 'ptx')
+        source_type: String identifier for the source IR type (e.g., 'ttir', 'ttgir', 'ptx', 'sass')
+        target_type: String identifier for the target IR type (e.g., 'ttir', 'ttgir', 'ptx', 'sass')
     """
+    # SASS mappings don't have column information, so we use fuzzy matching
+    # (ignore column) when either source or target is SASS
+    ignore_column = source_type == "sass" or target_type == "sass"
+
     # Create forward mapping (source to target)
-    source_to_target = create_ir_mapping(source_map, target_map)
+    source_to_target = create_ir_mapping(source_map, target_map, ignore_column)
 
     # Add target line references to source mappings
     for source_line, target_lines in source_to_target.items():
@@ -92,7 +110,7 @@ def create_bidirectional_mapping(
             source_map[source_line][f"{target_type}_lines"] = target_lines
 
     # Create reverse mapping (target to source)
-    target_to_source = create_ir_mapping(target_map, source_map)
+    target_to_source = create_ir_mapping(target_map, source_map, ignore_column)
 
     # Add source line references to target mappings
     for target_line, source_lines in target_to_source.items():
