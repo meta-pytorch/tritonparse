@@ -1,6 +1,6 @@
 // (c) Meta Platforms, Inc. and affiliates.
 
-import React, { useCallback, useMemo, useRef } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
@@ -437,10 +437,66 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         [handlePanelLineClick]
     );
 
+    // ==================== Scroll Tip State ====================
+
+    const [showScrollTip, setShowScrollTip] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('tritonparse_hideScrollTip') !== 'true';
+        }
+        return true;
+    });
+
+    const handleDismissScrollTip = useCallback(() => {
+        setShowScrollTip(false);
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('tritonparse_hideScrollTip', 'true');
+        }
+    }, []);
+
     // ==================== Render ====================
 
     return (
-        <Group orientation="horizontal" style={{ height: '100%' }}>
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {showScrollTip && (
+                <div style={{
+                    backgroundColor: '#e7f3ff',
+                    borderBottom: '1px solid #b3d7ff',
+                    padding: '6px 16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '13px',
+                    color: '#0066cc',
+                    flexShrink: 0
+                }}>
+                    <span>
+                        💡 Tip: Use <kbd style={{
+                            backgroundColor: '#f0f0f0',
+                            border: '1px solid #ccc',
+                            borderRadius: '3px',
+                            padding: '2px 6px',
+                            fontFamily: 'monospace',
+                            fontSize: '12px',
+                            margin: '0 2px'
+                        }}>Shift</kbd> + Mouse Wheel to scroll horizontally
+                    </span>
+                    <button
+                        onClick={handleDismissScrollTip}
+                        style={{
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '16px',
+                            color: '#666',
+                            padding: '0 4px'
+                        }}
+                        title="Dismiss tip"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+            <Group orientation="horizontal" style={{ flex: 1, minHeight: 0 }}>
             {/* Left Panel */}
             <Panel defaultSize={33} minSize={20}>
                 <div style={{
@@ -570,6 +626,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 </>
             )}
         </Group>
+        </div>
     );
 };
 
