@@ -24,6 +24,8 @@ export const getDisplayLanguage = (irType: string): string => {
     return "JSON";
   } else if (irType.toLowerCase().endsWith("amdgcn")) {
     return "AMDGCN (AMD GCN Assembly)";
+  } else if (irType.toLowerCase().endsWith("sass")) {
+    return "SASS (NVIDIA Shader Assembly)";
   } else {
     return irType;
   }

@@ -12,11 +12,13 @@ export interface SourceMapping {
     ptx_line?: number;
     amdgcn_line?: number;
     llir_line?: number;
+    sass_line?: number;
     ptx_lines?: number[]; // Array of corresponding PTX lines
     ttir_lines?: number[]; // Array of corresponding TTIR lines
     ttgir_lines?: number[]; // Array of corresponding TTGIR lines
     llir_lines?: number[]; // Array of corresponding LLIR lines
     amdgcn_lines?: number[]; // Array of corresponding AMDGCN lines
+    sass_lines?: number[]; // Array of corresponding SASS lines
     // New fields for location alias support
     type?: string; // Type of mapping entry, e.g., "loc_def" for loc definition lines
     kind?: string; // Deprecated alias for type, kept for backward compatibility
