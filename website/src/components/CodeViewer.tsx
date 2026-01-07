@@ -179,6 +179,8 @@ export const mapLanguageToHighlighter = (language: string): string => {
     return 'ptx';
   } else if (lowerCaseLanguage.endsWith("amdgcn")) {
     return 'amdgcn';
+  } else if (lowerCaseLanguage.endsWith("sass")) {
+    return 'asm';  // SASS is NVIDIA assembly, use generic asm highlighting
   } else if (lowerCaseLanguage === "python") {
     return 'python';
   }
