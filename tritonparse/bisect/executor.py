@@ -14,7 +14,8 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Union
+from datetime import datetime
+from typing import Callable, Dict, List, Optional, Union
 
 from tritonparse.bisect.logger import BisectLogger
 
@@ -189,3 +190,113 @@ class ShellExecutor:
         )
 
         return cmd_result
+
+    def run_command_streaming(
+        self,
+        cmd: Union[str, List[str]],
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+        shell: bool = False,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> CommandResult:
+        """
+        Execute a shell command with real-time streaming output.
+
+        Use this for long-running commands like builds. Each line of output
+        is sent to the logger's output_callback for TUI display.
+
+        Args:
+            cmd: Command to execute. Can be a string or list of arguments.
+            cwd: Working directory for command execution.
+            env: Additional environment variables (merged with current env).
+            shell: If True, execute command through the shell.
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
+
+        Returns:
+            CommandResult containing exit code, stdout, and duration.
+            Note: stderr is merged into stdout in streaming mode.
+        """
+        full_env = os.environ.copy()
+        if env:
+            full_env.update(env)
+
+        cmd_str = cmd if isinstance(cmd, str) else " ".join(cmd)
+        self.logger.info(f"Executing (streaming): {cmd_str}")
+        if cwd:
+            self.logger.debug(f"  cwd: {cwd}")
+
+        start_time = time.time()
+        output_lines: List[str] = []
+
+        # Write header to command log file
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(self.logger.command_log_path, "a") as f:
+            f.write(f"\n{'=' * 60}\n")
+            f.write(f"[{timestamp}] Command: {cmd_str}\n")
+            f.write(f"{'=' * 60}\n")
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=full_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=shell,
+                bufsize=1,
+            )
+
+            for line in process.stdout:
+                line = line.rstrip("\n")
+                output_lines.append(line)
+                self.logger.log_command_output(
+                    cmd_str, line + "\n", 0, include_wrapper=False
+                )
+                # Call output callback for TUI
+                if output_callback:
+                    output_callback(line)
+
+            process.wait()
+            exit_code = process.returncode
+
+        except OSError as e:
+            exit_code = -1
+            error_msg = f"OSError: {e}"
+            output_lines.append(error_msg)
+            self.logger.log_command_output(
+                cmd_str, error_msg + "\n", exit_code, include_wrapper=False
+            )
+            if output_callback:
+                output_callback(error_msg)
+
+        except Exception as e:
+            exit_code = -1
+            error_msg = f"Unexpected error: {e}"
+            output_lines.append(error_msg)
+            self.logger.log_command_output(
+                cmd_str, error_msg + "\n", exit_code, include_wrapper=False
+            )
+            if output_callback:
+                output_callback(error_msg)
+
+        duration = time.time() - start_time
+
+        # Write footer to command log file
+        with open(self.logger.command_log_path, "a") as f:
+            f.write(f"{'=' * 60}\n")
+            f.write(f"Exit code: {exit_code}, Duration: {_format_duration(duration)}\n")
+
+        self.logger.info(
+            f"Command completed in {_format_duration(duration)} "
+            f"(exit code: {exit_code})"
+        )
+
+        return CommandResult(
+            command=cmd_str,
+            exit_code=exit_code,
+            stdout="\n".join(output_lines),
+            stderr="",
+            duration_seconds=duration,
+        )
