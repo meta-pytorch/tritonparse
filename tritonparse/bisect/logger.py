@@ -88,12 +88,15 @@ class BisectLogger:
 
     def _setup_module_logger(self) -> None:
         """Configure the Python logging system with file and stdout handlers."""
-        self.logger = logging.getLogger(f"bisect.{self.session_name}")
+        # Use unique logger name with instance id to avoid sharing handlers
+        # between different BisectLogger instances with the same session_name.
+        # This ensures each instance logs to its own file path.
+        self._logger_name = f"bisect.{self.session_name}.{id(self)}"
+        self.logger = logging.getLogger(self._logger_name)
         self.logger.setLevel(logging.DEBUG)
 
-        # Prevent duplicate handlers if logger already exists
-        if self.logger.handlers:
-            return
+        # Prevent propagation to root logger to avoid duplicate output
+        self.logger.propagate = False
 
         # File handler - captures all levels
         fh = logging.FileHandler(self.module_log_path)
