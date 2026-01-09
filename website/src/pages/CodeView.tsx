@@ -167,7 +167,7 @@ const CodeViewInner: React.FC<{
 
       {/* Side-by-side comparison of selected IR files */}
       {leftIR && rightIR ? (
-        <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-hidden shadow-sm border border-gray-200">
+        <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-auto resize-y min-h-48 shadow-sm border border-gray-200">
           <CodeComparisonView
             leftPanel={{
               code: {
