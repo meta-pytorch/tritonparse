@@ -11,12 +11,17 @@ import ast
 from pathlib import Path
 
 
-def extract_utility_functions() -> str:
+def extract_utility_functions(embed_context: bool = False) -> str:
     """
     Extract all utility functions needed for the reproducer template.
 
     Uses AST parsing to extract functions and constants from source files
     without importing them (avoiding potential side effects).
+
+    Args:
+        embed_context: If True, exclude file-based loading functions
+            (create_args_from_json_file) since the context is embedded
+            directly in the script. Default: False.
 
     Returns:
         str: Complete Python code including imports and all utility functions.
@@ -31,15 +36,20 @@ def extract_utility_functions() -> str:
     load_tensor_tree, load_tensor_lines = _parse_source_file(load_tensor_path)
 
     # Define what to extract (in dependency order)
+    # When embed_context=True, we don't need create_args_from_json_file
+    # since the JSON is embedded directly in the script
     utils_function_names = [
         "_get_triton_tensor_types",
-        "create_args_from_json_file",
         "create_args_from_json",
         "_apply_stride_and_offset",
         "_create_base_tensor",
         "_create_tensor",
         "_create_arg_from_info",
     ]
+
+    # Only include file-based loading function when not embedding context
+    if not embed_context:
+        utils_function_names.insert(1, "create_args_from_json_file")
 
     load_tensor_function_names = [
         "load_tensor",

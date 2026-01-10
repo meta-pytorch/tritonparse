@@ -9,24 +9,28 @@ import torch
 
 logger = logging.getLogger(__name__)
 
+# {{CONTEXT_JSON_PLACEHOLDER}}
+
+# {{COMPILATION_JSON_PLACEHOLDER}}
+
 # {{IR_OVERRIDE_SETUP_PLACEHOLDER}}
-
-# {{KERNEL_SYSPATH_PLACEHOLDER}}
-
-# {{KERNEL_IMPORT_PLACEHOLDER}}
 
 # {{UTILITY_FUNCTIONS_PLACEHOLDER}}
 
+# isort: off
+# {{KERNEL_SYSPATH_PLACEHOLDER}}
+
+# {{KERNEL_IMPORT_PLACEHOLDER}}
+# isort: on
+
 
 def launch_kernel():
-    script_dir = Path(__file__).resolve().parent  # noqa: F821
-    json_file = script_dir / "{{JSON_FILE_NAME_PLACEHOLDER}}"
-    grid, args_dict = create_args_from_json_file(str(json_file))  # noqa: F821
+    # {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}
 
     print("Generated kernel arguments dictionary:")
-    for name, arg in args_dict.items():
+    for name, arg in args_dict.items():  # noqa: F821
         print(f"  {name}: {arg}")
-    print(f"Grid: {grid}")
+    print(f"Grid: {grid}")  # noqa: F821
 
     # {{KERNEL_INVOCATION_PLACEHOLDER}}
 

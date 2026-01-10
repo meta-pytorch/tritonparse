@@ -107,6 +107,7 @@ def main():
             kernel_import=args.kernel_import,
             replacer=replacer,
             skip_logger=True,  # Already logged above
+            embed_context=args.embed_context,
         )
     elif args.func == "info":
         info_command(
