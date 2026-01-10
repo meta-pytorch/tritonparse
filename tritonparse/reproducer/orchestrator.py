@@ -28,6 +28,7 @@ def reproduce(
     kernel_import: KernelImportMode = KernelImportMode.DEFAULT,
     skip_logger: bool = False,
     source_repo_dir: Optional[str] = None,
+    embed_context: bool = False,
 ) -> dict[str, str]:
     """
     Generate a reproducer script from NDJSON trace file.
@@ -48,6 +49,15 @@ def reproduce(
         kernel_import: Kernel import mode (DEFAULT or COPY).
         skip_logger: Whether to skip usage logging (default: False).
         source_repo_dir: Optional path to the source repository directory to map the file paths in production back.
+        embed_context: If True, embed the JSON context directly in the Python script
+            for a standalone reproducer. Default: False (generates separate JSON file).
+
+    Returns:
+        A dictionary with keys:
+            - kernel_src_path: Path to the kernel source file.
+            - kernel: Name of the kernel function.
+            - repro_script: Absolute path to the generated reproducer script.
+            - repro_context: Absolute path to the JSON context file, or None if embed_context=True.
     """
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
@@ -79,11 +89,14 @@ def reproduce(
     out_py_path, temp_json_path = determine_output_paths(
         out_dir, context_bundle.kernel_info.function_name, template
     )
-    save_prettified_json(context_bundle.raw_launch_event, temp_json_path)
 
-    # Save compilation event JSON if using OVERRIDE_TTIR mode
+    # Save context JSON only if not embedding
+    if not embed_context:
+        save_prettified_json(context_bundle.raw_launch_event, temp_json_path)
+
+    # Save compilation event JSON if using OVERRIDE_TTIR mode and not embedding
     comp_json_path = None
-    if kernel_import == KernelImportMode.OVERRIDE_TTIR:
+    if kernel_import == KernelImportMode.OVERRIDE_TTIR and not embed_context:
         comp_json_path = (
             temp_json_path.parent / f"{temp_json_path.stem}_compilation.json"
         )
@@ -102,6 +115,7 @@ def reproduce(
         temp_json_path=temp_json_path,
         kernel_import=kernel_import,
         comp_json_filename=comp_json_path.name if comp_json_path else None,
+        embed_context=embed_context,
     )
 
     # Format the generated code
@@ -115,7 +129,7 @@ def reproduce(
         "kernel_src_path": filepath,
         "kernel": context_bundle.kernel_info.function_name,
         "repro_script": str(out_py_path.resolve()),
-        "repro_context": str(temp_json_path.resolve()),
+        "repro_context": None if embed_context else str(temp_json_path.resolve()),
     }
     logger.info("REPRODUCER_OUTPUT\n%s", ret)
 
