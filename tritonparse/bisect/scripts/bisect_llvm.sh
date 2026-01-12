@@ -242,9 +242,74 @@ if [ $LLVM_BUILD_CODE -ne 0 ]; then
   exit 125  # skip - let bisect try adjacent commits
 fi
 
-# TODO: Phase 2 (Triton build) will be added in PR-10
-# TODO: Test execution will be added in PR-10
+# ============================================================
+# Build Phase 2: Build Triton with LLVM
+# ============================================================
 echo "" | log_output
-echo "Phase 1 (LLVM build) complete." | log_output
-echo "Phase 2 (Triton build) and test execution will be added in next PR." | log_output
-exit 0
+echo "=== Phase 2: Building Triton with LLVM ===" | log_output
+TRITON_BUILD_START=$(date +%s)
+
+if [ -n "$LOG_FILE" ]; then
+  TRITON_BUILD_WITH_CLANG_LLD=1 \
+  TRITON_BUILD_WITH_CCACHE=0 \
+  LLVM_INCLUDE_DIRS="$LLVM_BUILD_DIR/include" \
+  LLVM_LIBRARY_DIR="$LLVM_BUILD_DIR/lib" \
+  LLVM_SYSPATH="$LLVM_BUILD_DIR" \
+  make dev-install 2>&1 | tee -a "$LOG_FILE"
+  TRITON_BUILD_CODE=${PIPESTATUS[0]}
+else
+  TRITON_BUILD_WITH_CLANG_LLD=1 \
+  TRITON_BUILD_WITH_CCACHE=0 \
+  LLVM_INCLUDE_DIRS="$LLVM_BUILD_DIR/include" \
+  LLVM_LIBRARY_DIR="$LLVM_BUILD_DIR/lib" \
+  LLVM_SYSPATH="$LLVM_BUILD_DIR" \
+  make dev-install 2>&1
+  TRITON_BUILD_CODE=$?
+fi
+
+TRITON_BUILD_END=$(date +%s)
+TRITON_BUILD_TIME=$((TRITON_BUILD_END - TRITON_BUILD_START))
+echo "Triton build completed in ${TRITON_BUILD_TIME}s, exit code: $TRITON_BUILD_CODE" | log_output
+
+# Calculate total build time
+BUILD_TIME=$((LLVM_BUILD_TIME + TRITON_BUILD_TIME))
+BUILD_CODE=$TRITON_BUILD_CODE
+
+if [ $TRITON_BUILD_CODE -ne 0 ]; then
+  echo "Triton build failed" | log_output
+  if [ "$COMPAT_MODE" = "1" ]; then
+    # COMPAT_MODE: Finding first incompatible LLVM commit
+    echo "COMPAT_MODE: Triton build failed - INCOMPATIBLE" | log_output
+    exit 1   # bad - this LLVM is incompatible with Triton
+  else
+    # Normal bisect mode: Triton should not fail to build
+    # (assuming good/bad commits were validated before starting bisect)
+    echo "ERROR: Triton build failed in bisect mode" | log_output
+    echo "This is unexpected - Triton should build with all LLVM commits in the bisect range" | log_output
+    echo "Please verify:" | log_output
+    echo "  1. Your good/bad commits were validated before starting bisect" | log_output
+    echo "  2. The LLVM commit range in commits.csv is correct" | log_output
+    exit 128  # abort bisect - Triton build failure is unexpected
+  fi
+fi
+
+# Run test with TRITON_ALWAYS_COMPILE
+echo "" | log_output
+echo "Running test..." | log_output
+TEST_START=$(date +%s)
+
+if [ -n "$LOG_FILE" ]; then
+  TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1 | tee -a "$LOG_FILE"
+  TEST_CODE=${PIPESTATUS[0]}
+else
+  TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1
+  TEST_CODE=$?
+fi
+
+TEST_END=$(date +%s)
+TEST_TIME=$((TEST_END - TEST_START))
+echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | log_output
+
+# TODO: COMPAT_MODE handling and Summary will be added in PR-11
+# For now, pass through test exit code directly
+exit $TEST_CODE
