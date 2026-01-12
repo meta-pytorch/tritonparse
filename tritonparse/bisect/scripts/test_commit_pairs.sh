@@ -43,6 +43,7 @@ CSV File Format:
   Two columns separated by comma: triton_commit,llvm_commit
   Optional header row (auto-detected and skipped)
   Empty lines are ignored
+  Comment lines starting with # are ignored
 
   Example with header:
     triton_commit,llvm_commit
@@ -51,6 +52,13 @@ CSV File Format:
 
   Example without header:
     abc123def456,def456789abc
+    xyz789abc123,uvw012def345
+
+  Example with comments:
+    # Known good commits
+    triton_commit,llvm_commit
+    abc123def456,def456789abc
+    # This pair is suspected problematic
     xyz789abc123,uvw012def345
 
 Behavior:
@@ -68,7 +76,8 @@ Exit Codes:
   1 - Error (build failed, validation error, or cannot checkout commit)
 
 Output Files:
-  - Unified log file: bisect_logs/TIMESTAMP_bisect.log
+  - Unified log file: bisect_logs/bisect_commit_pairs_TIMESTAMP.log
+  - Result file (if bad pair found): bisect_logs/bisect_first_bad_pair_TIMESTAMP.txt
 
 Example:
   # Create CSV file
@@ -96,6 +105,9 @@ CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 TEST_ARGS=${TEST_ARGS:-""}
 BUILD_COMMAND=${BUILD_COMMAND:-""}
+# LLVM range filter (optional, passed from Python)
+FILTER_GOOD_LLVM=${FILTER_GOOD_LLVM:-""}
+FILTER_BAD_LLVM=${FILTER_BAD_LLVM:-""}
 
 # ============ Validation ============
 echo "========================================"
@@ -162,6 +174,7 @@ if [ -n "$PAIR_TEST_LOG_FILE" ]; then
 else
   LOG_FILE="$LOG_DIR/${TIMESTAMP}_bisect.log"
 fi
+RESULT_FILE="$LOG_DIR/${TIMESTAMP}_pair_test_result.txt"
 
 # Count total commit pairs (skip empty lines and header)
 TOTAL_PAIRS=0
@@ -169,6 +182,8 @@ while IFS=, read -r triton llvm; do
   [ -z "$triton" ] && continue
   triton=$(echo "$triton" | xargs | sed 's/"//g')
   [ -z "$triton" ] && continue
+  # Skip comment lines (starting with #)
+  [[ "$triton" == \#* ]] && continue
   # Skip header lines
   [ "$triton" = "triton" ] && continue
   [ "$triton" = "triton_commit" ] && continue
@@ -181,6 +196,7 @@ if [ "$TOTAL_PAIRS" -eq 0 ]; then
 fi
 
 CURRENT=0
+FOUND_BAD=false
 
 # ============ Start Logging ============
 {
@@ -214,10 +230,19 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
-echo "Conda environment activated" | tee -a "$LOG_FILE"
+echo "✅ Conda environment activated" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
 # ============ Main Loop ============
+# Track if we're within the filter range
+IN_RANGE=false
+PASSED_END=false
+
+# If no filter specified, we're always in range
+if [ -z "$FILTER_GOOD_LLVM" ] && [ -z "$FILTER_BAD_LLVM" ]; then
+  IN_RANGE=true
+fi
+
 while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   # Skip empty lines
   [ -z "$triton_commit" ] && continue
@@ -230,6 +255,9 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   [ -z "$triton_commit" ] && continue
   [ -z "$llvm_commit" ] && continue
 
+  # Skip comment lines (starting with #)
+  [[ "$triton_commit" == \#* ]] && continue
+
   # Skip header lines
   if [ "$triton_commit" = "triton" ] || [ "$triton_commit" = "triton_commit" ]; then
     continue
@@ -238,6 +266,27 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   CURRENT=$((CURRENT + 1))
   SHORT_TRITON=$(echo "$triton_commit" | cut -c1-7)
   SHORT_LLVM=$(echo "$llvm_commit" | cut -c1-7)
+
+  # ========== LLVM Range Filter Logic ==========
+  # Check if we've reached the start of the range
+  if [ "$IN_RANGE" = "false" ] && [ -n "$FILTER_GOOD_LLVM" ]; then
+    if [[ "$llvm_commit" == *"$FILTER_GOOD_LLVM"* ]] || [[ "$FILTER_GOOD_LLVM" == *"$llvm_commit"* ]]; then
+      IN_RANGE=true
+      echo "→ Entering filter range at pair $CURRENT (LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    fi
+  fi
+
+  # Skip pairs outside the filter range
+  if [ "$IN_RANGE" = "false" ]; then
+    echo "⏭️  Skipping pair $CURRENT (outside filter range, LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    continue
+  fi
+
+  # Check if we've passed the end of the range
+  if [ "$PASSED_END" = "true" ]; then
+    echo "⏭️  Skipping pair $CURRENT (after filter range, LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    continue
+  fi
 
   {
     echo ""
@@ -251,15 +300,16 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   # ========== 1. Checkout Triton ==========
   echo "" | tee -a "$LOG_FILE"
   echo "Checking out Triton commit: $triton_commit" | tee -a "$LOG_FILE"
+  echo "(LLVM $llvm_commit will be checked out automatically by build script)" | tee -a "$LOG_FILE"
   cd "$TRITON_DIR" || {
-    echo "ERROR: Cannot cd to $TRITON_DIR" | tee -a "$LOG_FILE"
+    echo "❌ ERROR: Cannot cd to $TRITON_DIR" | tee -a "$LOG_FILE"
     exit 1
   }
 
   git checkout "$triton_commit" 2>&1 | tee -a "$LOG_FILE"
   if [ ${PIPESTATUS[0]} -ne 0 ]; then
     {
-      echo "ERROR: Failed to checkout Triton $triton_commit"
+      echo "❌ ERROR: Failed to checkout Triton $triton_commit"
       echo "Stopping test run."
       echo ""
       echo "=== Final Summary ==="
@@ -273,13 +323,51 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
     exit 1
   fi
 
-  echo "Triton checkout successful" | tee -a "$LOG_FILE"
+  echo "✅ Triton checkout successful" | tee -a "$LOG_FILE"
 
-  # ========== 2. Build Triton with this LLVM ==========
+  # Update git submodules to match the current commit
+  echo "" | tee -a "$LOG_FILE"
+  echo "Updating git submodules..." | tee -a "$LOG_FILE"
+  git submodule update --init --recursive 2>&1 | tee -a "$LOG_FILE"
+  echo "✅ Submodules updated" | tee -a "$LOG_FILE"
+
+  # ========== 2. Clean build cache ==========
+  cd "$TRITON_DIR" || exit 1
+
+  # Clean build artifacts (can be disabled with CLEAN_BUILD=false)
+  CLEAN_BUILD=${CLEAN_BUILD:-true}
+
+  if [ "$CLEAN_BUILD" = "true" ]; then
+    echo "" | tee -a "$LOG_FILE"
+    echo "Cleaning build cache..." | tee -a "$LOG_FILE"
+
+    # Clean Triton build artifacts
+    echo "  - Removing Triton build directories..." | tee -a "$LOG_FILE"
+    rm -rf build/ dist/ *.egg-info python/build python/dist python/*.egg-info 2>&1 | tee -a "$LOG_FILE" || true
+
+    # Clean LLVM build directory
+    echo "  - Removing LLVM build directory..." | tee -a "$LOG_FILE"
+    rm -rf .llvm-project/build 2>&1 | tee -a "$LOG_FILE" || true
+
+    # Uninstall old triton from pip
+    echo "  - Uninstalling old triton package..." | tee -a "$LOG_FILE"
+    pip uninstall -y triton 2>&1 | tee -a "$LOG_FILE" || true
+
+    # Clean Python cache files
+    echo "  - Cleaning Python cache files..." | tee -a "$LOG_FILE"
+    find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+    echo "✅ Build cache cleaned" | tee -a "$LOG_FILE"
+  else
+    echo "" | tee -a "$LOG_FILE"
+    echo "⚠️  Skipping build cache cleanup (CLEAN_BUILD=false)" | tee -a "$LOG_FILE"
+  fi
+
+  # ========== 3. Build Triton with this LLVM ==========
   echo "" | tee -a "$LOG_FILE"
   echo "Building Triton $SHORT_TRITON with LLVM $SHORT_LLVM..." | tee -a "$LOG_FILE"
-
-  cd "$TRITON_DIR" || exit 1
+  echo "(Build script will automatically checkout LLVM)" | tee -a "$LOG_FILE"
 
   # Set build command
   if [ -z "$BUILD_COMMAND" ]; then
@@ -303,7 +391,7 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   if [ $BUILD_CODE -ne 0 ]; then
     {
       echo ""
-      echo "BUILD FAILED"
+      echo "❌ BUILD FAILED"
       echo "Triton: $triton_commit"
       echo "LLVM: $llvm_commit"
       echo "Stopping test run."
@@ -318,12 +406,18 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
       echo "===================="
     } | tee -a "$LOG_FILE"
 
+    {
+      echo "$triton_commit,$llvm_commit"
+      echo "REASON: Build failed (exit code: $BUILD_CODE)"
+      echo "Position: Pair $CURRENT of $TOTAL_PAIRS"
+    } > "$RESULT_FILE"
+
     exit 1
   fi
 
-  echo "Build successful" | tee -a "$LOG_FILE"
+  echo "✅ Build successful" | tee -a "$LOG_FILE"
 
-  # ========== 3. Run test ==========
+  # ========== 4. Run test ==========
   echo "" | tee -a "$LOG_FILE"
   echo "Running test..." | tee -a "$LOG_FILE"
   TEST_START=$(date +%s)
@@ -338,7 +432,7 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
   if [ $TEST_CODE -ne 0 ]; then
     {
       echo ""
-      echo "TEST FAILED"
+      echo "❌ TEST FAILED"
       echo "Triton: $triton_commit"
       echo "LLVM: $llvm_commit"
       echo "This is the FIRST FAILING pair!"
@@ -350,14 +444,32 @@ while IFS=, read -r triton_commit llvm_commit || [ -n "$triton_commit" ]; do
       echo "LLVM Commit: $llvm_commit"
       echo "Build time: ${BUILD_TIME}s"
       echo "Test exit code: $TEST_CODE"
+      echo "Result file: $RESULT_FILE"
       echo "Log file: $LOG_FILE"
       echo "===================="
     } | tee -a "$LOG_FILE"
 
+    {
+      echo "$triton_commit,$llvm_commit"
+      echo "REASON: Test failed (exit code: $TEST_CODE)"
+      echo "Position: Pair $CURRENT of $TOTAL_PAIRS"
+      echo "Build time: ${BUILD_TIME}s"
+      echo "Test time: ${TEST_TIME}s"
+    } > "$RESULT_FILE"
+
+    FOUND_BAD=true
     exit 0
   fi
 
-  echo "Test PASSED for this pair" | tee -a "$LOG_FILE"
+  echo "✅ Test PASSED for this pair" | tee -a "$LOG_FILE"
+
+  # Check if we've reached the end of the filter range
+  if [ -n "$FILTER_BAD_LLVM" ]; then
+    if [[ "$llvm_commit" == *"$FILTER_BAD_LLVM"* ]] || [[ "$FILTER_BAD_LLVM" == *"$llvm_commit"* ]]; then
+      PASSED_END=true
+      echo "→ Reached end of filter range at pair $CURRENT (LLVM: $SHORT_LLVM)" | tee -a "$LOG_FILE"
+    fi
+  fi
 
 done < "$COMMITS_CSV"
 
@@ -365,7 +477,7 @@ done < "$COMMITS_CSV"
 {
   echo ""
   echo "========================================"
-  echo "All commit pairs tested successfully!"
+  echo "✅ All commit pairs tested successfully!"
   echo "========================================"
   echo ""
   echo "=== Final Summary ==="
