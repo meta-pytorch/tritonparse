@@ -310,6 +310,47 @@ TEST_END=$(date +%s)
 TEST_TIME=$((TEST_END - TEST_START))
 echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | log_output
 
-# TODO: COMPAT_MODE handling and Summary will be added in PR-11
-# For now, pass through test exit code directly
-exit $TEST_CODE
+# Handle compatibility mode
+COMPAT_MODE=${COMPAT_MODE:-0}
+
+if [ "$COMPAT_MODE" = "1" ]; then
+  # Compatibility check mode: normal exit (0 or 1) = compatible
+  if [ $TEST_CODE -eq 0 ] || [ $TEST_CODE -eq 1 ]; then
+    RESULT="COMPATIBLE"
+    FINAL_EXIT=0
+    echo "" | log_output
+    echo "COMPAT_MODE: Test exited normally (exit $TEST_CODE) - COMPATIBLE" | log_output
+  else
+    RESULT="INCOMPATIBLE"
+    FINAL_EXIT=1
+    echo "" | log_output
+    echo "COMPAT_MODE: Test exited abnormally (exit $TEST_CODE) - INCOMPATIBLE" | log_output
+  fi
+else
+  # Normal mode: pass through test exit code
+  FINAL_EXIT=$TEST_CODE
+  if [ $TEST_CODE -eq 0 ]; then
+    RESULT="GOOD"
+  elif [ $TEST_CODE -eq 1 ]; then
+    RESULT="BAD"
+  else
+    RESULT="SKIP"
+  fi
+fi
+
+# Summary
+{
+  echo ""
+  echo "=== Summary ==="
+  echo "LLVM Commit: $SHORT_LLVM"
+  echo "Build: ${BUILD_TIME}s (exit $BUILD_CODE)"
+  echo "Test: ${TEST_TIME}s (exit $TEST_CODE)"
+  echo "Mode: $([ "$COMPAT_MODE" = "1" ] && echo 'COMPAT_MODE' || echo 'NORMAL')"
+  echo "Result: $RESULT"
+  if [ -n "$LOG_FILE" ]; then
+    echo "Log: $LOG_FILE"
+  fi
+  echo "==============="
+} | log_output
+
+exit $FINAL_EXIT
