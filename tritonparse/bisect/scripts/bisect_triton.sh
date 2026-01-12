@@ -78,7 +78,7 @@ CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 TEST_ARGS=${TEST_ARGS:-""}
 BUILD_COMMAND=${BUILD_COMMAND:-"pip install -e ."}
-PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}
+PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
 
 # ============ Validation ============
 if [ -z "$TRITON_DIR" ]; then
@@ -120,7 +120,7 @@ LOG_DIR=$(realpath "$LOG_DIR")
 # ============ Setup ============
 cd "$TRITON_DIR" || exit 128
 
-# Get current commit info for logging
+# Get current commit info
 COMMIT_HASH=$(git rev-parse HEAD)
 SHORT_COMMIT=$(git rev-parse --short=9 HEAD)
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -140,17 +140,29 @@ log_output() {
   fi
 }
 
-# Log basic info
-echo "Bisect Triton: $SHORT_COMMIT" | log_output
-echo "Triton Dir: $TRITON_DIR" | log_output
-echo "Test Script: $TEST_SCRIPT" | log_output
+# Start logging to per-commit log file (if enabled)
+{
+  echo "=== Triton Bisect Run ==="
+  echo "Timestamp: $(date)"
+  echo "Commit: $COMMIT_HASH"
+  echo "Short: $SHORT_COMMIT"
+  echo "Triton Dir: $TRITON_DIR"
+  echo "Test Script: $TEST_SCRIPT"
+  echo "Test Args: $TEST_ARGS"
+  echo "Conda Env: $CONDA_ENV"
+  echo "========================="
+  echo ""
+} | log_output
+
+# Update git submodules to match the current commit
+echo "Updating git submodules..." | log_output
+git submodule update --init --recursive 2>&1 | log_output
 echo "" | log_output
 
-# ============ Conda Activation ============
+# Activate conda
 echo "Activating conda environment: $CONDA_ENV" | log_output
 
-# shellcheck source=/dev/null
-source "${CONDA_DIR}/bin/activate"
+source ${CONDA_DIR}/bin/activate
 if [ $? -ne 0 ]; then
   echo "ERROR: Cannot activate conda" | log_output
   exit 128
@@ -164,8 +176,9 @@ fi
 
 echo "" | log_output
 
-# ============ Build Triton ============
+# Build Triton
 echo "Building Triton..." | log_output
+BUILD_START=$(date +%s)
 
 if [ -n "$COMMIT_LOG" ]; then
   eval "$BUILD_COMMAND" 2>&1 | tee -a "$COMMIT_LOG"
@@ -175,7 +188,9 @@ else
   BUILD_CODE=$?
 fi
 
-echo "Build exit code: $BUILD_CODE" | log_output
+BUILD_END=$(date +%s)
+BUILD_TIME=$((BUILD_END - BUILD_START))
+echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | log_output
 
 if [ $BUILD_CODE -ne 0 ]; then
   echo "Build FAILED" | log_output
@@ -184,8 +199,9 @@ fi
 
 echo "" | log_output
 
-# ============ Run Test ============
+# Run test
 echo "Running test..." | log_output
+TEST_START=$(date +%s)
 
 if [ -n "$COMMIT_LOG" ]; then
   TRITON_ALWAYS_COMPILE=1 python "$TEST_SCRIPT" $TEST_ARGS 2>&1 | tee -a "$COMMIT_LOG"
@@ -195,15 +211,31 @@ else
   TEST_CODE=$?
 fi
 
-echo "Test exit code: $TEST_CODE" | log_output
+TEST_END=$(date +%s)
+TEST_TIME=$((TEST_END - TEST_START))
+echo "Test completed in ${TEST_TIME}s, exit code: $TEST_CODE" | log_output
 
-# ============ Result ============
+# Report result
 if [ $TEST_CODE -eq 0 ]; then
-  echo "Result: GOOD (test passed)" | log_output
+  RESULT="GOOD"
+  echo "✅ Passed" | log_output
 else
-  echo "Result: BAD (test failed)" | log_output
+  RESULT="BAD"
+  echo "❌ Failed" | log_output
 fi
 
+echo "" | log_output
+{
+  echo "=== Summary ==="
+  echo "Commit: $SHORT_COMMIT"
+  echo "Build: ${BUILD_TIME}s (exit $BUILD_CODE)"
+  echo "Test: ${TEST_TIME}s (exit $TEST_CODE)"
+  echo "Result: $RESULT"
+  if [ -n "$COMMIT_LOG" ]; then
+    echo "Log: $COMMIT_LOG"
+  fi
+  echo "==============="
+} | log_output
+
 # Exit with test code for git bisect
-# 0 = good commit, non-0 = bad commit
 exit $TEST_CODE
