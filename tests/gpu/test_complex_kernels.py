@@ -274,9 +274,9 @@ class TestComplexKernels(GPUTestBase):
         ndjson_gz_files = [f for f in parsed_files if f.endswith(".ndjson.gz")]
 
         assert len(json_files) > 0, f"No .json files found in {parsed_output_path}"
-        assert (
-            len(ndjson_gz_files) > 0
-        ), f"No .ndjson.gz files found in {parsed_output_path}"
+        assert len(ndjson_gz_files) > 0, (
+            f"No .ndjson.gz files found in {parsed_output_path}"
+        )
         print(
             f"✓ Found {len(json_files)} .json files and {len(ndjson_gz_files)} .ndjson.gz files"
         )
@@ -303,9 +303,9 @@ class TestComplexKernels(GPUTestBase):
                         print(f"  Line {line_num}: Error processing line - {e}")
 
             print(f"✓ Total launch_diff events found: {launch_diff_count}")
-            assert (
-                launch_diff_count == 5
-            ), f"Expected 5 launch_diff events, found {launch_diff_count}"
+            assert launch_diff_count == 5, (
+                f"Expected 5 launch_diff events, found {launch_diff_count}"
+            )
             print("✓ Verified 5 launch_diff events in parsed output")
 
         # Clean up

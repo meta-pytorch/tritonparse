@@ -109,9 +109,9 @@ class TestReproducerE2E(GPUTestBase):
 
         # 6) Locate generated script and context under out_dir/add_kernel/
         kernel_out_dir = os.path.join(out_dir, "add_kernel")
-        assert os.path.isdir(
-            kernel_out_dir
-        ), f"Kernel output dir not found: {kernel_out_dir}"
+        assert os.path.isdir(kernel_out_dir), (
+            f"Kernel output dir not found: {kernel_out_dir}"
+        )
         gen_scripts = [f for f in os.listdir(kernel_out_dir) if f.endswith(".py")]
         gen_jsons = [f for f in os.listdir(kernel_out_dir) if f.endswith(".json")]
         assert gen_scripts, f"No generated script in {kernel_out_dir}"

@@ -251,9 +251,9 @@ class TestStructuredLogging(GPUTestBase):
                                         )
 
                                         # Verify SASS content looks like assembly
-                                        assert (
-                                            "Function:" in sass_content
-                                        ), "SASS content should contain function declaration"
+                                        assert "Function:" in sass_content, (
+                                            "SASS content should contain function declaration"
+                                        )
                                         # Basic check for NVIDIA GPU assembly patterns
                                         assert any(
                                             pattern in sass_content.lower()
@@ -266,7 +266,9 @@ class TestStructuredLogging(GPUTestBase):
                                                 "lop",
                                                 "s2r",
                                             ]
-                                        ), "SASS content should contain GPU assembly instructions"
+                                        ), (
+                                            "SASS content should contain GPU assembly instructions"
+                                        )
 
                             except (json.JSONDecodeError, KeyError, TypeError) as e:
                                 print(f"  Line {line_num}: Error processing line - {e}")

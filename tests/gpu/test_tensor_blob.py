@@ -113,12 +113,12 @@ class TestTensorBlob(GPUTestBase):
                 print(f"  {f} ({os.path.getsize(f)} bytes)")
 
             # Verify correct number of files (2 small uncompressed, 2 large compressed)
-            assert (
-                len(bin_files) == 4
-            ), f"Expected 4 .bin files (2KB, 400KB), got {len(bin_files)}"
-            assert (
-                len(gz_files) == 4
-            ), f"Expected 4 .bin.gz files (20MB, 400MB), got {len(gz_files)}"
+            assert len(bin_files) == 4, (
+                f"Expected 4 .bin files (2KB, 400KB), got {len(bin_files)}"
+            )
+            assert len(gz_files) == 4, (
+                f"Expected 4 .bin.gz files (20MB, 400MB), got {len(gz_files)}"
+            )
 
             print(
                 f"✓ Mixed sizes: {len(bin_files)} uncompressed (.bin), {len(gz_files)} compressed (.bin.gz)"
@@ -164,9 +164,9 @@ class TestTensorBlob(GPUTestBase):
             # Expected: fewer blobs than total tensor references due to deduplication
             blob_count = count_all_blobs(manager.dir_path)
             # With deduplication, we should have significantly fewer blobs than 6 (3 inputs + 3 outputs)
-            assert (
-                blob_count < 6
-            ), f"Deduplication should reduce blob count, got {blob_count} for 3 launches"
+            assert blob_count < 6, (
+                f"Deduplication should reduce blob count, got {blob_count} for 3 launches"
+            )
             # We expect at least 1 blob (the deduplicated input)
             assert blob_count >= 1, f"Should have at least 1 blob, got {blob_count}"
             print(
@@ -216,16 +216,16 @@ class TestTensorBlob(GPUTestBase):
             print(f"  Blobs after second kernel launch: {blob_count_final}")
 
             # We expect at least 1 blob was saved (from first launch)
-            assert (
-                blob_count_after_first >= 1
-            ), f"First tensor should be saved, got {blob_count_after_first} blobs"
+            assert blob_count_after_first >= 1, (
+                f"First tensor should be saved, got {blob_count_after_first} blobs"
+            )
 
             # After quota exceeded, no more blobs should be added
             # (blob_count_final should equal blob_count_after_first or be slightly higher
             # if some outputs were saved before quota was hit)
-            assert (
-                blob_count_final <= blob_count_after_first + 1
-            ), f"Quota should prevent saving many more blobs: first={blob_count_after_first}, final={blob_count_final}"
+            assert blob_count_final <= blob_count_after_first + 1, (
+                f"Quota should prevent saving many more blobs: first={blob_count_after_first}, final={blob_count_final}"
+            )
 
             print(
                 f"✓ Quota enforced: {blob_count_after_first} blob(s) saved before quota limit"
@@ -259,9 +259,9 @@ class TestTensorBlob(GPUTestBase):
 
             # Verify no saved_tensors directory or it's empty
             total_blobs = count_all_blobs(manager.dir_path)
-            assert (
-                total_blobs == 0
-            ), f"Expected no blobs when storage disabled, found {total_blobs}"
+            assert total_blobs == 0, (
+                f"Expected no blobs when storage disabled, found {total_blobs}"
+            )
             print("✓ Storage correctly disabled when enable_tensor_blob_storage=False")
 
         # Clean up all test outputs
