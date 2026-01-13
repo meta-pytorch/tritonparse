@@ -1,5 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
+import json
 from abc import ABC
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
@@ -17,6 +18,9 @@ from tritonparse.reproducer.utils import (
     _parse_kernel_signature,
 )
 from tritonparse.tp_logger import logger
+
+# Size threshold for embedded JSON warning (50KB)
+EMBEDDED_JSON_SIZE_THRESHOLD = 50 * 1024
 
 
 class HandlerProtocol(Protocol):
@@ -88,6 +92,10 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
     KERNEL_IMPORT_PLACEHOLDER = "# {{KERNEL_IMPORT_PLACEHOLDER}}"
     UTILITY_FUNCTIONS_PLACEHOLDER = "# {{UTILITY_FUNCTIONS_PLACEHOLDER}}"
     KERNEL_INVOCATION_PLACEHOLDER = "# {{KERNEL_INVOCATION_PLACEHOLDER}}"
+    # New placeholders for embed-context mode
+    CONTEXT_JSON_PLACEHOLDER = "# {{CONTEXT_JSON_PLACEHOLDER}}"
+    COMPILATION_JSON_PLACEHOLDER = "# {{COMPILATION_JSON_PLACEHOLDER}}"
+    LAUNCH_KERNEL_BODY_PLACEHOLDER = "# {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}"
 
     def __init__(self):
         super().__init__()
@@ -105,6 +113,12 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
             self.KERNEL_INVOCATION_PLACEHOLDER, self._replace_kernel_invocation
         )
         self.register(self.KERNEL_NAME_PLACEHOLDER, self._replace_kernel_name)
+        # Register new handlers for embed-context mode
+        self.register(self.CONTEXT_JSON_PLACEHOLDER, self._replace_context_json)
+        self.register(self.COMPILATION_JSON_PLACEHOLDER, self._replace_compilation_json)
+        self.register(
+            self.LAUNCH_KERNEL_BODY_PLACEHOLDER, self._replace_launch_kernel_body
+        )
 
     def _replace_kernel_name(
         self, code: str, context_bundle: ContextBundle, **kwargs
@@ -271,7 +285,8 @@ triton.autotune = _patched_autotune
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
         """Replace the utility functions placeholder with extracted functions."""
-        utility_code = extract_utility_functions()
+        embed_context = kwargs.get("embed_context", False)
+        utility_code = extract_utility_functions(embed_context=embed_context)
         return code.replace(self.UTILITY_FUNCTIONS_PLACEHOLDER, utility_code)
 
     def _replace_kernel_invocation(
@@ -282,6 +297,83 @@ triton.autotune = _patched_autotune
         pos_args, kw_args = _parse_kernel_signature(source_code)
         invocation_snippet = _generate_invocation_snippet(pos_args, kw_args)
         return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
+
+    def _replace_context_json(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace the context JSON placeholder with embedded JSON or empty string."""
+        embed_context = kwargs.get("embed_context", False)
+
+        if not embed_context:
+            return code.replace(self.CONTEXT_JSON_PLACEHOLDER, "")
+
+        # Serialize launch event to JSON
+        json_str = json.dumps(context_bundle.raw_launch_event, indent=2)
+
+        # Warn if blob_path detected (external tensor dependencies)
+        self._warn_if_blob_path_present(context_bundle.raw_launch_event)
+
+        # Warn if size exceeds threshold
+        if len(json_str) > EMBEDDED_JSON_SIZE_THRESHOLD:
+            logger.warning(
+                f"Embedded JSON is large ({len(json_str) // 1024}KB). "
+                "Consider using file mode for better readability."
+            )
+
+        # Use raw triple-quoted string to minimize escaping issues
+        embedded = f'CONTEXT_JSON = r"""\n{json_str}\n"""'
+        return code.replace(self.CONTEXT_JSON_PLACEHOLDER, embedded)
+
+    def _replace_compilation_json(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace compilation JSON placeholder (only for OVERRIDE_TTIR mode)."""
+        embed_context = kwargs.get("embed_context", False)
+        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
+
+        # Only embed compilation JSON for OVERRIDE_TTIR mode with embedding enabled
+        if not embed_context or kernel_import != KernelImportMode.OVERRIDE_TTIR:
+            return code.replace(self.COMPILATION_JSON_PLACEHOLDER, "")
+
+        json_str = json.dumps(context_bundle.raw_comp_event, indent=2)
+        embedded = f'COMPILATION_JSON = r"""\n{json_str}\n"""'
+        return code.replace(self.COMPILATION_JSON_PLACEHOLDER, embedded)
+
+    def _replace_launch_kernel_body(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace launch kernel body with file-based or embedded loading logic."""
+        embed_context = kwargs.get("embed_context", False)
+        temp_json_path = kwargs.get("temp_json_path")
+
+        if embed_context:
+            # Embedded mode: parse JSON string directly
+            body = """data = json.loads(CONTEXT_JSON)
+    grid, args_dict = create_args_from_json(data)"""
+        else:
+            # File mode: load from external JSON file
+            json_filename = (
+                temp_json_path.name if temp_json_path else "repro_context.json"
+            )
+            body = f"""script_dir = Path(__file__).resolve().parent
+    json_file = script_dir / "{json_filename}"
+    grid, args_dict = create_args_from_json_file(str(json_file))"""
+
+        return code.replace(self.LAUNCH_KERNEL_BODY_PLACEHOLDER, body)
+
+    def _warn_if_blob_path_present(self, raw_launch_event: dict) -> None:
+        """Warn if any tensor argument has blob_path (external dependency)."""
+        extracted_args = raw_launch_event.get("extracted_args", {})
+        blob_args = [
+            name
+            for name, info in extracted_args.items()
+            if isinstance(info, dict) and info.get("blob_path")
+        ]
+        if blob_args:
+            logger.warning(
+                f"The following tensor arguments have external blob_path dependencies: "
+                f"{blob_args}. The embedded reproducer will NOT be fully standalone."
+            )
 
 
 def get_dependent_source_map(

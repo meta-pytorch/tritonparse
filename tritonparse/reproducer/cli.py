@@ -70,3 +70,12 @@ def _add_reproducer_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help=("Use fbcode to setup repro environment."),
     )
+    parser.add_argument(
+        "--embed-context",
+        action="store_true",
+        default=False,
+        help=(
+            "Embed JSON context directly in the Python script for a standalone reproducer. "
+            "Default: False (generates separate JSON file)."
+        ),
+    )
