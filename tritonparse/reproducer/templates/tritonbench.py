@@ -1,7 +1,6 @@
 # (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
 
 import logging
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
@@ -16,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 imported_kernel_function: Optional[Callable[[Tuple[int], Dict[str, Any]], None]] = None
 
+# {{CONTEXT_JSON_PLACEHOLDER}}
+
+# {{COMPILATION_JSON_PLACEHOLDER}}
+
 # {{IR_OVERRIDE_SETUP_PLACEHOLDER}}
 
 # {{UTILITY_FUNCTIONS_PLACEHOLDER}}
@@ -29,14 +32,10 @@ imported_kernel_function: Optional[Callable[[Tuple[int], Dict[str, Any]], None]]
 assert imported_kernel_function is not None, "imported_kernel_function is missing"
 
 KERNEL_NAME = "{{KERNEL_NAME_PLACEHOLDER}}"
-REPRO_CONTEXT_FILE_NAME = "{{JSON_FILE_NAME_PLACEHOLDER}}"
 
 
 def _get_launch_kernel_args() -> Tuple[Tuple[int], Dict[str, Any]]:
-    script_dir = Path(__file__).resolve().parent  # noqa: F821
-    json_file = script_dir / REPRO_CONTEXT_FILE_NAME
-
-    grid, args_dict = create_args_from_json_file(json_file)  # noqa: F821, F841
+    # {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}
 
     print("Recorded kernel arguments dictionary:")
     for name, arg in args_dict.items():
