@@ -19,7 +19,7 @@ from pathlib import Path
 import torch
 import triton  # @manual=//triton:triton
 import tritonparse.structured_logging
-from tests.test_utils import GPUTestBase, skip_in_fbcode
+from tests.test_utils import GPUTestBase
 from tritonparse.reproducer.orchestrator import reproduce
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT
 from tritonparse.tools.prettify_ndjson import load_ndjson
@@ -28,7 +28,6 @@ from tritonparse.tools.prettify_ndjson import load_ndjson
 class TestReproducerE2E(GPUTestBase):
     """End-to-end tests for reproducer functionality."""
 
-    @skip_in_fbcode
     def test_reproducer_end_to_end(self):
         """End-to-end test for reproducer: generate logs, build script, run it."""
 

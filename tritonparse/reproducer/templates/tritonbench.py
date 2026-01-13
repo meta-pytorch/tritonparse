@@ -18,11 +18,13 @@ imported_kernel_function: Optional[Callable[[Tuple[int], Dict[str, Any]], None]]
 
 # {{IR_OVERRIDE_SETUP_PLACEHOLDER}}
 
+# {{UTILITY_FUNCTIONS_PLACEHOLDER}}
+
+# isort: off
 # {{KERNEL_SYSPATH_PLACEHOLDER}}
 
 # {{KERNEL_IMPORT_PLACEHOLDER}}
-
-# {{UTILITY_FUNCTIONS_PLACEHOLDER}}
+# isort: on
 
 assert imported_kernel_function is not None, "imported_kernel_function is missing"
 
