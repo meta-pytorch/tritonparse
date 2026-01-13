@@ -7,6 +7,7 @@ This module provides the abstract base class that defines the common structure
 and behavior for all bisector implementations (Triton, LLVM, etc.).
 """
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
@@ -136,11 +137,16 @@ class BaseBisector(ABC):
         Args:
             good_commit: Known good commit hash.
             bad_commit: Known bad commit hash.
-
-        Note: This is a minimal implementation. Will be enhanced in a future PR.
         """
-        self.logger.info(f"Starting {self.bisect_name}")
-        self.logger.info(f"  Good: {good_commit}, Bad: {bad_commit}")
+        self.logger.info("=" * 60)
+        self.logger.info(self.bisect_name)
+        self.logger.info("=" * 60)
+        self.logger.info(f"Target directory: {self.target_repo_dir}")
+        self.logger.info(f"Test script: {self.test_script}")
+        self.logger.info(f"Good commit: {good_commit}")
+        self.logger.info(f"Bad commit: {bad_commit}")
+        self.logger.info(f"Conda environment: {self.conda_env}")
+        self.logger.info(f"Build command: {self.build_command}")
 
     def _pre_bisect_check(self) -> None:
         """
@@ -212,6 +218,9 @@ class BaseBisector(ABC):
         """
         Parse the culprit commit from git bisect output.
 
+        The output contains a line like:
+        "<40-char-hash> is the first bad commit"
+
         Args:
             output: The stdout from git bisect run.
 
@@ -220,17 +229,24 @@ class BaseBisector(ABC):
 
         Raises:
             BisectError: If cannot parse the result.
-
-        Note: This is a minimal implementation. Will be enhanced in a future PR.
         """
-        # Look for "<hash> is the first bad commit"
-        import re
-
-        pattern = r"([a-f0-9]{7,40}) is the first bad commit"
-        match = re.search(pattern, output)
+        # Try full 40-character hash first
+        pattern_full = r"([a-f0-9]{40}) is the first bad commit"
+        match = re.search(pattern_full, output)
         if match:
             return match.group(1)
-        raise BisectError(f"Cannot parse bisect result from output: {output[-500:]}")
+
+        # Try shorter hash (7-12 characters)
+        pattern_short = r"([a-f0-9]{7,12}) is the first bad commit"
+        match = re.search(pattern_short, output)
+        if match:
+            return match.group(1)
+
+        # If we can't find the pattern, raise an error with context
+        raise BisectError(
+            f"Cannot parse bisect result. Expected '<hash> is the first bad commit' "
+            f"in output:\n{output[-500:]}"  # Last 500 chars for context
+        )
 
     def _log_completion(self, culprit: str) -> None:
         """
@@ -238,10 +254,11 @@ class BaseBisector(ABC):
 
         Args:
             culprit: The culprit commit hash.
-
-        Note: This is a minimal implementation. Will be enhanced in a future PR.
         """
-        self.logger.info(f"{self.bisect_name} completed! Culprit: {culprit}")
+        self.logger.info("=" * 60)
+        self.logger.info(f"{self.bisect_name} completed!")
+        self.logger.info(f"Culprit commit: {culprit}")
+        self.logger.info("=" * 60)
 
     def _run_bisect(
         self,
