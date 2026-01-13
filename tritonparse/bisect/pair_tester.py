@@ -9,6 +9,7 @@ to find the first failing pair.
 """
 
 import csv
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -387,8 +388,6 @@ class PairTester:
         The actual filtering is done by the shell script using environment
         variables FILTER_GOOD_LLVM and FILTER_BAD_LLVM.
 
-        Full implementation in PR-27.
-
         Args:
             pairs: List of all commit pairs.
             good_llvm: Start LLVM commit (inclusive).
@@ -400,8 +399,49 @@ class PairTester:
         Raises:
             PairTesterError: If the range cannot be found in the pairs.
         """
-        # Stub: return original list without validation
-        # Full implementation will be added in PR-27
+        start_idx = None
+        end_idx = None
+
+        for i, pair in enumerate(pairs):
+            # Match by prefix to allow short hashes
+            if start_idx is None:
+                if pair.llvm_commit.startswith(good_llvm) or good_llvm.startswith(
+                    pair.llvm_commit
+                ):
+                    start_idx = i
+
+            if pair.llvm_commit.startswith(bad_llvm) or bad_llvm.startswith(
+                pair.llvm_commit
+            ):
+                end_idx = i
+                # Don't break - continue to find the last match in case of duplicates
+
+        if start_idx is None:
+            raise PairTesterError(
+                f"Could not find good_llvm '{good_llvm}' in CSV pairs"
+            )
+
+        if end_idx is None:
+            raise PairTesterError(f"Could not find bad_llvm '{bad_llvm}' in CSV pairs")
+
+        if start_idx > end_idx:
+            raise PairTesterError(
+                f"good_llvm '{good_llvm}' appears after bad_llvm '{bad_llvm}' in CSV. "
+                f"Expected good_llvm to come before bad_llvm."
+            )
+
+        # Store the range for later use but return the original list
+        self._filter_start_idx = start_idx
+        self._filter_end_idx = end_idx
+
+        # Calculate how many pairs are in the range
+        range_count = end_idx - start_idx + 1
+        self.logger.info(
+            f"LLVM range validated: {range_count} pairs "
+            f"(indices {start_idx} to {end_idx})"
+        )
+
+        # Return the original list - filtering is done by the script
         return pairs
 
     def _parse_test_output(
@@ -413,8 +453,6 @@ class PairTester:
         """
         Parse the test script output to extract results.
 
-        Full implementation in PR-27.
-
         Args:
             output: Script output.
             exit_code: Script exit code.
@@ -423,22 +461,166 @@ class PairTester:
         Returns:
             PairTestResult with parsed results.
         """
-        # Stub: return basic result based on exit code
-        # Full implementation will be added in PR-27
         total_pairs = len(pairs)
 
-        if exit_code == 0:
-            # Could mean all passed or test failure found
-            # Without full parsing, assume all passed
+        # Exit code 0 can mean:
+        # 1. All pairs passed
+        # 2. Test failed and first failing pair was found
+        # Exit code 1 means build failed or critical error
+
+        if exit_code == 1:
+            # Build failure or critical error
+            error_match = re.search(
+                r"Status: Build Failed.*?Position: Pair (\d+) of (\d+)",
+                output,
+                re.DOTALL,
+            )
+            if error_match:
+                failing_index = int(error_match.group(1)) - 1  # Convert to 0-based
+                return PairTestResult(
+                    found_failing=False,
+                    failing_index=failing_index,
+                    total_pairs=total_pairs,
+                    error_message=f"Build failed at pair {failing_index + 1}",
+                )
+
+            # Generic error
+            return PairTestResult(
+                found_failing=False,
+                total_pairs=total_pairs,
+                error_message="Pair testing failed with exit code 1",
+            )
+
+        # Exit code 0: Check if all passed or test failure found
+        if "All Passed" in output or "All commit pairs tested successfully" in output:
+            self.logger.info("All commit pairs passed")
             return PairTestResult(
                 found_failing=False,
                 total_pairs=total_pairs,
                 all_passed=True,
             )
-        else:
-            # Non-zero exit code indicates some failure
+
+        # Look for test failure
+        test_failed_match = re.search(
+            r"TEST FAILED.*?Position: Pair (\d+) of (\d+)",
+            output,
+            re.DOTALL,
+        )
+
+        if test_failed_match:
+            failing_index = int(test_failed_match.group(1)) - 1  # Convert to 0-based
+
+            # Extract commit info
+            triton_match = re.search(
+                r"Triton Commit: ([a-fA-F0-9]+)",
+                output[test_failed_match.start() :],
+            )
+            llvm_match = re.search(
+                r"LLVM Commit: ([a-fA-F0-9]+)",
+                output[test_failed_match.start() :],
+            )
+
+            triton_commit = triton_match.group(1) if triton_match else None
+            bad_llvm = llvm_match.group(1) if llvm_match else None
+
+            # Get good_llvm from previous pair
+            good_llvm = None
+            if failing_index > 0 and failing_index <= len(pairs):
+                good_llvm = pairs[failing_index - 1].llvm_commit
+
+            self.logger.info(f"Found first failing pair at index {failing_index}")
+            if good_llvm and bad_llvm:
+                self.logger.info(
+                    f"  LLVM bisect range: {good_llvm[:7]} -> {bad_llvm[:7]}"
+                )
+
             return PairTestResult(
                 found_failing=True,
+                failing_index=failing_index,
+                good_llvm=good_llvm,
+                bad_llvm=bad_llvm,
+                triton_commit=triton_commit,
                 total_pairs=total_pairs,
-                error_message=f"Pair testing exited with code {exit_code}",
             )
+
+        # Could not parse output - check result file as fallback
+        return self._parse_result_file(output, total_pairs, pairs)
+
+    def _parse_result_file(
+        self,
+        output: str,
+        total_pairs: int,
+        pairs: List[CommitPair],
+    ) -> PairTestResult:
+        """
+        Fallback: Try to parse from result file if output parsing failed.
+
+        Args:
+            output: Script output (may contain result file path).
+            total_pairs: Total number of pairs.
+            pairs: List of commit pairs.
+
+        Returns:
+            PairTestResult with parsed results.
+        """
+        # Look for result file path in output
+        result_file_match = re.search(r"Result file: (.+\.txt)", output)
+        if not result_file_match:
+            # Unable to parse
+            self.logger.warning("Could not parse pair test output")
+            return PairTestResult(
+                found_failing=False,
+                total_pairs=total_pairs,
+                error_message="Could not parse test output",
+            )
+
+        result_file = Path(result_file_match.group(1))
+        if not result_file.exists():
+            return PairTestResult(
+                found_failing=False,
+                total_pairs=total_pairs,
+                error_message=f"Result file not found: {result_file}",
+            )
+
+        try:
+            content = result_file.read_text()
+            lines = content.strip().split("\n")
+
+            if len(lines) < 2:
+                return PairTestResult(
+                    found_failing=False,
+                    total_pairs=total_pairs,
+                    error_message="Invalid result file format",
+                )
+
+            # First line is triton_commit,llvm_commit
+            first_line = lines[0].split(",")
+            triton_commit = first_line[0].strip()
+            bad_llvm = first_line[1].strip() if len(first_line) > 1 else None
+
+            # Look for position
+            position_match = re.search(r"Position: Pair (\d+) of (\d+)", content)
+            if position_match:
+                failing_index = int(position_match.group(1)) - 1
+
+                good_llvm = None
+                if failing_index > 0 and failing_index <= len(pairs):
+                    good_llvm = pairs[failing_index - 1].llvm_commit
+
+                return PairTestResult(
+                    found_failing=True,
+                    failing_index=failing_index,
+                    good_llvm=good_llvm,
+                    bad_llvm=bad_llvm,
+                    triton_commit=triton_commit,
+                    total_pairs=total_pairs,
+                )
+
+        except Exception as e:
+            self.logger.warning(f"Failed to parse result file: {e}")
+
+        return PairTestResult(
+            found_failing=False,
+            total_pairs=total_pairs,
+            error_message="Could not parse result file",
+        )
