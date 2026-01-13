@@ -412,9 +412,13 @@ def _generate_import_statements(kernel_info) -> tuple[str, str]:
         raise ValueError("Kernel file path or function name missing from context.")
 
     # Always add the file's parent directory to sys.path
+    # Note: `import sys` is already included in the utility functions imports,
+    # so we don't need to include it here. This code block is protected by
+    # `# isort: off` to prevent the kernel import from being moved to the top.
     sys_stmt = (
-        "import sys; p = r'" + str(file_path.parent) + "';\n"
-        "if p not in sys.path: sys.path.insert(0, p)"
+        "p = r'" + str(file_path.parent) + "'\n"
+        "if p not in sys.path:\n"
+        "    sys.path.insert(0, p)"
     )
 
     module_name = file_path.with_suffix("").name
