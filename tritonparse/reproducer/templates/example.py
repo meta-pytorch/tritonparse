@@ -11,11 +11,13 @@ logger = logging.getLogger(__name__)
 
 # {{IR_OVERRIDE_SETUP_PLACEHOLDER}}
 
+# {{UTILITY_FUNCTIONS_PLACEHOLDER}}
+
+# isort: off
 # {{KERNEL_SYSPATH_PLACEHOLDER}}
 
 # {{KERNEL_IMPORT_PLACEHOLDER}}
-
-# {{UTILITY_FUNCTIONS_PLACEHOLDER}}
+# isort: on
 
 
 def launch_kernel():
