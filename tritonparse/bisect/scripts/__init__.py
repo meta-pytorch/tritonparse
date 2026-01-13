@@ -54,7 +54,7 @@ def get_script_path(script_name: str) -> Path:
         return script_path.resolve()
 
     raise FileNotFoundError(
-        f"Script not found: {script_name}. " f"Searched in: {scripts_dir}"
+        f"Script not found: {script_name}. Searched in: {scripts_dir}"
     )
 
 

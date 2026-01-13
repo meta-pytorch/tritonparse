@@ -1,14 +1,12 @@
 # Makefile for tritonparse project
 
-.PHONY: help format format-check lint lint-check test test-cuda clean install-dev website-install website-lint website-build website-build-single website-dev
+.PHONY: help format format-check test test-cuda clean install-dev website-install website-lint website-build website-build-single website-dev
 
 # Default target
 help:
 	@echo "Available targets:"
 	@echo "  format           - Format all Python files"
 	@echo "  format-check     - Check formatting without making changes"
-	@echo "  lint             - Run all linters"
-	@echo "  lint-check       - Check linting without making changes"
 	@echo "  test             - Run tests (CPU only)"
 	@echo "  test-cuda        - Run tests (including CUDA tests)"
 	@echo "  clean            - Clean up cache files"
@@ -29,17 +27,6 @@ format:
 format-check:
 	@echo "Checking formatting..."
 	python -m tritonparse.tools.format_fix --check-only --verbose
-
-# Linting targets
-lint:
-	@echo "Running linters..."
-	ruff check .
-	black --check .
-
-lint-check:
-	@echo "Checking linting..."
-	ruff check --diff .
-	black --check --diff .
 
 # Testing targets
 test:
@@ -62,7 +49,7 @@ clean:
 
 install-dev:
 	@echo "Installing development dependencies..."
-	pip install -U black usort ruff coverage
+	pip install -e ".[dev]"
 
 # Website targets
 website-install:
