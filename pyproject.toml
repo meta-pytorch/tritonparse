@@ -25,17 +25,24 @@ pytorch-triton = [
 test = [
     "coverage>=7.0.0",
 ]
+dev = [
+    "ufmt==2.9.0",
+    "usort==1.1.0",
+    "ruff-api==0.2.0",
+    "ruff>=0.4.0",
+    "coverage>=7.0.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["tritonparse*"]
 
-[tool.black]
-line-length = 88
-target-version = ["py310"]
-
 [tool.ufmt]
-formatter = "black"
+formatter = "ruff-api"
 sorter = "usort"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
 
 [tool.usort]
 first_party_detection = false

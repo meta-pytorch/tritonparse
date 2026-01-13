@@ -5,9 +5,8 @@
 Format fix script for tritonparse project.
 
 This script runs all linter tools to format and fix code issues:
-- usort: Import sorting
+- ufmt: Unified formatting (reads formatter/sorter config from pyproject.toml)
 - ruff: Linting only
-- black: Code formatting
 
 Usage:
     python -m tritonparse.tools.format_fix [options]
@@ -50,9 +49,9 @@ def run_command(cmd: list[str], verbose: bool = False) -> bool:
         return False
 
 
-def run_usort(check_only: bool = False, verbose: bool = False) -> bool:
-    """Run usort for import sorting."""
-    cmd = ["usort"]
+def run_ufmt(check_only: bool = False, verbose: bool = False) -> bool:
+    """Run ufmt for unified formatting (sorter + formatter from pyproject.toml)."""
+    cmd = ["ufmt"]
 
     if check_only:
         cmd.extend(["check", "."])
@@ -70,18 +69,6 @@ def run_ruff_check(check_only: bool = False, verbose: bool = False) -> bool:
         cmd.append("--diff")
     else:
         cmd.append("--fix")
-
-    return run_command(cmd, verbose)
-
-
-def run_black(check_only: bool = False, verbose: bool = False) -> bool:
-    """Run black for code formatting."""
-    cmd = ["black"]
-
-    if check_only:
-        cmd.extend(["--check", "--diff", "."])
-    else:
-        cmd.append(".")
 
     return run_command(cmd, verbose)
 
@@ -115,13 +102,14 @@ Examples:
     # Run formatters on the entire project
     success = True
 
-    # 1. Run usort for import sorting
-    print("Running usort for import sorting...")
-    if not run_usort(args.check_only, args.verbose):
-        print("❌ usort failed")
+    # 1. Run ufmt for unified formatting (sorter + formatter)
+    # ufmt reads configuration from pyproject.toml [tool.ufmt] section
+    print("Running ufmt for formatting (sorter + formatter from pyproject.toml)...")
+    if not run_ufmt(args.check_only, args.verbose):
+        print("❌ ufmt failed")
         success = False
     else:
-        print("✅ usort completed")
+        print("✅ ufmt completed")
 
     # 2. Run ruff for linting only
     print("Running ruff for linting...")
@@ -130,14 +118,6 @@ Examples:
         success = False
     else:
         print("✅ ruff linting completed")
-
-    # 3. Run black for code formatting
-    print("Running black for code formatting...")
-    if not run_black(args.check_only, args.verbose):
-        print("❌ black failed")
-        success = False
-    else:
-        print("✅ black completed")
 
     if success:
         print("\n🎉 All formatting tools completed successfully!")
