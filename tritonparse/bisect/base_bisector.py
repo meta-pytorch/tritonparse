@@ -9,7 +9,7 @@ and behavior for all bisector implementations (Triton, LLVM, etc.).
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -124,3 +124,190 @@ class BaseBisector(ABC):
         and ensure LLVM repo exists.
         """
         pass
+
+    def _log_header(
+        self,
+        good_commit: str,
+        bad_commit: str,
+    ) -> None:
+        """
+        Log the bisect header information.
+
+        Args:
+            good_commit: Known good commit hash.
+            bad_commit: Known bad commit hash.
+
+        Note: This is a minimal implementation. Will be enhanced in a future PR.
+        """
+        self.logger.info(f"Starting {self.bisect_name}")
+        self.logger.info(f"  Good: {good_commit}, Bad: {bad_commit}")
+
+    def _pre_bisect_check(self) -> None:
+        """
+        Perform pre-bisect validation checks.
+
+        Raises:
+            BisectError: If any validation check fails.
+        """
+        target_dir = self.target_repo_dir
+
+        # Check target directory exists
+        if not target_dir.exists():
+            raise BisectError(f"Target directory not found: {target_dir}")
+
+        # Check it's a git repository
+        git_dir = target_dir / ".git"
+        if not git_dir.exists():
+            raise BisectError(f"Not a git repository: {target_dir}")
+
+        # Check for in-progress bisect
+        bisect_start = target_dir / ".git" / "BISECT_START"
+        if bisect_start.exists():
+            raise BisectError(
+                f"A bisect is already in progress in {target_dir}. "
+                f"Run 'cd {target_dir} && git bisect reset' first."
+            )
+
+        # Check test script exists
+        if not self.test_script.exists():
+            raise BisectError(f"Test script not found: {self.test_script}")
+
+        # Check working directory status (warning only)
+        result = self.executor.run_command(
+            ["git", "status", "--porcelain"],
+            cwd=str(target_dir),
+        )
+        if result.stdout.strip():
+            self.logger.warning(
+                f"Working directory {target_dir} has uncommitted changes. "
+                "This may cause issues during bisect."
+            )
+
+        self.logger.info("Pre-bisect checks passed")
+
+    def _get_base_env_vars(self) -> Dict[str, str]:
+        """
+        Get the base environment variables common to all bisectors.
+
+        Note: BUILD_COMMAND is only included if set. For LLVMBisector,
+        build_command is None because bisect_llvm.sh uses a fixed
+        two-phase build process.
+
+        Returns:
+            Dictionary of base environment variables.
+        """
+        env = {
+            "TRITON_DIR": str(self.triton_dir),
+            "TEST_SCRIPT": str(self.test_script),
+            "CONDA_ENV": self.conda_env,
+            "LOG_DIR": str(self.logger.log_dir),
+            "PER_COMMIT_LOG": "0",  # Disable per-commit logs in Python mode
+        }
+        # Only include BUILD_COMMAND if it's set (not used by LLVMBisector)
+        if self.build_command:
+            env["BUILD_COMMAND"] = self.build_command
+        return env
+
+    def _parse_bisect_result(self, output: str) -> str:
+        """
+        Parse the culprit commit from git bisect output.
+
+        Args:
+            output: The stdout from git bisect run.
+
+        Returns:
+            The culprit commit hash.
+
+        Raises:
+            BisectError: If cannot parse the result.
+
+        Note: This is a minimal implementation. Will be enhanced in a future PR.
+        """
+        # Look for "<hash> is the first bad commit"
+        import re
+
+        pattern = r"([a-f0-9]{7,40}) is the first bad commit"
+        match = re.search(pattern, output)
+        if match:
+            return match.group(1)
+        raise BisectError(f"Cannot parse bisect result from output: {output[-500:]}")
+
+    def _log_completion(self, culprit: str) -> None:
+        """
+        Log bisect completion message.
+
+        Args:
+            culprit: The culprit commit hash.
+
+        Note: This is a minimal implementation. Will be enhanced in a future PR.
+        """
+        self.logger.info(f"{self.bisect_name} completed! Culprit: {culprit}")
+
+    def _run_bisect(
+        self,
+        good_commit: str,
+        bad_commit: str,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
+        """
+        Execute the git bisect sequence.
+
+        This is the core template method that defines the bisect workflow.
+
+        Args:
+            good_commit: Known good commit hash.
+            bad_commit: Known bad commit hash.
+            output_callback: Optional callback for real-time output.
+
+        Returns:
+            The culprit commit hash.
+
+        Raises:
+            BisectError: If bisect fails.
+        """
+        # Step 1: Log header
+        self._log_header(good_commit, bad_commit)
+
+        # Step 2: Prepare before bisect (hook for subclasses)
+        self._prepare_before_bisect()
+
+        # Step 3: Pre-bisect validation
+        self._pre_bisect_check()
+
+        # Step 4: Get the bisect script
+        script_path = str(self._get_bisect_script())
+        self.logger.info(f"Using bisect script: {script_path}")
+
+        # Step 5: Set up environment variables
+        env = self._get_base_env_vars()
+        env.update(self._get_extra_env_vars())
+
+        # Log bisect range for debugging
+        self.logger.info("")
+        self.logger.info("=" * 40)
+        self.logger.info("BISECT RANGE")
+        self.logger.info(f"  Good: {good_commit}")
+        self.logger.info(f"  Bad:  {bad_commit}")
+        self.logger.info("=" * 40)
+        self.logger.info("")
+
+        # Step 6: Execute git bisect sequence
+        result = self.executor.run_git_bisect_sequence(
+            repo_path=str(self.target_repo_dir),
+            good_commit=good_commit,
+            bad_commit=bad_commit,
+            run_script=script_path,
+            env=env,
+            output_callback=output_callback,
+        )
+
+        if not result.success:
+            raise BisectError(f"{self.bisect_name} failed: {result.stderr}")
+
+        # Step 7: Parse the culprit commit
+        culprit = self._parse_bisect_result(result.stdout)
+
+        # Step 8: Log completion
+        self._log_completion(culprit)
+
+        return culprit
