@@ -15,6 +15,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Union
 
 from tritonparse.bisect.logger import BisectLogger
@@ -299,4 +300,129 @@ class ShellExecutor:
             stdout="\n".join(output_lines),
             stderr="",
             duration_seconds=duration,
+        )
+
+    def run_git_bisect_sequence(
+        self,
+        repo_path: str,
+        good_commit: str,
+        bad_commit: str,
+        run_script: Union[str, Path],
+        env: Optional[Dict[str, str]] = None,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> CommandResult:
+        """
+        Execute a complete git bisect sequence.
+
+        This method runs the full git bisect workflow:
+        1. git bisect start
+        2. git bisect good <good_commit>
+        3. git bisect bad <bad_commit>
+        4. git bisect run bash <run_script>
+        5. git bisect reset (always, even on failure)
+
+        Note: Git bisect state is persisted in .git/ directory, so multiple
+        subprocess calls work correctly.
+
+        Args:
+            repo_path: Path to the git repository (also used as cwd).
+            good_commit: Known good commit hash or tag.
+            bad_commit: Known bad commit hash or tag.
+            run_script: Path to the script to run for each bisect step.
+            env: Additional environment variables for the run script.
+            output_callback: Optional callback called for each output line.
+                            Used by TUI to display real-time output.
+
+        Returns:
+            CommandResult from the 'git bisect run' command, containing
+            the bisect output with the culprit commit information.
+
+        Example:
+            >>> result = executor.run_git_bisect_sequence(
+            ...     repo_path="/path/to/repo",
+            ...     good_commit="v1.0.0",
+            ...     bad_commit="HEAD",
+            ...     run_script="/path/to/test.sh",
+            ...     env={"TEST_SCRIPT": "/path/to/test.py"},
+            ... )
+            >>> if result.success:
+            ...     # Parse culprit from result.stdout
+            ...     print(result.stdout)
+        """
+        self.logger.info(f"Starting git bisect: {good_commit} -> {bad_commit}")
+        self.logger.info(f"  Repository: {repo_path}")
+        self.logger.info(f"  Run script: {run_script}")
+
+        try:
+            # Step 1: git bisect start
+            self.logger.info("Step 1/4: git bisect start")
+            result = self.run_command(
+                ["git", "bisect", "start"],
+                cwd=repo_path,
+            )
+            if not result.success:
+                self.logger.error(f"git bisect start failed: {result.stderr}")
+                return result
+
+            # Step 2: git bisect good
+            self.logger.info(f"Step 2/4: git bisect good {good_commit}")
+            result = self.run_command(
+                ["git", "bisect", "good", good_commit],
+                cwd=repo_path,
+            )
+            if not result.success:
+                self.logger.error(f"git bisect good failed: {result.stderr}")
+                self._bisect_reset(repo_path)
+                return result
+            # Pass output to callback for TUI parsing (e.g., "roughly N steps")
+            if output_callback:
+                for line in result.output.split("\n"):
+                    if line.strip():
+                        output_callback(line)
+
+            # Step 3: git bisect bad
+            self.logger.info(f"Step 3/4: git bisect bad {bad_commit}")
+            result = self.run_command(
+                ["git", "bisect", "bad", bad_commit],
+                cwd=repo_path,
+            )
+            if not result.success:
+                self.logger.error(f"git bisect bad failed: {result.stderr}")
+                self._bisect_reset(repo_path)
+                return result
+            # Pass output to callback for TUI parsing (e.g., "roughly N steps")
+            if output_callback:
+                for line in result.output.split("\n"):
+                    if line.strip():
+                        output_callback(line)
+
+            # Step 4: git bisect run (streaming for long-running builds)
+            self.logger.info(f"Step 4/4: git bisect run bash {run_script}")
+            result = self.run_command_streaming(
+                ["git", "bisect", "run", "bash", str(run_script)],
+                cwd=repo_path,
+                env=env,
+                output_callback=output_callback,
+            )
+
+            return result
+
+        finally:
+            # Always reset bisect state
+            self._bisect_reset(repo_path)
+
+    def _bisect_reset(self, repo_path: str) -> None:
+        """
+        Reset git bisect state.
+
+        This is called automatically after run_git_bisect_sequence completes
+        (whether successful or not).
+
+        Args:
+            repo_path: Path to the git repository.
+        """
+        self.logger.debug("Resetting git bisect state")
+        self.run_command(
+            ["git", "bisect", "reset"],
+            cwd=repo_path,
         )
