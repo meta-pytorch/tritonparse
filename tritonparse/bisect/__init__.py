@@ -15,7 +15,12 @@ from tritonparse.bisect.commit_detector import (
 from tritonparse.bisect.executor import CommandResult, ShellExecutor
 from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
 from tritonparse.bisect.logger import BisectLogger
-from tritonparse.bisect.pair_tester import CommitPair, PairTesterError, PairTestResult
+from tritonparse.bisect.pair_tester import (
+    CommitPair,
+    PairTester,
+    PairTesterError,
+    PairTestResult,
+)
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 
 __all__ = [
@@ -29,6 +34,7 @@ __all__ = [
     "LLVMBisectError",
     "LLVMBisector",
     "LLVMBumpInfo",
+    "PairTester",
     "PairTesterError",
     "PairTestResult",
     "ShellExecutor",
