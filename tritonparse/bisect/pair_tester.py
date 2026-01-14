@@ -9,12 +9,14 @@ to find the first failing pair.
 """
 
 import csv
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
+from tritonparse.bisect.scripts import get_script_path
 
 
 class PairTesterError(Exception):
@@ -202,3 +204,241 @@ class PairTester:
             raise PairTesterError(f"Failed to read CSV file {csv_path}: {e}")
 
         return pairs
+
+    def test_from_csv(
+        self,
+        csv_path: Path,
+        test_args: Optional[str] = None,
+        good_llvm: Optional[str] = None,
+        bad_llvm: Optional[str] = None,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> PairTestResult:
+        """
+        Test commit pairs from a CSV file.
+
+        The CSV file should have two columns: triton_commit, llvm_commit.
+        An optional header row is auto-detected and skipped.
+
+        Args:
+            csv_path: Path to the CSV file containing commit pairs.
+            test_args: Additional arguments to pass to the test script.
+            good_llvm: If provided, filter pairs to start from this LLVM commit.
+            bad_llvm: If provided, filter pairs to end at this LLVM commit.
+                      Both good_llvm and bad_llvm must be provided together.
+
+        Returns:
+            PairTestResult with testing results.
+
+        Raises:
+            PairTesterError: If CSV file is invalid or testing fails critically.
+        """
+        # Load and validate pairs
+        pairs = self._load_pairs_from_csv(csv_path)
+
+        if not pairs:
+            raise PairTesterError(f"No valid commit pairs found in {csv_path}")
+
+        self.logger.info(f"Loaded {len(pairs)} commit pairs from {csv_path}")
+
+        # Initialize filter indices (will be set if filtering is requested)
+        self._filter_start_idx = None
+        self._filter_end_idx = None
+
+        # Validate LLVM range if specified (does not filter the list)
+        if good_llvm and bad_llvm:
+            pairs = self._filter_pairs_by_llvm_range(pairs, good_llvm, bad_llvm)
+            if not pairs:
+                raise PairTesterError(
+                    f"No pairs found in LLVM range [{good_llvm}, {bad_llvm}]"
+                )
+            self.logger.info(
+                f"Filtered to {len(pairs)} pairs in LLVM range "
+                f"[{good_llvm[:7]}..{bad_llvm[:7]}]"
+            )
+
+        # Run the test script
+        return self._run_pair_test(
+            pairs, csv_path, test_args, good_llvm, bad_llvm, output_callback
+        )
+
+    def test_pairs(
+        self,
+        pairs: List[Tuple[str, str]],
+        test_args: Optional[str] = None,
+    ) -> PairTestResult:
+        """
+        Test commit pairs from a list.
+
+        Args:
+            pairs: List of (triton_commit, llvm_commit) tuples.
+            test_args: Additional arguments to pass to the test script.
+
+        Returns:
+            PairTestResult with testing results.
+
+        Raises:
+            PairTesterError: If testing fails critically.
+        """
+        if not pairs:
+            raise PairTesterError("No commit pairs provided")
+
+        # Convert to CommitPair objects
+        commit_pairs = [
+            CommitPair(triton_commit=p[0], llvm_commit=p[1], index=i)
+            for i, p in enumerate(pairs)
+        ]
+
+        self.logger.info(f"Testing {len(commit_pairs)} commit pairs")
+
+        # Create temporary CSV file
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False
+        ) as tmp_csv:
+            tmp_csv.write("triton_commit,llvm_commit\n")
+            for pair in commit_pairs:
+                tmp_csv.write(f"{pair.triton_commit},{pair.llvm_commit}\n")
+            csv_path = Path(tmp_csv.name)
+
+        try:
+            return self._run_pair_test(commit_pairs, csv_path, test_args)
+        finally:
+            # Clean up temporary file
+            csv_path.unlink(missing_ok=True)
+
+    def _run_pair_test(
+        self,
+        pairs: List[CommitPair],
+        csv_path: Path,
+        test_args: Optional[str] = None,
+        good_llvm: Optional[str] = None,
+        bad_llvm: Optional[str] = None,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> PairTestResult:
+        """
+        Run the pair testing script.
+
+        Args:
+            pairs: List of commit pairs.
+            csv_path: Path to the CSV file.
+            test_args: Additional test arguments.
+            good_llvm: Start LLVM commit for filtering (passed to script).
+            bad_llvm: End LLVM commit for filtering (passed to script).
+
+        Returns:
+            PairTestResult with testing results.
+        """
+        self.logger.info("Starting pair testing")
+        self.logger.info(f"  Triton dir: {self.triton_dir}")
+        self.logger.info(f"  Test script: {self.test_script}")
+        self.logger.info(f"  CSV file: {csv_path}")
+        self.logger.info(f"  Total pairs: {len(pairs)}")
+
+        # Get the embedded test script
+        script_path = get_script_path("test_commit_pairs.sh")
+        if not script_path.exists():
+            raise PairTesterError("test_commit_pairs.sh script not found")
+
+        # Set up environment variables
+        env = {
+            "TRITON_DIR": str(self.triton_dir),
+            "TEST_SCRIPT": str(self.test_script),
+            "COMMITS_CSV": str(csv_path),
+            "CONDA_ENV": self.conda_env,
+            "LOG_DIR": str(self.logger.log_dir),
+            # Pass log file path to use consistent naming with BisectLogger
+            "PAIR_TEST_LOG_FILE": str(
+                self.logger.log_dir / f"{self.logger.session_name}_bisect.log"
+            ),
+        }
+
+        # Pass LLVM filter range to script if specified
+        if good_llvm:
+            env["FILTER_GOOD_LLVM"] = good_llvm
+        if bad_llvm:
+            env["FILTER_BAD_LLVM"] = bad_llvm
+
+        if test_args:
+            env["TEST_ARGS"] = test_args
+
+        if self.build_command:
+            env["BUILD_COMMAND"] = self.build_command
+
+        # Run the script
+        result = self.executor.run_command_streaming(
+            ["bash", str(script_path)],
+            cwd=str(self.triton_dir),
+            env=env,
+            output_callback=output_callback,
+        )
+
+        # Parse the output
+        return self._parse_test_output(result.stdout, result.exit_code, pairs)
+
+    def _filter_pairs_by_llvm_range(
+        self,
+        pairs: List[CommitPair],
+        good_llvm: str,
+        bad_llvm: str,
+    ) -> List[CommitPair]:
+        """
+        Validate that the LLVM range exists in the pairs list.
+
+        This method validates the range but does NOT filter the list.
+        The actual filtering is done by the shell script using environment
+        variables FILTER_GOOD_LLVM and FILTER_BAD_LLVM.
+
+        Full implementation in PR-27.
+
+        Args:
+            pairs: List of all commit pairs.
+            good_llvm: Start LLVM commit (inclusive).
+            bad_llvm: End LLVM commit (inclusive).
+
+        Returns:
+            The original pairs list (unmodified).
+
+        Raises:
+            PairTesterError: If the range cannot be found in the pairs.
+        """
+        # Stub: return original list without validation
+        # Full implementation will be added in PR-27
+        return pairs
+
+    def _parse_test_output(
+        self,
+        output: str,
+        exit_code: int,
+        pairs: List[CommitPair],
+    ) -> PairTestResult:
+        """
+        Parse the test script output to extract results.
+
+        Full implementation in PR-27.
+
+        Args:
+            output: Script output.
+            exit_code: Script exit code.
+            pairs: List of commit pairs (for reference).
+
+        Returns:
+            PairTestResult with parsed results.
+        """
+        # Stub: return basic result based on exit code
+        # Full implementation will be added in PR-27
+        total_pairs = len(pairs)
+
+        if exit_code == 0:
+            # Could mean all passed or test failure found
+            # Without full parsing, assume all passed
+            return PairTestResult(
+                found_failing=False,
+                total_pairs=total_pairs,
+                all_passed=True,
+            )
+        else:
+            # Non-zero exit code indicates some failure
+            return PairTestResult(
+                found_failing=True,
+                total_pairs=total_pairs,
+                error_message=f"Pair testing exited with code {exit_code}",
+            )
