@@ -18,3 +18,6 @@ class KernelImportMode(str, Enum):
     DEFAULT = "default"
     COPY = "copy"
     OVERRIDE_TTIR = "override-ttir"
+
+    def __str__(self) -> str:
+        return self.value
