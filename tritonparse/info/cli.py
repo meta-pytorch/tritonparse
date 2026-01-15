@@ -37,7 +37,12 @@ def _add_info_args(parser: argparse.ArgumentParser) -> None:
         "--args-list",
         type=str,
         default=None,
-        help="Filter by num_stages=3,num_warps=4,...",
+        help=(
+            "Filter by argument values. Supports simple and advanced syntax:\n"
+            "  Simple: num_stages=3,num_warps=4\n"
+            "  Nested: C_ptr.shape=[3024, 10752],C_ptr.dtype=torch.bfloat16\n"
+            "  Array index: C_ptr.shape[0]=3024"
+        ),
     )
 
 
@@ -148,16 +153,58 @@ def info_command(
                 print(f"  {kernel.name:30s} {kernel.total_launches:3d} launches")
 
 
+def _parse_value(value: str) -> Any:
+    """
+    Parse a string value into the appropriate Python type.
+
+    Handles booleans, integers, floats, lists, and strings.
+    """
+    value = value.strip()
+
+    # Check for boolean
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+
+    # Check for list (e.g., "[3024, 10752]")
+    if value.startswith("[") and value.endswith("]"):
+        import json
+
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+    # Try to convert to int
+    try:
+        return int(value)
+    except ValueError:
+        pass
+
+    # Try to convert to float
+    try:
+        return float(value)
+    except ValueError:
+        pass
+
+    return value
+
+
 def _parse_args_list(args_list: str) -> Dict[str, Any]:
     """
     Parse the args-list filter string into a dictionary.
 
+    Supports simple and advanced filter syntax:
+    - Simple: "num_stages=3,num_warps=4"
+    - Nested: "C_ptr.shape=[3024, 10752],C_ptr.dtype=torch.bfloat16"
+    - Array index: "C_ptr.shape[0]=3024"
+
     Args:
-        args_list: Comma-separated key=value pairs, e.g., "num_stages=3,num_warps=4"
+        args_list: Comma-separated key=value pairs
 
     Returns:
-        Dictionary mapping field names to their expected values.
-        Values are converted to int, bool, or kept as strings.
+        Dictionary mapping field names (with optional path) to expected values.
     """
     filters = {}
     for pair in args_list.split(","):
@@ -168,22 +215,62 @@ def _parse_args_list(args_list: str) -> Dict[str, Any]:
             raise ValueError(f"Invalid filter format: '{pair}'. Expected 'key=value'.")
         key, value = pair.split("=", 1)
         key = key.strip()
-        value = value.strip()
-
-        # Try to convert value to appropriate type
-        # Check for boolean first
-        if value.lower() == "true":
-            filters[key] = True
-        elif value.lower() == "false":
-            filters[key] = False
-        else:
-            # Try to convert to int
-            try:
-                filters[key] = int(value)
-            except ValueError:
-                filters[key] = value
+        filters[key] = _parse_value(value)
 
     return filters
+
+
+def _get_nested_value(obj: Any, path: str) -> Any:
+    """
+    Get a nested value from an object using dot notation and array indexing.
+
+    Examples:
+        _get_nested_value({"a": {"b": 1}}, "a.b") -> 1
+        _get_nested_value({"a": [1, 2, 3]}, "a[1]") -> 2
+        _get_nested_value({"a": {"b": [1, 2]}}, "a.b[0]") -> 1
+
+    Args:
+        obj: The object to traverse
+        path: Dot-separated path with optional array indices
+
+    Returns:
+        The value at the path, or None if not found
+    """
+    import re
+
+    if obj is None:
+        return None
+
+    current = obj
+    # Split by dots, but keep array indices attached to their keys
+    # e.g., "a.b[0].c" -> ["a", "b[0]", "c"]
+    parts = path.split(".")
+
+    for part in parts:
+        if current is None:
+            return None
+
+        # Check for array index: key[index]
+        match = re.match(r"^(\w+)\[(\d+)\]$", part)
+        if match:
+            key, index = match.groups()
+            index = int(index)
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+                if isinstance(current, (list, tuple)) and 0 <= index < len(current):
+                    current = current[index]
+                else:
+                    return None
+            else:
+                return None
+        else:
+            # Simple key access
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+
+    return current
 
 
 def _filter_launches(launches, events, args_list):
@@ -221,13 +308,90 @@ def _filter_launches(launches, events, args_list):
     return filtered_launches
 
 
+def _find_value_in_sources(
+    key: str,
+    comp_meta: Dict[str, Any],
+    extracted_args: Dict[str, Any],
+    extracted_inductor_args: Dict[str, Any],
+) -> Any:
+    """
+    Find a value by key in one of the data sources.
+
+    Args:
+        key: The key to look up
+        comp_meta: compilation_metadata dictionary
+        extracted_args: extracted_args dictionary
+        extracted_inductor_args: extracted_inductor_args dictionary
+
+    Returns:
+        The value if found, None otherwise
+    """
+    if key in comp_meta:
+        return comp_meta[key]
+    if key in extracted_args:
+        return extracted_args[key]
+    if key in extracted_inductor_args:
+        return extracted_inductor_args[key]
+    return None
+
+
+def _get_filter_value(
+    key: str,
+    comp_meta: Dict[str, Any],
+    extracted_args: Dict[str, Any],
+    extracted_inductor_args: Dict[str, Any],
+) -> Any:
+    """
+    Get the value for a filter key, handling both simple and nested paths.
+
+    Args:
+        key: Filter key, can be simple ("num_stages") or nested ("C_ptr.shape[0]")
+        comp_meta: compilation_metadata dictionary
+        extracted_args: extracted_args dictionary
+        extracted_inductor_args: extracted_inductor_args dictionary
+
+    Returns:
+        The actual value for comparison, or None if not found
+    """
+    import re
+
+    # Check if this is a nested path (contains . or [)
+    if "." not in key and "[" not in key:
+        # Simple key lookup
+        return _find_value_in_sources(
+            key, comp_meta, extracted_args, extracted_inductor_args
+        )
+
+    # Advanced filter: parse path and get nested value
+    match = re.match(r"^(\w+)", key)
+    if not match:
+        return None
+
+    arg_name = match.group(1)
+    rest_path = key[len(arg_name) :]
+    if rest_path.startswith("."):
+        rest_path = rest_path[1:]
+
+    arg_obj = _find_value_in_sources(
+        arg_name, comp_meta, extracted_args, extracted_inductor_args
+    )
+    if arg_obj is None:
+        return None
+
+    return _get_nested_value(arg_obj, rest_path) if rest_path else arg_obj
+
+
 def _launch_matches_filter(event: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """
     Check if a launch event matches the provided filters.
 
+    Supports both simple and advanced filter syntax:
+    - Simple: "num_stages" matches top-level keys
+    - Advanced: "C_ptr.shape" or "C_ptr.shape[0]" matches nested properties
+
     Args:
         event: A launch event dictionary
-        filters: Dictionary of field names to expected values
+        filters: Dictionary of field names (with optional path) to expected values
 
     Returns:
         True if the event matches all filters, False otherwise
@@ -240,21 +404,13 @@ def _launch_matches_filter(event: Dict[str, Any], filters: Dict[str, Any]) -> bo
     extracted_inductor_args = event.get("extracted_inductor_args", {})
 
     for key, expected_value in filters.items():
-        # First check compilation_metadata
-        if key in comp_meta:
-            actual_value = comp_meta[key]
-        # Then check extracted_args
-        elif key in extracted_args:
-            actual_value = extracted_args[key]
-        # Then check extracted_inductor_args (values are nested as {'type': ..., 'value': ...})
-        elif key in extracted_inductor_args:
-            inductor_arg = extracted_inductor_args[key]
-            if isinstance(inductor_arg, dict) and "value" in inductor_arg:
-                actual_value = inductor_arg["value"]
-            else:
-                actual_value = inductor_arg
-        else:
-            actual_value = None
+        actual_value = _get_filter_value(
+            key, comp_meta, extracted_args, extracted_inductor_args
+        )
+
+        # Unwrap nested dict values to get the actual value
+        if actual_value and isinstance(actual_value, dict) and "value" in actual_value:
+            actual_value = actual_value["value"]
 
         if actual_value != expected_value:
             return False
