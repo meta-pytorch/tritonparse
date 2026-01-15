@@ -61,3 +61,38 @@ jobs:
           fi
           echo "✅ Build successful: all expected files present"
           ls -la website/dist/
+
+      - name: Runtime accessibility test
+        working-directory: ./website
+        run: |
+          echo "Starting preview server..."
+          npm run preview &
+          SERVER_PID=$!
+
+          # Wait for server to start
+          echo "Waiting for server to start..."
+          sleep 5
+
+          # Test main page accessibility
+          echo "Testing main page accessibility..."
+          if curl --fail --silent --show-error http://localhost:4173/ > /dev/null; then
+            echo "✅ Main page is accessible"
+          else
+            echo "❌ Main page is not accessible"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # Test standalone page accessibility
+          echo "Testing standalone page accessibility..."
+          if curl --fail --silent --show-error http://localhost:4173/standalone.html > /dev/null; then
+            echo "✅ Standalone page is accessible"
+          else
+            echo "❌ Standalone page is not accessible"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # Cleanup
+          kill $SERVER_PID 2>/dev/null || true
+          echo "✅ Runtime accessibility test passed"
