@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/website"
+    schedule:
+      interval: "monthly"
+      time: "09:00"
+      timezone: "America/Los_Angeles"
+
+    # Group all updates into a single PR to reduce "PR bombing"
+    groups:
+      website-all:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
+
+    # Limit the number of open PRs at a time (optional)
+    open-pull-requests-limit: 1
