@@ -589,7 +589,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             >
               {leftArrayResolved.map((k, i) => (
                 <option key={`l-${i}`} value={i}>
-                  {k.name} {(k.metadata?.hash || "").slice(0, 8)}
+                  [{i}] {k.name} {(k.metadata?.hash || "").slice(0, 8)}
                 </option>
               ))}
             </select>
@@ -604,7 +604,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             >
               {kernelsRight.map((k, i) => (
                 <option key={`r-${i}`} value={i}>
-                  {k.name} {(k.metadata?.hash || "").slice(0, 8)}
+                  [{i}] {k.name} {(k.metadata?.hash || "").slice(0, 8)}
                 </option>
               ))}
             </select>
