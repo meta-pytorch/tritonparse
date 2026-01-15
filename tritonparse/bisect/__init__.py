@@ -21,7 +21,7 @@ from tritonparse.bisect.pair_tester import (
     PairTesterError,
     PairTestResult,
 )
-from tritonparse.bisect.state import BisectPhase, BisectState
+from tritonparse.bisect.state import BisectPhase, BisectState, StateManager
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 
 __all__ = [
@@ -41,6 +41,7 @@ __all__ = [
     "PairTesterError",
     "PairTestResult",
     "ShellExecutor",
+    "StateManager",
     "TritonBisectError",
     "TritonBisector",
 ]

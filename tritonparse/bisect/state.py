@@ -8,8 +8,11 @@ checkpoint/resume functionality. The state is saved as JSON and can be
 loaded to continue from where the workflow left off.
 """
 
+import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -114,3 +117,122 @@ class BisectState:
         data = data.copy()
         data["phase"] = BisectPhase(data["phase"])
         return cls(**data)
+
+
+class StateManager:
+    """
+    Manages bisect state persistence.
+
+    Provides methods to save, load, and display bisect state.
+
+    State files are named with a session_name (typically a timestamp) to
+    correlate with log files from the same run:
+    - Log files: {session_name}_bisect.log, {session_name}_bisect_commands.log
+    - State file: {session_name}_state.json
+
+    Example:
+        >>> state = BisectState(
+        ...     triton_dir="/path/to/triton",
+        ...     test_script="/path/to/test.py",
+        ...     good_commit="v2.0.0",
+        ...     bad_commit="HEAD",
+        ... )
+        >>> # Save with session name (correlates with logs)
+        >>> path = StateManager.save(state, session_name="20251212_120643")
+        >>> # Result: {log_dir}/20251212_120643_state.json
+        >>>
+        >>> # Load from file
+        >>> loaded = StateManager.load(str(path))
+        >>> StateManager.print_status(loaded)
+    """
+
+    STATE_SUFFIX = "_state.json"
+
+    @staticmethod
+    def get_state_path(log_dir: str, session_name: str) -> Path:
+        """
+        Get state file path for a session.
+
+        Args:
+            log_dir: Log directory path.
+            session_name: Session identifier (typically timestamp like "20251212_120643").
+
+        Returns:
+            Path to {session_name}_state.json in the log directory.
+        """
+        return Path(log_dir) / f"{session_name}{StateManager.STATE_SUFFIX}"
+
+    @staticmethod
+    def save(
+        state: BisectState,
+        session_name: Optional[str] = None,
+        path: Optional[str] = None,
+    ) -> Path:
+        """
+        Save state to JSON file.
+
+        Updates the timestamps before saving. The session_name is stored in
+        the state for later reference.
+
+        Args:
+            state: BisectState to save.
+            session_name: Session identifier for file naming. If not provided,
+                         uses state.session_name or generates a timestamp.
+            path: Explicit file path. If provided, overrides session_name.
+
+        Returns:
+            Path where state was saved.
+        """
+        # Update timestamps
+        now = datetime.now().isoformat()
+        state.updated_at = now
+        if state.started_at is None:
+            state.started_at = now
+
+        # Determine path
+        if path is not None:
+            save_path = Path(path)
+        else:
+            # Use provided session_name, or state's session_name, or generate one
+            if session_name is None:
+                session_name = getattr(state, "session_name", None)
+            if session_name is None:
+                session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Store session_name in state for reference
+            state.session_name = session_name
+            save_path = StateManager.get_state_path(state.log_dir, session_name)
+
+        # Ensure directory exists
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write JSON
+        with open(save_path, "w") as f:
+            json.dump(state.to_dict(), f, indent=2)
+
+        return save_path
+
+    @staticmethod
+    def load(path: str) -> BisectState:
+        """
+        Load state from JSON file.
+
+        Args:
+            path: Path to state file.
+
+        Returns:
+            Loaded BisectState.
+
+        Raises:
+            FileNotFoundError: If state file doesn't exist.
+            json.JSONDecodeError: If file is not valid JSON.
+            ValueError: If state data is invalid.
+        """
+        with open(path, "r") as f:
+            data = json.load(f)
+        return BisectState.from_dict(data)
+
+    @staticmethod
+    def exists(path: str) -> bool:
+        """Check if state file exists."""
+        return Path(path).exists()
