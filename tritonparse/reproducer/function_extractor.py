@@ -8,7 +8,29 @@ using AST parsing, and generates standalone code for reproducers.
 """
 
 import ast
-from pathlib import Path
+import importlib.resources
+
+
+def _read_source_from_package(package: str, resource: str) -> str:
+    """
+    Read source code from a package resource.
+
+    Works in both normal filesystem and PAR (Python Archive) environments.
+
+    Args:
+        package: The package name (e.g., "tritonparse.reproducer")
+        resource: The resource filename (e.g., "utils.py")
+
+    Returns:
+        str: The source code content
+    """
+    try:
+        # Python 3.9+ API
+        files = importlib.resources.files(package)
+        return (files / resource).read_text(encoding="utf-8")
+    except (TypeError, AttributeError):
+        # Fallback for older Python versions
+        return importlib.resources.read_text(package, resource)
 
 
 def extract_utility_functions(embed_context: bool = False) -> str:
@@ -26,14 +48,17 @@ def extract_utility_functions(embed_context: bool = False) -> str:
     Returns:
         str: Complete Python code including imports and all utility functions.
     """
-    # Prepare file paths
-    base_dir = Path(__file__).parent
-    utils_path = base_dir / "utils.py"
-    load_tensor_path = base_dir.parent / "tools" / "load_tensor.py"
+    # Read source files using importlib.resources (works in PAR environments)
+    utils_source = _read_source_from_package("tritonparse.reproducer", "utils.py")
+    load_tensor_source = _read_source_from_package(
+        "tritonparse.tools", "load_tensor.py"
+    )
 
     # Parse source files
-    utils_tree, utils_lines = _parse_source_file(utils_path)
-    load_tensor_tree, load_tensor_lines = _parse_source_file(load_tensor_path)
+    utils_tree, utils_lines = _parse_source_code(utils_source, "utils.py")
+    load_tensor_tree, load_tensor_lines = _parse_source_code(
+        load_tensor_source, "load_tensor.py"
+    )
 
     # Define what to extract (in dependency order)
     # When embed_context=True, we don't need create_args_from_json_file
@@ -89,27 +114,26 @@ def extract_utility_functions(embed_context: bool = False) -> str:
     return "\n\n".join(extracted_parts)
 
 
-def _parse_source_file(file_path: Path) -> tuple[ast.Module, list[str]]:
+def _parse_source_code(
+    source_code: str, filename: str = "<string>"
+) -> tuple[ast.Module, list[str]]:
     """
-    Parse a Python source file and return its AST and source lines.
+    Parse Python source code and return its AST and source lines.
 
     Args:
-        file_path: Path to the Python source file
+        source_code: Python source code as a string
+        filename: Filename to use for error messages (default: "<string>")
 
     Returns:
         tuple: (AST tree, list of source code lines)
 
     Raises:
-        FileNotFoundError: If the source file doesn't exist
-        SyntaxError: If the source file has syntax errors
+        SyntaxError: If the source code has syntax errors
     """
     try:
-        source_code = file_path.read_text(encoding="utf-8")
-        tree = ast.parse(source_code, filename=str(file_path))
-    except FileNotFoundError as e:
-        raise FileNotFoundError(f"Source file not found: {file_path}") from e
+        tree = ast.parse(source_code, filename=filename)
     except SyntaxError as e:
-        raise SyntaxError(f"Failed to parse {file_path}: {e}") from e
+        raise SyntaxError(f"Failed to parse {filename}: {e}") from e
 
     lines = source_code.splitlines()
     return tree, lines
