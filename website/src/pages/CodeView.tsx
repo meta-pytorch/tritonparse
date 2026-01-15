@@ -47,7 +47,8 @@ const CodeViewInner: React.FC<{
   kernel: ProcessedKernel;
   irFiles: string[];
   defaultIRFiles: { left: string; right: string };
-}> = ({ kernel, irFiles, defaultIRFiles }) => {
+  selectedKernel: number;
+}> = ({ kernel, irFiles, defaultIRFiles, selectedKernel }) => {
   // States to track selected IR files for left and right panels
   // Initialize with defaults - component remounts when kernel changes
   const [leftIR, setLeftIR] = useState<string>(defaultIRFiles.left);
@@ -61,7 +62,7 @@ const CodeViewInner: React.FC<{
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold text-gray-800 mb-4">
-        Code Comparison: {kernel.name}
+        Code Comparison: [{selectedKernel}] {kernel.name}
       </h1>
 
       {/* IR file selector controls */}
@@ -256,6 +257,7 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
       kernel={kernel}
       irFiles={irFiles}
       defaultIRFiles={defaultIRFiles}
+      selectedKernel={selectedKernel}
     />
   );
 };
