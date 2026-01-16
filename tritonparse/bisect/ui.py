@@ -13,7 +13,10 @@ import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tritonparse.bisect.logger import BisectLogger
 
 # Graceful fallback if rich not installed
 try:
@@ -576,3 +579,213 @@ class BisectUI:
 def is_rich_available() -> bool:
     """Check if Rich library is available."""
     return RICH_AVAILABLE
+
+
+def _generate_title(mode: SummaryMode, success: bool = True) -> str:
+    """
+    Generate panel title based on mode.
+
+    Args:
+        mode: The summary mode.
+        success: Whether the operation succeeded.
+
+    Returns:
+        Title string for the summary panel.
+    """
+    if not success:
+        if mode == SummaryMode.PAIR_TEST:
+            return "Pair Test Failed"
+        else:
+            return "Bisect Failed"
+
+    if mode == SummaryMode.TRITON_BISECT:
+        return "Triton Bisect Result"
+    elif mode == SummaryMode.LLVM_BISECT:
+        return "LLVM Bisect Result"
+    elif mode == SummaryMode.FULL_WORKFLOW:
+        return "Bisect Result (Full Workflow)"
+    elif mode == SummaryMode.PAIR_TEST:
+        return "Pair Test Result"
+    else:
+        return "Bisect Result"
+
+
+def print_final_summary(
+    mode: SummaryMode,
+    culprits: Optional[dict] = None,
+    llvm_bump_info: Optional[object] = None,
+    pair_test_result: Optional[object] = None,
+    error_msg: Optional[str] = None,
+    log_dir: Optional[str] = None,
+    log_file: Optional[str] = None,
+    command_log: Optional[str] = None,
+    elapsed_time: Optional[float] = None,
+    logger: Optional["BisectLogger"] = None,
+) -> None:
+    """
+    Print final bisect summary with Rich formatting (or plain text fallback).
+
+    Args:
+        mode: The summary mode (determines title and output structure).
+        culprits: Dictionary mapping component name to culprit commit hash.
+                  Keys can be: 'triton', 'llvm' (extensible).
+                  Example: {'triton': 'abc123', 'llvm': 'def456'}
+        llvm_bump_info: LLVMBumpInfo object if Triton culprit is an LLVM bump.
+        pair_test_result: PairTestResult object (required for PAIR_TEST mode).
+        error_msg: Error message if operation failed.
+        log_dir: Directory containing log files.
+        log_file: Main log file path (shown on error).
+        command_log: Command log file path (shown on error).
+        elapsed_time: Total execution time in seconds.
+        logger: Optional BisectLogger to write summary to log file.
+    """
+    # Handle pair test mode separately
+    if mode == SummaryMode.PAIR_TEST:
+        _print_pair_test_summary(
+            pair_test_result,
+            error_msg,
+            log_dir,
+            log_file,
+            command_log,
+            elapsed_time,
+            logger,
+        )
+        return
+
+    # Bisect modes (TRITON_BISECT, LLVM_BISECT, FULL_WORKFLOW)
+    success = culprits is not None and len(culprits) > 0
+
+    # Generate title based on mode
+    title = _generate_title(mode, success)
+
+    # Check if Triton culprit is an LLVM bump
+    is_llvm_bump = (
+        llvm_bump_info is not None
+        and hasattr(llvm_bump_info, "is_llvm_bump")
+        and llvm_bump_info.is_llvm_bump
+    )
+
+    if RICH_AVAILABLE:
+        # Use record=True to capture output for logging
+        console = Console(record=True)
+        _print_final_summary_rich(
+            culprits,
+            is_llvm_bump,
+            llvm_bump_info,
+            error_msg,
+            log_dir,
+            log_file,
+            command_log,
+            title,
+            success,
+            elapsed_time,
+            console,
+        )
+        # Write summary to log file if logger provided
+        if logger:
+            _write_summary_to_log(console, logger)
+    else:
+        _print_final_summary_plain(
+            culprits,
+            is_llvm_bump,
+            llvm_bump_info,
+            error_msg,
+            log_dir,
+            log_file,
+            command_log,
+            title,
+            success,
+            elapsed_time,
+        )
+        # For plain mode, generate text and write to log
+        if logger:
+            _write_plain_summary_to_log(
+                mode,
+                culprits,
+                is_llvm_bump,
+                llvm_bump_info,
+                error_msg,
+                log_dir,
+                log_file,
+                command_log,
+                title,
+                success,
+                elapsed_time,
+                logger,
+            )
+
+
+# =============================================================================
+# Stub functions for print_final_summary (to be implemented in subsequent PRs)
+# =============================================================================
+
+
+def _print_pair_test_summary(
+    pair_test_result: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    elapsed_time: Optional[float],
+    logger: Optional["BisectLogger"],
+) -> None:
+    """Print pair test summary. To be implemented in PR-41."""
+    raise NotImplementedError("_print_pair_test_summary will be implemented in PR-41")
+
+
+def _print_final_summary_rich(
+    culprits: Optional[dict],
+    is_llvm_bump: bool,
+    llvm_bump_info: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    title: str,
+    success: bool,
+    elapsed_time: Optional[float],
+    console: "Console",
+) -> None:
+    """Print Rich-formatted summary. To be implemented in PR-39."""
+    raise NotImplementedError("_print_final_summary_rich will be implemented in PR-39")
+
+
+def _print_final_summary_plain(
+    culprits: Optional[dict],
+    is_llvm_bump: bool,
+    llvm_bump_info: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    title: str,
+    success: bool,
+    elapsed_time: Optional[float],
+) -> None:
+    """Print plain text summary. To be implemented in PR-40."""
+    raise NotImplementedError("_print_final_summary_plain will be implemented in PR-40")
+
+
+def _write_summary_to_log(console: "Console", logger: "BisectLogger") -> None:
+    """Write Rich summary to log file. To be implemented in PR-42."""
+    raise NotImplementedError("_write_summary_to_log will be implemented in PR-42")
+
+
+def _write_plain_summary_to_log(
+    mode: SummaryMode,
+    culprits: Optional[dict],
+    is_llvm_bump: bool,
+    llvm_bump_info: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    title: str,
+    success: bool,
+    elapsed_time: Optional[float],
+    logger: "BisectLogger",
+) -> None:
+    """Write plain text summary to log file. To be implemented in PR-42."""
+    raise NotImplementedError(
+        "_write_plain_summary_to_log will be implemented in PR-42"
+    )
