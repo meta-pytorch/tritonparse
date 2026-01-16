@@ -938,10 +938,6 @@ def print_final_summary(
                 llvm_bump_info,
                 error_msg,
                 log_dir,
-                log_file,
-                command_log,
-                title,
-                success,
                 elapsed_time,
                 logger,
             )
@@ -1107,8 +1103,27 @@ def _print_final_summary_plain(
 
 
 def _write_summary_to_log(console: "Console", logger: "BisectLogger") -> None:
-    """Write Rich summary to log file. To be implemented in PR-42."""
-    raise NotImplementedError("_write_summary_to_log will be implemented in PR-42")
+    """
+    Write Rich console output to log file.
+
+    Uses Console.export_text() to extract plain text (without ANSI codes)
+    from the recorded console output.
+
+    Args:
+        console: Rich Console with record=True that has captured output.
+        logger: BisectLogger to write the summary to.
+    """
+    try:
+        plain_text = console.export_text()
+        logger.info("=" * 60)
+        logger.info("FINAL SUMMARY")
+        logger.info("=" * 60)
+        for line in plain_text.split("\n"):
+            if line.strip():
+                logger.info(line)
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.warning(f"Failed to write summary to log: {e}")
 
 
 def _write_plain_summary_to_log(
@@ -1118,17 +1133,66 @@ def _write_plain_summary_to_log(
     llvm_bump_info: Optional[object],
     error_msg: Optional[str],
     log_dir: Optional[str],
-    log_file: Optional[str],
-    command_log: Optional[str],
-    title: str,
-    success: bool,
     elapsed_time: Optional[float],
     logger: "BisectLogger",
 ) -> None:
-    """Write plain text summary to log file. To be implemented in PR-42."""
-    raise NotImplementedError(
-        "_write_plain_summary_to_log will be implemented in PR-42"
-    )
+    """
+    Write plain text summary to log file (fallback when Rich not available).
+
+    Args:
+        mode: The summary mode.
+        culprits: Dictionary mapping component name to culprit commit hash.
+        is_llvm_bump: Whether the Triton culprit is an LLVM bump.
+        llvm_bump_info: LLVMBumpInfo object if applicable.
+        error_msg: Error message if operation failed.
+        log_dir: Directory containing log files.
+        elapsed_time: Total execution time in seconds.
+        logger: BisectLogger to write the summary to.
+    """
+    success = culprits is not None and len(culprits) > 0
+    title = _generate_title(mode, success)
+
+    logger.info("=" * 60)
+    logger.info("FINAL SUMMARY")
+    logger.info("=" * 60)
+    logger.info(title)
+
+    if success:
+        logger.info("Bisect Completed")
+
+        for key in CULPRIT_DISPLAY_ORDER:
+            if culprits and key in culprits:
+                name = CULPRIT_DISPLAY_NAMES.get(key, key)
+                commit = culprits[key]
+                url = GITHUB_COMMIT_URLS.get(key, "") + commit
+
+                logger.info(f"{name} culprit: {commit}")
+                if url:
+                    logger.info(f"   Link: {url}")
+
+                if key == "triton":
+                    if is_llvm_bump:
+                        logger.info("This Triton commit is an LLVM bump!")
+                        logger.info(
+                            f"   LLVM: {llvm_bump_info.old_hash} -> {llvm_bump_info.new_hash}"
+                        )
+                    elif culprits and len(culprits) == 1:
+                        logger.info(
+                            "This is a regular Triton commit (not an LLVM bump)"
+                        )
+
+        if elapsed_time is not None:
+            logger.info(f"Total time: {_format_elapsed(elapsed_time)}")
+
+        if log_dir:
+            logger.info(f"Log directory: {log_dir}")
+    else:
+        logger.info(f"Bisect Failed: {error_msg}")
+
+        if elapsed_time is not None:
+            logger.info(f"Total time: {_format_elapsed(elapsed_time)}")
+
+    logger.info("=" * 60)
 
 
 def _write_pair_test_summary_to_log(
@@ -1138,7 +1202,53 @@ def _write_pair_test_summary_to_log(
     elapsed_time: Optional[float],
     logger: "BisectLogger",
 ) -> None:
-    """Write pair test summary to log file. To be implemented in PR-42."""
-    raise NotImplementedError(
-        "_write_pair_test_summary_to_log will be implemented in PR-42"
-    )
+    """
+    Write pair test summary to log file (fallback when Rich not available).
+
+    Args:
+        result: PairTestResult object.
+        error_msg: Error message if test failed.
+        log_dir: Directory containing log files.
+        elapsed_time: Total execution time in seconds.
+        logger: BisectLogger to write the summary to.
+    """
+    logger.info("=" * 60)
+    logger.info("FINAL SUMMARY - Pair Test Result")
+    logger.info("=" * 60)
+
+    if result is None:
+        logger.info("Pair Test Failed")
+        if error_msg:
+            logger.info(f"Error: {error_msg}")
+    elif result.all_passed:
+        logger.info("All Pairs Passed")
+        logger.info(f"Tested {result.total_pairs} pairs")
+        logger.info("No failing pair found in the specified range")
+    elif result.found_failing:
+        logger.info("Pair Test Completed")
+        logger.info(
+            f"First failing pair: #{result.failing_index + 1} of {result.total_pairs}"
+        )
+        if result.triton_commit:
+            logger.info(f"Triton commit for LLVM bisect: {result.triton_commit}")
+            triton_url = GITHUB_COMMIT_URLS.get("triton", "") + result.triton_commit
+            logger.info(f"   Link: {triton_url}")
+        logger.info("LLVM bisect range:")
+        if result.good_llvm:
+            logger.info(f"   Good: {result.good_llvm}")
+        if result.bad_llvm:
+            logger.info(f"   Bad:  {result.bad_llvm}")
+    else:
+        logger.info("Pair Test Failed")
+        if result.error_message:
+            logger.info(f"Error: {result.error_message}")
+        elif error_msg:
+            logger.info(f"Error: {error_msg}")
+
+    if elapsed_time is not None:
+        logger.info(f"Total time: {_format_elapsed(elapsed_time)}")
+
+    if log_dir:
+        logger.info(f"Log directory: {log_dir}")
+
+    logger.info("=" * 60)
