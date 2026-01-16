@@ -9,6 +9,7 @@ Rich is not available or when running in non-TTY environments.
 """
 
 import sys
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -17,10 +18,25 @@ try:
     from rich.console import Console
     from rich.layout import Layout
     from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
 
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+
+def _format_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as human-readable string."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    else:
+        return f"{secs}s"
 
 
 @dataclass
@@ -155,3 +171,97 @@ class BisectUI:
             Layout(name="output"),
         )
         return layout
+
+    def _render_progress_panel(self) -> "Panel":
+        """Render the progress information panel."""
+        p = self.progress
+
+        # Auto-update elapsed time on each render
+        if self.start_time:
+            p.elapsed_seconds = time.time() - self.start_time
+
+        text = Text()
+
+        # Line 1: Core status (Phase, Commit, Progress, Elapsed) - all in one line
+        text.append("Phase: ", style="bold")
+        text.append(f"{p.phase} ", style="green bold")
+        text.append(f"({p.phase_number}/{p.total_phases})  ", style="green")
+
+        text.append("Commit: ", style="bold")
+        if p.current_commit:
+            commit_display = (
+                p.current_commit[:9] if len(p.current_commit) > 9 else p.current_commit
+            )
+            text.append(f"{commit_display}  ", style="cyan")
+        else:
+            text.append("N/A  ", style="dim")
+
+        text.append("Progress: ", style="bold")
+        progress_text = f"{p.commits_tested} tested"
+        if p.steps_remaining is not None:
+            progress_text += f", ~{p.steps_remaining} steps left"
+        text.append(progress_text + "  ", style="yellow")
+
+        text.append("Elapsed: ", style="bold")
+        text.append(f"{_format_elapsed(p.elapsed_seconds)}\n", style="magenta")
+
+        # Line 2-3: Log files
+        if p.log_dir:
+            text.append("📁 Logs: ", style="bold")
+            text.append(f"{p.log_dir}\n", style="dim")
+            log_files = []
+            if p.log_file:
+                log_files.append(p.log_file)
+            if p.command_log:
+                log_files.append(p.command_log)
+            if log_files:
+                text.append("   └─ ", style="dim")
+                text.append(", ".join(log_files) + "\n", style="bright_black")
+
+        # Line 4: Status indicator + last result (combined)
+        status_parts = []
+        if p.is_building:
+            status_parts.append(("⚙️  Building...", "yellow"))
+        elif p.is_testing:
+            status_parts.append(("🧪 Testing...", "cyan"))
+
+        if p.status_message:
+            status_parts.append((p.status_message, "bright_black italic"))
+
+        if status_parts:
+            for i, (msg, style) in enumerate(status_parts):
+                if i > 0:
+                    text.append("  ", style="default")
+                text.append(msg, style=style)
+
+        return Panel(
+            text,
+            title="[bold bright_green]Bisect Progress[/bold bright_green]",
+            border_style="green",
+        )
+
+    def _render_output_panel(self) -> "Panel":
+        """Render the scrolling output panel."""
+        # Get last N lines that fit
+        display_lines = self.output_lines[-50:]  # Show last 50 lines
+
+        text = Text()
+        for line in display_lines:
+            # Truncate very long lines
+            if len(line) > 200:
+                line = line[:197] + "..."
+            text.append(line + "\n")
+
+        return Panel(
+            text,
+            title="[bold bright_cyan]Output[/bold bright_cyan]",
+            border_style="blue",
+        )
+
+    def _update_layout(self) -> None:
+        """Update the layout with current state."""
+        if not self._rich_enabled or not self._layout:
+            return
+
+        self._layout["progress"].update(self._render_progress_panel())
+        self._layout["output"].update(self._render_output_panel())
