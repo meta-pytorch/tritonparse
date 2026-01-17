@@ -108,6 +108,11 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Custom build command (default: 'pip install -e .' for Triton)",
     )
+    parser.add_argument(
+        "--per-commit-log",
+        action="store_true",
+        help="Create a separate log file for each commit",
+    )
 
     # Triton bisect arguments
     parser.add_argument(
@@ -439,6 +444,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 logger=logger,
                 conda_env=args.conda_env,
                 build_command=args.build_command,
+                per_commit_log=args.per_commit_log,
             )
 
             # Run bisect

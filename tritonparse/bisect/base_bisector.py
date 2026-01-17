@@ -58,6 +58,7 @@ class BaseBisector(ABC):
         conda_env: str,
         logger: BisectLogger,
         build_command: Optional[str] = None,
+        per_commit_log: bool = False,
     ) -> None:
         """
         Initialize the bisector.
@@ -75,6 +76,7 @@ class BaseBisector(ABC):
         self.logger = logger
         self.build_command = build_command or self.default_build_command
         self.executor = ShellExecutor(logger)
+        self.per_commit_log = "1" if per_commit_log else "0"
 
     @property
     @abstractmethod
@@ -207,7 +209,7 @@ class BaseBisector(ABC):
             "TEST_SCRIPT": str(self.test_script),
             "CONDA_ENV": self.conda_env,
             "LOG_DIR": str(self.logger.log_dir),
-            "PER_COMMIT_LOG": "0",  # Disable per-commit logs in Python mode
+            "PER_COMMIT_LOG": self.per_commit_log,  # Disable per-commit logs in Python mode
         }
         # Only include BUILD_COMMAND if it's set (not used by LLVMBisector)
         if self.build_command:

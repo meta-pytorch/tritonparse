@@ -155,6 +155,7 @@ log_output() {
   echo "Test Script: $TEST_SCRIPT"
   echo "Test Args: $TEST_ARGS"
   echo "Conda Env: $CONDA_ENV"
+  echo "Commit Log: $COMMIT_LOG"
   echo "========================="
   echo ""
 } | log_output
