@@ -39,6 +39,35 @@ def _format_elapsed(seconds: float) -> str:
         return f"{secs}s"
 
 
+class _LiveContent:
+    """
+    Wrapper that regenerates layout on each render.
+
+    This class implements the Rich renderable protocol (__rich__) to ensure
+    that the layout is regenerated on each Live refresh cycle. This enables
+    automatic updating of dynamic content like elapsed time without requiring
+    explicit calls to update the display.
+    """
+
+    def __init__(self, ui: "BisectUI") -> None:
+        self._ui = ui
+
+    def __rich__(self) -> "Layout":
+        """
+        Called by Rich Live on each refresh cycle.
+
+        Returns:
+            The updated layout with fresh elapsed time.
+        """
+        # Update elapsed time on each render
+        if self._ui.start_time:
+            self._ui.progress.elapsed_seconds = time.time() - self._ui.start_time
+
+        # Rebuild layout with fresh data
+        self._ui._update_layout()
+        return self._ui._layout
+
+
 @dataclass
 class BisectProgress:
     """
@@ -265,3 +294,86 @@ class BisectUI:
 
         self._layout["progress"].update(self._render_progress_panel())
         self._layout["output"].update(self._render_output_panel())
+
+    def start(self) -> None:
+        """Start the live display."""
+        self.start_time = time.time()
+
+        if not self._rich_enabled:
+            return
+
+        self._update_layout()
+        # Use _LiveContent wrapper to enable auto-refresh of elapsed time
+        # The __rich__() method is called on each Live refresh cycle
+        # refresh_per_second=2 is sufficient since elapsed time displays in seconds
+        self._live = Live(
+            _LiveContent(self),
+            console=self._console,
+            refresh_per_second=2,
+            screen=True,
+        )
+        self._live.start()
+
+    def stop(self) -> None:
+        """Stop the live display and save final elapsed time."""
+        # Save final elapsed time before stopping
+        if self.start_time:
+            self.progress.elapsed_seconds = time.time() - self.start_time
+
+        if self._live:
+            self._live.stop()
+            self._live = None
+
+    def update_progress(self, **kwargs) -> None:
+        """
+        Update progress information.
+
+        Args:
+            **kwargs: Fields to update on BisectProgress.
+                     Valid fields: phase, phase_number, total_phases,
+                     current_commit, commits_tested, total_commits,
+                     elapsed_seconds, status_message, is_building, is_testing.
+        """
+        # Update elapsed time automatically
+        if self.start_time and "elapsed_seconds" not in kwargs:
+            kwargs["elapsed_seconds"] = time.time() - self.start_time
+
+        # Update progress fields
+        for key, value in kwargs.items():
+            if hasattr(self.progress, key):
+                setattr(self.progress, key, value)
+
+        # Update display
+        if self._rich_enabled and self._live:
+            self._update_layout()
+
+    def append_output(self, line: str) -> None:
+        """
+        Append a line to the output panel.
+
+        Args:
+            line: Output line to append.
+        """
+        # Strip trailing newline if present
+        line = line.rstrip("\n")
+
+        self.output_lines.append(line)
+
+        # Limit stored lines
+        if len(self.output_lines) > self.max_output_lines:
+            self.output_lines = self.output_lines[-self.max_output_lines :]
+
+        if not self._rich_enabled:
+            # Plain text fallback
+            print(line)
+        elif self._live:
+            self._update_layout()
+
+    def __enter__(self) -> "BisectUI":
+        """Context manager entry."""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit."""
+        self.stop()
