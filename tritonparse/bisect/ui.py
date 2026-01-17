@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, List, Optional
 
 # Graceful fallback if rich not installed
@@ -25,6 +26,34 @@ try:
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+# GitHub commit URL mapping - for generating clickable links
+GITHUB_COMMIT_URLS = {
+    "triton": "https://github.com/triton-lang/triton/commit/",
+    "llvm": "https://github.com/llvm/llvm-project/commit/",
+}
+
+# Display order - from upper layer to lower layer (call stack order)
+CULPRIT_DISPLAY_ORDER = ["triton", "llvm"]
+
+# Display names for each component
+CULPRIT_DISPLAY_NAMES = {
+    "triton": "Triton",
+    "llvm": "LLVM",
+}
+
+
+class SummaryMode(Enum):
+    """
+    Mode for print_final_summary output.
+
+    Determines the title and structure of the summary panel.
+    """
+
+    TRITON_BISECT = "triton_bisect"
+    LLVM_BISECT = "llvm_bisect"
+    FULL_WORKFLOW = "full_workflow"
+    PAIR_TEST = "pair_test"
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -542,3 +571,8 @@ class BisectUI:
         if match:
             steps_remaining = int(match.group(1))
             self.update_progress(steps_remaining=steps_remaining)
+
+
+def is_rich_available() -> bool:
+    """Check if Rich library is available."""
+    return RICH_AVAILABLE
