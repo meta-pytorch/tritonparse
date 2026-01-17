@@ -27,6 +27,7 @@ from tritonparse.bisect.ui import (
     BisectProgress,
     BisectUI,
     is_rich_available,
+    print_final_summary,
     RICH_AVAILABLE,
     SummaryMode,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "PairTester",
     "PairTesterError",
     "PairTestResult",
+    "print_final_summary",
     "RICH_AVAILABLE",
     "ShellExecutor",
     "StateManager",
