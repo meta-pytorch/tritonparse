@@ -746,8 +746,82 @@ def _print_final_summary_rich(
     elapsed_time: Optional[float],
     console: "Console",
 ) -> None:
-    """Print Rich-formatted summary. To be implemented in PR-39."""
-    raise NotImplementedError("_print_final_summary_rich will be implemented in PR-39")
+    """Print final summary with Rich formatting."""
+    text = Text()
+
+    if success:
+        text.append("✅ Bisect Completed\n\n", style="bold green")
+
+        # Print all culprits in order
+        for key in CULPRIT_DISPLAY_ORDER:
+            if culprits and key in culprits:
+                name = CULPRIT_DISPLAY_NAMES.get(key, key)
+                commit = culprits[key]
+                url = GITHUB_COMMIT_URLS.get(key, "") + commit
+
+                text.append(f"🔍 {name} culprit: ", style="bold")
+                text.append(f"{commit}\n", style="cyan bold")
+                if url:
+                    text.append("   🔗 Link:\n", style="bold")
+                    text.append(f"      {url}\n", style="blue underline")
+
+                # Show LLVM bump info after Triton culprit (if applicable)
+                if key == "triton":
+                    if is_llvm_bump:
+                        text.append(
+                            "\n⚠️  This Triton commit is an LLVM bump!\n",
+                            style="yellow bold",
+                        )
+                        text.append("   LLVM: ", style="bold")
+                        text.append(f"{llvm_bump_info.old_hash}", style="dim")
+                        text.append(" → ", style="bold")
+                        text.append(f"{llvm_bump_info.new_hash}\n", style="yellow")
+                    elif culprits and len(culprits) == 1:
+                        # Only show "not an LLVM bump" for Triton-only mode
+                        text.append(
+                            "\nℹ️  This is a regular Triton commit (not an LLVM bump)\n",
+                            style="dim italic",
+                        )
+
+                text.append("\n")
+
+        # Show total time
+        if elapsed_time is not None:
+            text.append("⏱️  Total time: ", style="bold")
+            text.append(f"{_format_elapsed(elapsed_time)}\n", style="magenta")
+
+        if log_dir:
+            text.append("📁 Log directory: ", style="bold")
+            text.append(f"{log_dir}", style="dim")
+    else:
+        text.append("❌ Bisect Failed\n\n", style="bold red")
+        if error_msg:
+            text.append(f"{error_msg}", style="red")
+
+        # Show total time even on failure
+        if elapsed_time is not None:
+            text.append("\n\n⏱️  Total time: ", style="bold")
+            text.append(f"{_format_elapsed(elapsed_time)}", style="magenta")
+
+        # Show specific log files for easier debugging
+        if command_log:
+            text.append("\n\n📄 Check command log for details:\n", style="bold")
+            text.append(f"   {command_log}", style="yellow")
+        if log_file:
+            text.append("\n📄 Module log: ", style="bold")
+            text.append(f"{log_file}", style="dim")
+        if log_dir and not command_log and not log_file:
+            text.append("\n\n📁 Log directory: ", style="bold")
+            text.append(f"{log_dir}", style="dim")
+
+    panel = Panel(
+        text,
+        title=f"[bold]{title}[/bold]",
+        border_style="green" if success else "red",
+        padding=(1, 2),
+    )
+    console.print()
+    console.print(panel)
 
 
 def _print_final_summary_plain(
