@@ -23,7 +23,7 @@ from tritonparse.bisect.pair_tester import (
 )
 from tritonparse.bisect.state import BisectPhase, BisectState, StateManager
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
-from tritonparse.bisect.ui import BisectProgress
+from tritonparse.bisect.ui import BisectProgress, BisectUI, RICH_AVAILABLE
 
 __all__ = [
     "BaseBisector",
@@ -32,6 +32,7 @@ __all__ = [
     "BisectPhase",
     "BisectProgress",
     "BisectState",
+    "BisectUI",
     "CommandResult",
     "CommitDetector",
     "CommitDetectorError",
@@ -42,6 +43,7 @@ __all__ = [
     "PairTester",
     "PairTesterError",
     "PairTestResult",
+    "RICH_AVAILABLE",
     "ShellExecutor",
     "StateManager",
     "TritonBisectError",
