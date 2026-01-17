@@ -610,6 +610,238 @@ def _generate_title(mode: SummaryMode, success: bool = True) -> str:
         return "Bisect Result"
 
 
+def _print_pair_test_summary(
+    result: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    elapsed_time: Optional[float],
+    logger: Optional["BisectLogger"],
+) -> None:
+    """
+    Print pair test summary with Rich formatting (or plain text fallback).
+
+    Args:
+        result: PairTestResult object.
+        error_msg: Error message if test failed.
+        log_dir: Directory containing log files.
+        log_file: Main log file path.
+        command_log: Command log file path.
+        elapsed_time: Total execution time in seconds.
+        logger: Optional BisectLogger to write summary to log file.
+    """
+    if RICH_AVAILABLE:
+        console = Console(record=True)
+        _print_pair_test_summary_rich(
+            result, error_msg, log_dir, log_file, command_log, elapsed_time, console
+        )
+        if logger:
+            _write_summary_to_log(console, logger)
+    else:
+        _print_pair_test_summary_plain(
+            result, error_msg, log_dir, log_file, command_log, elapsed_time
+        )
+        if logger:
+            _write_pair_test_summary_to_log(
+                result, error_msg, log_dir, elapsed_time, logger
+            )
+
+
+def _print_pair_test_summary_rich(
+    result: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    elapsed_time: Optional[float],
+    console: "Console",
+) -> None:
+    """Print pair test summary with Rich formatting."""
+    text = Text()
+    title = "Pair Test Result"
+
+    if result is None:
+        text.append("❌ Pair Test Failed\n\n", style="bold red")
+        if error_msg:
+            text.append(f"{error_msg}", style="red")
+
+        if elapsed_time is not None:
+            text.append("\n\n⏱️  Total time: ", style="bold")
+            text.append(f"{_format_elapsed(elapsed_time)}", style="magenta")
+
+        if command_log:
+            text.append("\n\n📄 Check command log for details:\n", style="bold")
+            text.append(f"   {command_log}", style="yellow")
+        if log_file:
+            text.append("\n📄 Module log: ", style="bold")
+            text.append(f"{log_file}", style="dim")
+        if log_dir and not command_log and not log_file:
+            text.append("\n\n📁 Log directory: ", style="bold")
+            text.append(f"{log_dir}", style="dim")
+
+        panel = Panel(
+            text,
+            title=f"[bold]{title}[/bold]",
+            border_style="red",
+            padding=(1, 2),
+        )
+        console.print()
+        console.print(panel)
+        return
+
+    # Success cases
+    if result.all_passed:
+        text.append("✅ All Pairs Passed\n\n", style="bold green")
+        text.append(f"📊 Tested {result.total_pairs} pairs\n", style="bold")
+        text.append(
+            "\nℹ️  No failing pair found in the specified range\n", style="dim italic"
+        )
+        border_style = "green"
+    elif result.found_failing:
+        text.append("✅ Pair Test Completed\n\n", style="bold green")
+        text.append("📍 First failing pair:\n", style="bold")
+
+        if result.triton_commit:
+            text.append(f"   Triton: {result.triton_commit}\n", style="cyan")
+        if result.bad_llvm:
+            text.append(f"   LLVM:   {result.bad_llvm}\n", style="red")
+        text.append("\n")
+
+        if result.triton_commit:
+            text.append("🔧 Triton commit for LLVM bisect: ", style="bold")
+            text.append(f"{result.triton_commit}\n", style="cyan bold")
+            triton_url = GITHUB_COMMIT_URLS.get("triton", "") + result.triton_commit
+            text.append("   🔗 Link:\n", style="bold")
+            text.append(f"      {triton_url}\n", style="blue underline")
+            text.append("\n")
+
+        text.append("📊 LLVM bisect range:\n", style="bold")
+        if result.good_llvm:
+            text.append(f"   Good: {result.good_llvm}\n", style="green")
+        if result.bad_llvm:
+            text.append(f"   Bad:  {result.bad_llvm}\n", style="red")
+        text.append("\n")
+
+        text.append("💡 Next step:\n", style="bold yellow")
+        next_cmd = (
+            "   tritonparseoss bisect --llvm-only \\\n"
+            "     --triton-dir <path> \\\n"
+            "     --test-script <script> \\\n"
+        )
+        if result.triton_commit:
+            next_cmd += f"     --triton-commit {result.triton_commit} \\\n"
+        if result.good_llvm:
+            next_cmd += f"     --good-llvm {result.good_llvm} \\\n"
+        if result.bad_llvm:
+            next_cmd += f"     --bad-llvm {result.bad_llvm}"
+        text.append(next_cmd, style="dim")
+        text.append("\n")
+        border_style = "green"
+    else:
+        text.append("❌ Pair Test Failed\n\n", style="bold red")
+        if result.error_message:
+            text.append(f"{result.error_message}", style="red")
+        elif error_msg:
+            text.append(f"{error_msg}", style="red")
+        border_style = "red"
+
+    if elapsed_time is not None:
+        text.append("\n⏱️  Total time: ", style="bold")
+        text.append(f"{_format_elapsed(elapsed_time)}\n", style="magenta")
+
+    if log_dir:
+        text.append("📁 Log directory: ", style="bold")
+        text.append(f"{log_dir}", style="dim")
+
+    panel = Panel(
+        text,
+        title=f"[bold]{title}[/bold]",
+        border_style=border_style,
+        padding=(1, 2),
+    )
+    console.print()
+    console.print(panel)
+
+
+def _print_pair_test_summary_plain(
+    result: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    log_file: Optional[str],
+    command_log: Optional[str],
+    elapsed_time: Optional[float],
+) -> None:
+    """Print pair test summary with plain text."""
+    print()
+    print("=" * 60)
+    print("Pair Test Result")
+    print("=" * 60)
+
+    if result is None:
+        print("❌ Pair Test Failed")
+        if error_msg:
+            print(f"Error: {error_msg}")
+
+        if elapsed_time is not None:
+            print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
+        if command_log:
+            print(f"📄 Check command log: {command_log}")
+        if log_file:
+            print(f"📄 Module log: {log_file}")
+        if log_dir:
+            print(f"📁 Log directory: {log_dir}")
+        print("=" * 60)
+        return
+
+    if result.all_passed:
+        print("✅ All Pairs Passed")
+        print(f"📊 Tested {result.total_pairs} pairs")
+        print("ℹ️  No failing pair found in the specified range")
+    elif result.found_failing:
+        print("✅ Pair Test Completed")
+        print(
+            f"📍 First failing pair: #{result.failing_index + 1} of {result.total_pairs}"
+        )
+        print()
+        if result.triton_commit:
+            print(f"🔧 Triton commit for LLVM bisect: {result.triton_commit}")
+            triton_url = GITHUB_COMMIT_URLS.get("triton", "") + result.triton_commit
+            print(f"   🔗 {triton_url}")
+        print()
+        print("📊 LLVM bisect range:")
+        if result.good_llvm:
+            print(f"   Good: {result.good_llvm}")
+        if result.bad_llvm:
+            print(f"   Bad:  {result.bad_llvm}")
+        print()
+        print("💡 Next step:")
+        print("   tritonparseoss bisect --llvm-only \\")
+        print("     --triton-dir <path> \\")
+        print("     --test-script <script> \\")
+        if result.triton_commit:
+            print(f"     --triton-commit {result.triton_commit} \\")
+        if result.good_llvm:
+            print(f"     --good-llvm {result.good_llvm} \\")
+        if result.bad_llvm:
+            print(f"     --bad-llvm {result.bad_llvm}")
+    else:
+        print("❌ Pair Test Failed")
+        if result.error_message:
+            print(f"Error: {result.error_message}")
+        elif error_msg:
+            print(f"Error: {error_msg}")
+
+    if elapsed_time is not None:
+        print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
+    if log_dir:
+        print(f"📁 Log directory: {log_dir}")
+
+    print("=" * 60)
+
+
 def print_final_summary(
     mode: SummaryMode,
     culprits: Optional[dict] = None,
@@ -713,24 +945,6 @@ def print_final_summary(
                 elapsed_time,
                 logger,
             )
-
-
-# =============================================================================
-# Stub functions for print_final_summary (to be implemented in subsequent PRs)
-# =============================================================================
-
-
-def _print_pair_test_summary(
-    pair_test_result: Optional[object],
-    error_msg: Optional[str],
-    log_dir: Optional[str],
-    log_file: Optional[str],
-    command_log: Optional[str],
-    elapsed_time: Optional[float],
-    logger: Optional["BisectLogger"],
-) -> None:
-    """Print pair test summary. To be implemented in PR-41."""
-    raise NotImplementedError("_print_pair_test_summary will be implemented in PR-41")
 
 
 def _print_final_summary_rich(
@@ -914,4 +1128,17 @@ def _write_plain_summary_to_log(
     """Write plain text summary to log file. To be implemented in PR-42."""
     raise NotImplementedError(
         "_write_plain_summary_to_log will be implemented in PR-42"
+    )
+
+
+def _write_pair_test_summary_to_log(
+    result: Optional[object],
+    error_msg: Optional[str],
+    log_dir: Optional[str],
+    elapsed_time: Optional[float],
+    logger: "BisectLogger",
+) -> None:
+    """Write pair test summary to log file. To be implemented in PR-42."""
+    raise NotImplementedError(
+        "_write_pair_test_summary_to_log will be implemented in PR-42"
     )
