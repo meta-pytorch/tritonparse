@@ -836,8 +836,60 @@ def _print_final_summary_plain(
     success: bool,
     elapsed_time: Optional[float],
 ) -> None:
-    """Print plain text summary. To be implemented in PR-40."""
-    raise NotImplementedError("_print_final_summary_plain will be implemented in PR-40")
+    """Print final summary with plain text (fallback when Rich not available)."""
+    print()
+    print("=" * 60)
+    print(title)
+    print("=" * 60)
+
+    if success:
+        print("✅ Bisect Completed")
+
+        # Print all culprits in order
+        for key in CULPRIT_DISPLAY_ORDER:
+            if culprits and key in culprits:
+                name = CULPRIT_DISPLAY_NAMES.get(key, key)
+                commit = culprits[key]
+                url = GITHUB_COMMIT_URLS.get(key, "") + commit
+
+                print(f"🔍 {name} culprit: {commit}")
+                if url:
+                    print(f"   🔗 {url}")
+
+                # Show LLVM bump info after Triton culprit (if applicable)
+                if key == "triton":
+                    if is_llvm_bump:
+                        print("⚠️  This Triton commit is an LLVM bump!")
+                        print(
+                            f"   LLVM: {llvm_bump_info.old_hash} → {llvm_bump_info.new_hash}"
+                        )
+                    elif culprits and len(culprits) == 1:
+                        # Only show "not an LLVM bump" for Triton-only mode
+                        print("ℹ️  This is a regular Triton commit (not an LLVM bump)")
+
+        # Show total time
+        if elapsed_time is not None:
+            print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
+        if log_dir:
+            print(f"📁 Log directory: {log_dir}")
+    else:
+        print(f"❌ Bisect Failed: {error_msg}")
+
+        # Show total time even on failure
+        if elapsed_time is not None:
+            print(f"⏱️  Total time: {_format_elapsed(elapsed_time)}")
+
+        # Show specific log files for easier debugging
+        if command_log:
+            print("📄 Check command log for details:")
+            print(f"   {command_log}")
+        if log_file:
+            print(f"📄 Module log: {log_file}")
+        if log_dir and not command_log and not log_file:
+            print(f"📁 Log directory: {log_dir}")
+
+    print("=" * 60)
 
 
 def _write_summary_to_log(console: "Console", logger: "BisectLogger") -> None:
