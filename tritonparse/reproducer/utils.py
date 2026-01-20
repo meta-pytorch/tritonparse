@@ -362,7 +362,9 @@ def _create_arg_from_info(arg_info):
         return None
 
 
-def determine_output_paths(out_dir: str, kernel_name: str, template: str):
+def determine_output_paths(
+    out_dir: str, kernel_name: str, template: str, line_index: int
+):
     """
     Determine output file paths for reproducer script and context data.
 
@@ -370,6 +372,7 @@ def determine_output_paths(out_dir: str, kernel_name: str, template: str):
         out_dir: Output directory path. If empty, uses default location.
         kernel_name: Name of the kernel for default directory naming.
         template: Template name or path. If a path, extracts the filename.
+        line_index: 0-based line index of the launch event in the NDJSON file.
 
     Returns:
         Tuple of (python_script_path, json_context_path) as Path objects.
@@ -383,13 +386,15 @@ def determine_output_paths(out_dir: str, kernel_name: str, template: str):
         Path(template).stem if "/" in template or "\\" in template else template
     )
 
-    filename_parts = ["repro"]
+    filename_parts = ["repro", f"line{line_index}"]
     if template != "example":
         filename_parts.append(template_name)
     filename_parts.append(timestamp)
     filename = "_".join(filename_parts) + ".py"
     out_py_path = output_directory / filename
-    temp_json_path = output_directory / f"repro_context_{timestamp}.json"
+    temp_json_path = (
+        output_directory / f"repro_line{line_index}_context_{timestamp}.json"
+    )
 
     return out_py_path, temp_json_path
 
