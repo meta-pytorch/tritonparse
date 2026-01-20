@@ -116,6 +116,9 @@ def reproduce(
         kernel_import=kernel_import,
         comp_json_filename=comp_json_path.name if comp_json_path else None,
         embed_context=embed_context,
+        input_path=input_path,
+        line_index=line_index,
+        template=template,
     )
 
     # Format the generated code
