@@ -214,8 +214,8 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
               isSticky ? "gap-1" : "gap-2"
             } ${
               isSticky && isCollapsed
-                ? "max-h-9 overflow-hidden"
-                : "max-h-96"
+                ? "max-h-[4vh] overflow-hidden"
+                : "max-h-[50vh] overflow-auto"
             }`}
           >
             {kernels.map((k, index) => (
