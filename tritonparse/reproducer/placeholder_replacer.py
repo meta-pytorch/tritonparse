@@ -15,6 +15,7 @@ from tritonparse.reproducer.types import KernelImportMode
 from tritonparse.reproducer.utils import (
     _generate_import_statements,
     _generate_invocation_snippet,
+    _get_compile_params_for_invocation,
     _parse_kernel_signature,
 )
 from tritonparse.tp_logger import logger
@@ -298,10 +299,18 @@ triton.autotune = _patched_autotune
     def _replace_kernel_invocation(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
-        """Replace the kernel invocation placeholder."""
+        """Replace the kernel invocation placeholder with compile parameters."""
         source_code = context_bundle.kernel_info.source_code
         pos_args, kw_args = _parse_kernel_signature(source_code)
-        invocation_snippet = _generate_invocation_snippet(pos_args, kw_args)
+
+        # Extract compile parameters from metadata to pass to kernel launch
+        compile_params = _get_compile_params_for_invocation(
+            context_bundle.compile, kw_args
+        )
+
+        invocation_snippet = _generate_invocation_snippet(
+            pos_args, kw_args, compile_params
+        )
         return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
 
     def _replace_context_json(
