@@ -182,6 +182,21 @@ fi
 
 echo "" | log_output
 
+# Clean build directory to avoid stale artifacts from previous commits
+echo "Cleaning build directory..." | log_output
+rm -rf "$TRITON_DIR/build"
+rm -rf "$TRITON_DIR/python/triton.egg-info"
+echo "" | log_output
+
+# Uninstall any existing triton to avoid conflicts with PyTorch built-in
+echo "Uninstalling existing triton packages..." | log_output
+if [[ "$USE_UV" == "1" ]]; then
+  uv pip uninstall -y triton pytorch-triton 2>&1 | log_output || true
+else
+  pip uninstall -y triton pytorch-triton 2>&1 | log_output || true
+fi
+echo "" | log_output
+
 # Build Triton
 echo "Building Triton..." | log_output
 BUILD_START=$(date +%s)
