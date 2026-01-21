@@ -226,3 +226,43 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
 
     if missing:
         parser.error(f"The following arguments are required: {', '.join(missing)}")
+
+
+def _handle_status(args: argparse.Namespace) -> int:
+    """
+    Handle --status mode: show current bisect status.
+
+    If --state is not provided, searches for the most recent state file
+    in the log directory (default: ./bisect_logs).
+
+    Args:
+        args: Parsed arguments with optional 'state' and 'log_dir'.
+
+    Returns:
+        0 on success or no state found, 1 on error.
+    """
+    from .state import StateManager
+
+    # Determine state file path
+    state_path = args.state
+    if state_path is None:
+        # Search for latest state in log directory
+        log_dir = getattr(args, "log_dir", "./bisect_logs")
+        found_path = StateManager.find_latest_state(log_dir)
+        if found_path is None:
+            print(f"No state file found in: {log_dir}")
+            print("No bisect in progress.")
+            return 0
+        state_path = str(found_path)
+
+    try:
+        state = StateManager.load(state_path)
+        StateManager.print_status(state)
+        return 0
+    except FileNotFoundError:
+        print(f"No state file found at: {state_path}")
+        print("No bisect in progress.")
+        return 0
+    except Exception as e:
+        print(f"Error loading state: {e}")
+        return 1
