@@ -431,6 +431,132 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     return 0 if culprit else 1
 
 
+def _handle_pair_test(args: argparse.Namespace) -> int:
+    """
+    Handle --pair-test mode: test commit pairs to find LLVM bisect range.
+
+    This function tests (Triton, LLVM) commit pairs from a CSV file to find
+    the first failing combination. The result can be used to determine the
+    LLVM bisect range for subsequent LLVM bisect.
+
+    Args:
+        args: Parsed arguments including triton_dir, test_script, commits_csv,
+              good_llvm, bad_llvm, etc.
+
+    Returns:
+        0 on success (found failing pair or all passed), 1 on failure.
+    """
+    from pathlib import Path
+
+    from .executor import ShellExecutor
+    from .pair_tester import PairTester, PairTesterError
+    from .ui import BisectUI, print_final_summary, SummaryMode
+
+    # Initialize TUI
+    ui = BisectUI(enabled=args.tui)
+
+    # Variables to store results for summary after TUI exits
+    result = None
+    error_msg = None
+    logger = None
+
+    with ui:
+        try:
+            # Create logger inside TUI context
+            logger = _create_logger(args.log_dir)
+
+            # Configure logger for TUI mode
+            if ui.is_tui_enabled:
+                logger.configure_for_tui(ui.create_output_callback())
+
+            ui.append_output(ui.get_tui_status_message())
+
+            # Set initial progress
+            ui.update_progress(
+                phase="Pair Test",
+                phase_number=1,
+                total_phases=1,
+                log_dir=str(logger.log_dir),
+                log_file=logger.module_log_path.name,
+                command_log=logger.command_log_path.name,
+            )
+
+            # Show mode info
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("Pair Test Mode")
+            ui.append_output("=" * 60)
+            ui.append_output(f"CSV file: {args.commits_csv}")
+            ui.append_output(f"LLVM range: {args.good_llvm} -> {args.bad_llvm}")
+            ui.append_output("")
+
+            # Create pair tester
+            executor = ShellExecutor(logger)
+            tester = PairTester(
+                triton_dir=Path(args.triton_dir),
+                test_script=Path(args.test_script),
+                executor=executor,
+                logger=logger,
+                conda_env=args.conda_env,
+                build_command=args.build_command,
+            )
+
+            # Run pair test with LLVM range filtering
+            result = tester.test_from_csv(
+                csv_path=Path(args.commits_csv),
+                good_llvm=args.good_llvm,
+                bad_llvm=args.bad_llvm,
+                output_callback=ui.create_output_callback(),
+            )
+
+            # Show result in TUI
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("Pair Test Result")
+            ui.append_output("=" * 60)
+
+            if result.all_passed:
+                ui.append_output("✅ All pairs passed - no failing pair found")
+            elif result.found_failing:
+                ui.append_output(
+                    f"📍 First failing pair: #{result.failing_index + 1} "
+                    f"of {result.total_pairs}"
+                )
+                ui.append_output(f"   Triton commit: {result.triton_commit}")
+                ui.append_output(
+                    f"   LLVM range: {result.good_llvm} -> {result.bad_llvm}"
+                )
+            elif result.error_message:
+                ui.append_output(f"❌ Error: {result.error_message}")
+
+            ui.append_output(f"Log directory: {args.log_dir}")
+            ui.append_output("=" * 60)
+
+        except PairTesterError as e:
+            error_msg = str(e)
+            ui.append_output(f"\nPair test failed: {e}")
+        except Exception as e:
+            error_msg = str(e)
+            ui.append_output(f"\nUnexpected error: {e}")
+
+    # TUI has exited, print final summary
+    print_final_summary(
+        mode=SummaryMode.PAIR_TEST,
+        pair_test_result=result,
+        error_msg=error_msg,
+        log_dir=args.log_dir,
+        log_file=str(logger.module_log_path) if logger else None,
+        command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
+        logger=logger,
+    )
+
+    # Return success if we found a failing pair or all passed
+    if result:
+        return 0 if (result.found_failing or result.all_passed) else 1
+    return 1
+
+
 def _handle_llvm_only(args: argparse.Namespace) -> int:
     """
     Handle --llvm-only mode: bisect only LLVM commits.
