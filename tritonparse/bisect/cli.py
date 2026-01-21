@@ -32,6 +32,10 @@ Usage Examples:
 """
 
 import argparse
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .logger import BisectLogger
 
 
 def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
@@ -266,3 +270,162 @@ def _handle_status(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Error loading state: {e}")
         return 1
+
+
+def _create_logger(log_dir: str) -> "BisectLogger":
+    """
+    Create a BisectLogger instance.
+
+    Args:
+        log_dir: Directory for log files.
+
+    Returns:
+        Configured BisectLogger instance.
+    """
+    from .logger import BisectLogger
+
+    return BisectLogger(log_dir=log_dir)
+
+
+def _handle_full_workflow(args: argparse.Namespace) -> int:
+    """
+    Handle full workflow mode (with --commits-csv).
+
+    Orchestrates all 4 phases with TUI support:
+    1. Triton Bisect - Find culprit Triton commit
+    2. Type Check - Detect if it's an LLVM bump
+    3. Pair Test - Find LLVM bisect range (if LLVM bump)
+    4. LLVM Bisect - Find culprit LLVM commit (if LLVM bump)
+
+    This will be implemented in PR-49.
+    """
+    raise NotImplementedError(
+        "Full workflow mode (--commits-csv) will be implemented in PR-49"
+    )
+
+
+def _handle_triton_bisect(args: argparse.Namespace) -> int:
+    """
+    Handle default mode: Triton bisect (or full workflow with --commits-csv).
+
+    This function performs a two-phase operation:
+    1. Phase 1: Triton Bisect - Find the culprit Triton commit
+    2. Phase 2: LLVM Bump Check - Detect if the culprit is an LLVM version bump
+
+    If --commits-csv is provided, delegates to _handle_full_workflow() instead.
+
+    Args:
+        args: Parsed arguments including triton_dir, test_script, good, bad, etc.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    # Check if this is full workflow mode
+    if args.commits_csv:
+        return _handle_full_workflow(args)
+
+    from .commit_detector import CommitDetector
+    from .executor import ShellExecutor
+    from .triton_bisector import TritonBisectError, TritonBisector
+    from .ui import BisectUI, print_final_summary, SummaryMode
+
+    # Initialize TUI first
+    ui = BisectUI(enabled=args.tui)
+
+    # Variables to store results for summary after TUI exits
+    culprit = None
+    llvm_bump_info = None
+    error_msg = None
+    logger = None
+
+    # Use context manager to start/stop TUI - entire workflow inside
+    with ui:
+        try:
+            # Create logger inside TUI context
+            logger = _create_logger(args.log_dir)
+
+            # Configure logger for TUI mode (redirect output to TUI)
+            if ui.is_tui_enabled:
+                logger.configure_for_tui(ui.create_output_callback())
+
+            ui.append_output(ui.get_tui_status_message())
+
+            # Set initial progress: Triton only mode has 2 phases
+            ui.update_progress(
+                phase="Triton Bisect",
+                phase_number=1,
+                total_phases=2,
+                log_dir=str(logger.log_dir),
+                log_file=logger.module_log_path.name,
+                command_log=logger.command_log_path.name,
+            )
+
+            # Create bisector (its logs will go to TUI)
+            bisector = TritonBisector(
+                triton_dir=args.triton_dir,
+                test_script=args.test_script,
+                logger=logger,
+                conda_env=args.conda_env,
+                build_command=args.build_command,
+            )
+
+            # Run bisect
+            culprit = bisector.run(
+                good_commit=args.good,
+                bad_commit=args.bad,
+                output_callback=ui.create_output_callback(),
+            )
+
+            # Detect if culprit is an LLVM bump (Phase 2)
+            ui.update_progress(
+                phase="LLVM Bump Check",
+                phase_number=2,
+            )
+            executor = ShellExecutor(logger)
+            detector = CommitDetector(
+                triton_dir=args.triton_dir,
+                executor=executor,
+                logger=logger,
+            )
+            llvm_bump_info = detector.detect(culprit)
+
+            # Show result in TUI
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("Triton Bisect Result")
+            ui.append_output("=" * 60)
+            ui.append_output(f"Culprit commit: {culprit}")
+
+            # Show LLVM bump info if applicable
+            if llvm_bump_info.is_llvm_bump:
+                ui.append_output("")
+                ui.append_output("⚠️  This commit is an LLVM bump!")
+                ui.append_output(
+                    f"  LLVM version: {llvm_bump_info.old_hash} -> "
+                    f"{llvm_bump_info.new_hash}"
+                )
+
+            ui.append_output(f"Log directory: {args.log_dir}")
+            ui.append_output("=" * 60)
+
+        except TritonBisectError as e:
+            error_msg = str(e)
+            ui.append_output(f"\nTriton bisect failed: {e}")
+        except Exception as e:
+            error_msg = str(e)
+            ui.append_output(f"\nUnexpected error: {e}")
+
+    # TUI has exited, print final summary
+    print_final_summary(
+        mode=SummaryMode.TRITON_BISECT,
+        culprits={"triton": culprit} if culprit else None,
+        llvm_bump_info=llvm_bump_info,
+        error_msg=error_msg,
+        log_dir=args.log_dir,
+        log_file=str(logger.module_log_path) if logger else None,
+        command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
+        logger=logger,
+    )
+
+    return 0 if culprit else 1
