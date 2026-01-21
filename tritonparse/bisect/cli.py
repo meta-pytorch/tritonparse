@@ -156,3 +156,73 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         dest="tui",
         help="Disable Rich TUI, use plain text output",
     )
+
+
+def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """
+    Validate argument combinations based on the selected mode.
+
+    Args:
+        args: Parsed arguments.
+        parser: ArgumentParser for error reporting.
+    """
+    if args.status:
+        # Status mode: no required args (will use default state path if not specified)
+        return
+
+    if args.resume:
+        # Resume mode: --state is optional (will use default if not specified)
+        return
+
+    if args.llvm_only:
+        # LLVM-only mode: requires specific arguments
+        missing = []
+        if not args.triton_dir:
+            missing.append("--triton-dir")
+        if not args.test_script:
+            missing.append("--test-script")
+        # --triton-commit is optional, defaults to current HEAD of triton_dir
+        if not args.good_llvm:
+            missing.append("--good-llvm")
+        if not args.bad_llvm:
+            missing.append("--bad-llvm")
+
+        if missing:
+            parser.error(
+                f"--llvm-only requires the following arguments: {', '.join(missing)}"
+            )
+        return
+
+    if args.pair_test:
+        # Pair test mode: requires CSV and LLVM range
+        missing = []
+        if not args.triton_dir:
+            missing.append("--triton-dir")
+        if not args.test_script:
+            missing.append("--test-script")
+        if not args.commits_csv:
+            missing.append("--commits-csv")
+        if not args.good_llvm:
+            missing.append("--good-llvm")
+        if not args.bad_llvm:
+            missing.append("--bad-llvm")
+
+        if missing:
+            parser.error(
+                f"--pair-test requires the following arguments: {', '.join(missing)}"
+            )
+        return
+
+    # Default mode (Triton bisect) or full workflow (with --commits-csv)
+    missing = []
+    if not args.triton_dir:
+        missing.append("--triton-dir")
+    if not args.test_script:
+        missing.append("--test-script")
+    if not args.good:
+        missing.append("--good")
+    if not args.bad:
+        missing.append("--bad")
+
+    if missing:
+        parser.error(f"The following arguments are required: {', '.join(missing)}")
