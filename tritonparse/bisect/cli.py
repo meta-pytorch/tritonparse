@@ -617,6 +617,61 @@ def _cleanup_bisect_state(state: "BisectState", logger: "BisectLogger") -> None:
         )
 
 
+def _handle_resume(args: argparse.Namespace) -> int:
+    """
+    Handle --resume mode: resume from saved state with TUI support.
+
+    This function loads a previously saved bisect state and continues
+    the workflow from where it left off. It's useful when a bisect
+    was interrupted or needs to be resumed after a system restart.
+
+    Args:
+        args: Parsed arguments including state (path to state file),
+              tui (whether to use Rich TUI), and optional log_dir.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    from .state import StateManager
+    from .ui import BisectUI
+
+    # Determine state file path
+    state_path = args.state
+    if state_path is None:
+        # Search for latest state in log directory
+        log_dir = getattr(args, "log_dir", "./bisect_logs")
+        found_path = StateManager.find_latest_state(log_dir)
+        if found_path is None:
+            print(f"No state file found in: {log_dir}")
+            print("Use --state to specify a state file path.")
+            return 1
+        state_path = str(found_path)
+
+    try:
+        # Load existing state
+        state = StateManager.load(state_path)
+
+        # Create logger using the log_dir from state
+        logger = _create_logger(state.log_dir)
+
+        # Initialize TUI (supports --tui/--no-tui flags)
+        ui = BisectUI(enabled=args.tui)
+
+        # Log resume information
+        logger.info(f"Resuming from state: {state_path}")
+        logger.info(f"Current phase: {state.phase.value}")
+
+        # Run orchestration with TUI support
+        return _orchestrate_workflow(state, ui, logger)
+
+    except FileNotFoundError:
+        print(f"State file not found: {state_path}")
+        return 1
+    except Exception as e:
+        print(f"Error resuming bisect: {e}")
+        return 1
+
+
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
     """
     Handle default mode: Triton bisect (or full workflow with --commits-csv).
