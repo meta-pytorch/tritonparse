@@ -7,6 +7,7 @@ This module implements Phase 1 of the bisect workflow: bisecting Triton
 commits to find the first bad commit that causes a test to fail.
 """
 
+import os
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
@@ -50,6 +51,8 @@ class TritonBisector(BaseBisector):
     @property
     def default_build_command(self) -> str:
         """Default build command for Triton."""
+        if os.environ.get("USE_UV", None):
+            return "uv pip install -e ."
         return "pip install -e ."
 
     @property
