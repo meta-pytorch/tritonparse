@@ -182,6 +182,12 @@ fi
 
 echo "" | log_output
 
+# Clean build directory to avoid stale artifacts from previous commits
+echo "Cleaning build directory..." | log_output
+rm -rf "$TRITON_DIR/build"
+rm -rf "$TRITON_DIR/python/triton.egg-info"
+echo "" | log_output
+
 # Build Triton
 echo "Building Triton..." | log_output
 BUILD_START=$(date +%s)
