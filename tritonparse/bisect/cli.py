@@ -799,6 +799,48 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     return 0 if culprit else 1
 
 
+def bisect_command(args: argparse.Namespace) -> int:
+    """
+    Execute the bisect command based on parsed arguments.
+
+    This is the main entry point for the bisect subcommand. It routes
+    to the appropriate handler based on the mode flags.
+
+    Mode priority (checked in order):
+    1. --status: Show current bisect status
+    2. --resume: Resume from saved state
+    3. --llvm-only: LLVM-only bisect
+    4. --pair-test: Test commit pairs from CSV
+    5. Default: Triton bisect (or full workflow with --commits-csv)
+
+    The mode flags are mutually exclusive (enforced by argparse).
+
+    Args:
+        args: Parsed command-line arguments from _add_bisect_args().
+
+    Returns:
+        Exit code (0 for success, non-zero for failure).
+    """
+    # Handle --status mode
+    if args.status:
+        return _handle_status(args)
+
+    # Handle --resume mode
+    if args.resume:
+        return _handle_resume(args)
+
+    # Handle --llvm-only mode
+    if args.llvm_only:
+        return _handle_llvm_only(args)
+
+    # Handle --pair-test mode
+    if args.pair_test:
+        return _handle_pair_test(args)
+
+    # Default mode: Triton bisect (or full workflow if --commits-csv provided)
+    return _handle_triton_bisect(args)
+
+
 def _handle_pair_test(args: argparse.Namespace) -> int:
     """
     Handle --pair-test mode: test commit pairs to find LLVM bisect range.
