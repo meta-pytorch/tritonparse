@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .logger import BisectLogger
+    from .state import BisectState
+    from .ui import BisectUI
 
 
 def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
@@ -297,11 +299,74 @@ def _handle_full_workflow(args: argparse.Namespace) -> int:
     3. Pair Test - Find LLVM bisect range (if LLVM bump)
     4. LLVM Bisect - Find culprit LLVM commit (if LLVM bump)
 
-    This will be implemented in PR-49.
+    This function is the entry point for full workflow mode. It initializes
+    the TUI, logger, and state, then delegates to _orchestrate_workflow()
+    for the actual 4-phase execution.
+
+    Args:
+        args: Parsed arguments including triton_dir, test_script, good, bad,
+              commits_csv, conda_env, log_dir, build_command, tui, etc.
+
+    Returns:
+        0 on success (all phases completed), 1 on failure.
     """
-    raise NotImplementedError(
-        "Full workflow mode (--commits-csv) will be implemented in PR-49"
+    from pathlib import Path
+
+    from .state import BisectState
+    from .ui import BisectUI
+
+    # Initialize TUI
+    ui = BisectUI(enabled=args.tui)
+
+    # Create logger
+    logger = _create_logger(args.log_dir)
+
+    # Create state with all configuration
+    # Paths are resolved to absolute paths for consistency
+    state = BisectState(
+        triton_dir=str(Path(args.triton_dir).resolve()),
+        test_script=str(Path(args.test_script).resolve()),
+        good_commit=args.good,
+        bad_commit=args.bad,
+        commits_csv=str(Path(args.commits_csv).resolve()),
+        conda_env=args.conda_env,
+        log_dir=str(Path(args.log_dir).resolve()),
+        build_command=args.build_command,
+        session_name=logger.session_name,  # Links state file to log files
     )
+
+    # Run orchestration
+    return _orchestrate_workflow(state, ui, logger)
+
+
+def _orchestrate_workflow(
+    state: "BisectState",
+    ui: "BisectUI",
+    logger: "BisectLogger",
+) -> int:
+    """
+    Core orchestration logic for the 4-phase bisect workflow.
+
+    This function is shared by both _handle_full_workflow() (new runs)
+    and _handle_resume() (resumed runs).
+
+    Phases:
+    1. Triton Bisect - Find culprit Triton commit
+    2. Type Check - Detect if it's an LLVM bump
+    3. Pair Test - Find LLVM bisect range (if LLVM bump)
+    4. LLVM Bisect - Find culprit LLVM commit (if LLVM bump)
+
+    Args:
+        state: BisectState containing configuration and progress.
+        ui: BisectUI instance for TUI display.
+        logger: BisectLogger for logging.
+
+    Returns:
+        Exit code (0 for success, non-zero for failure).
+
+    This will be implemented in PR-50.
+    """
+    raise NotImplementedError("_orchestrate_workflow will be implemented in PR-50")
 
 
 def _handle_triton_bisect(args: argparse.Namespace) -> int:
