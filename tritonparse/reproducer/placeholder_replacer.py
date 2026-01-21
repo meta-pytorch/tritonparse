@@ -96,6 +96,8 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
     CONTEXT_JSON_PLACEHOLDER = "# {{CONTEXT_JSON_PLACEHOLDER}}"
     COMPILATION_JSON_PLACEHOLDER = "# {{COMPILATION_JSON_PLACEHOLDER}}"
     LAUNCH_KERNEL_BODY_PLACEHOLDER = "# {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}"
+    # Placeholder for reproducer metadata in docstring
+    REPRODUCER_METADATA_PLACEHOLDER = "{{REPRODUCER_METADATA_PLACEHOLDER}}"
 
     def __init__(self):
         super().__init__()
@@ -118,6 +120,10 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         self.register(self.COMPILATION_JSON_PLACEHOLDER, self._replace_compilation_json)
         self.register(
             self.LAUNCH_KERNEL_BODY_PLACEHOLDER, self._replace_launch_kernel_body
+        )
+        # Register handler for reproducer metadata in docstring
+        self.register(
+            self.REPRODUCER_METADATA_PLACEHOLDER, self._replace_reproducer_metadata
         )
 
     def _replace_kernel_name(
@@ -374,6 +380,29 @@ triton.autotune = _patched_autotune
                 f"The following tensor arguments have external blob_path dependencies: "
                 f"{blob_args}. The embedded reproducer will NOT be fully standalone."
             )
+
+    def _replace_reproducer_metadata(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace the reproducer metadata placeholder with generation info."""
+        from datetime import datetime
+
+        input_path = kwargs.get("input_path", "unknown")
+        line_index = kwargs.get("line_index", "unknown")
+        template = kwargs.get("template", "example")
+        kernel_name = context_bundle.kernel_info.function_name
+        generated_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        metadata = f"""Kernel: {kernel_name}
+Source NDJSON: {input_path}
+Line Index: {line_index}  (use --line {line_index} to regenerate)
+Template: {template}
+Generated: {generated_time}
+
+To regenerate this reproducer:
+    python -m tritonparse reproduce <ndjson_file> --line {line_index} --out-dir <output_dir>"""
+
+        return code.replace(self.REPRODUCER_METADATA_PLACEHOLDER, metadata)
 
 
 def get_dependent_source_map(
