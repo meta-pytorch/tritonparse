@@ -87,7 +87,7 @@ def reproduce(
         f"Built context bundle for kernel: {context_bundle.kernel_info.function_name}"
     )
     out_py_path, temp_json_path = determine_output_paths(
-        out_dir, context_bundle.kernel_info.function_name, template
+        out_dir, context_bundle.kernel_info.function_name, template, line_index
     )
 
     # Save context JSON only if not embedding
