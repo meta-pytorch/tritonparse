@@ -75,9 +75,14 @@ TRITON_DIR=${TRITON_DIR:-""}
 TEST_SCRIPT=${TEST_SCRIPT:-""}
 CONDA_ENV=${CONDA_ENV:-triton_bisect}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
+USE_UV=${USE_UV:-0}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 TEST_ARGS=${TEST_ARGS:-""}
-BUILD_COMMAND=${BUILD_COMMAND:-"pip install -e ."}
+if [[ "$USE_UV" == "1" ]]; then
+  BUILD_COMMAND=${BUILD_COMMAND:-"uv pip install -e ."}
+else
+  BUILD_COMMAND=${BUILD_COMMAND:-"pip install -e ."}
+fi
 PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
 
 # ============ Validation ============
@@ -159,19 +164,20 @@ echo "Updating git submodules..." | log_output
 git submodule update --init --recursive 2>&1 | log_output
 echo "" | log_output
 
-# Activate conda
-echo "Activating conda environment: $CONDA_ENV" | log_output
-
+# Activate conda or uv (if enabled)
 source ${CONDA_DIR}/bin/activate
 if [ $? -ne 0 ]; then
-  echo "ERROR: Cannot activate conda" | log_output
+  echo "ERROR: Cannot activate conda or uv" | log_output
   exit 128
 fi
 
-conda activate "$CONDA_ENV"
-if [ $? -ne 0 ]; then
-  echo "ERROR: Failed to activate conda environment: $CONDA_ENV" | log_output
-  exit 128
+if [ "$USE_UV" == "0" ]; then
+  echo "Activating conda environment: $CONDA_ENV" | log_output
+  conda activate "$CONDA_ENV"
+  if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to activate conda environment: $CONDA_ENV" | log_output
+    exit 128
+  fi
 fi
 
 echo "" | log_output

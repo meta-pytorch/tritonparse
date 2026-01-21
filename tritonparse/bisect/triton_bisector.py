@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
 from tritonparse.bisect.base_bisector import BaseBisector, BisectError
+from tritonparse.bisect.config import get_config
 from tritonparse.bisect.scripts import get_bisect_triton_script
 
 
@@ -50,6 +51,8 @@ class TritonBisector(BaseBisector):
     @property
     def default_build_command(self) -> str:
         """Default build command for Triton."""
+        if get_config().use_uv:
+            return "uv pip install -e ."
         return "pip install -e ."
 
     @property
