@@ -195,10 +195,21 @@ def build_context_bundle(
     extracted_args = launch_event.get("extracted_args", {})
     comp_meta = launch_event.get("compilation_metadata", {})
 
-    # Compile metadata subset we care about
+    # Compile metadata subset we care about.
+    # Compile parameters reference: triton.Config class in triton/runtime/autotuner.py
+    # https://github.com/triton-lang/triton/blob/main/python/triton/runtime/autotuner.py
     compile_block = {
+        # Core compile parameters
         "num_warps": comp_meta.get("num_warps"),
         "num_stages": comp_meta.get("num_stages"),
+        "num_ctas": comp_meta.get("num_ctas"),
+        "maxnreg": comp_meta.get("maxnreg"),
+        # Warp specialization parameters (SM90+)
+        "num_buffers_warp_spec": comp_meta.get("num_buffers_warp_spec"),
+        "num_consumer_groups": comp_meta.get("num_consumer_groups"),
+        "reg_dec_producer": comp_meta.get("reg_dec_producer"),
+        "reg_inc_consumer": comp_meta.get("reg_inc_consumer"),
+        # Hardware/version info
         "arch": comp_meta.get("arch"),
         "backend": comp_meta.get("backend_name") or comp_meta.get("backend"),
         "triton_version": comp_meta.get("triton_version"),

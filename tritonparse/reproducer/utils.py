@@ -20,6 +20,51 @@ TRITON_KERNELS_CUSTOM_TYPES = (
     and importlib.util.find_spec("triton_kernels.tensor") is not None
 )
 
+# Triton compile parameters that can be passed to kernel launch.
+# Reference: triton.Config class in triton/runtime/autotuner.py
+# https://github.com/triton-lang/triton/blob/main/python/triton/runtime/autotuner.py
+TRITON_COMPILE_PARAMS = (
+    # Core compile parameters
+    "num_warps",
+    "num_stages",
+    "num_ctas",
+    "maxnreg",
+    # Warp specialization parameters (SM90+)
+    "num_buffers_warp_spec",
+    "num_consumer_groups",
+    "reg_dec_producer",
+    "reg_inc_consumer",
+)
+
+
+def _get_compile_params_for_invocation(
+    compile_metadata: dict, kernel_kwargs: list[str]
+) -> list[str]:
+    """
+    Extract compile parameters that should be explicitly passed to kernel call.
+
+    Only includes parameters that:
+    1. Exist in compile_metadata and are not None
+    2. Are not already in kernel's keyword arguments (to avoid duplicate kwargs error)
+
+    Args:
+        compile_metadata: Dictionary containing compile metadata from launch event.
+        kernel_kwargs: List of keyword argument names from kernel signature.
+
+    Returns:
+        List of strings like ["num_warps=8", "num_stages=4"] ready for code generation.
+    """
+    compile_params = []
+    for param in TRITON_COMPILE_PARAMS:
+        value = compile_metadata.get(param)
+        if value is None:
+            continue
+        if param in kernel_kwargs:
+            continue
+        compile_params.append(f"{param}={value}")
+    return compile_params
+
+
 # Mapping from dtype string representation to Triton dtype objects
 TRITON_DTYPE_MAP = {
     # Signed integers
@@ -519,21 +564,36 @@ def _parse_kernel_signature(kernel_source_code: str) -> tuple[list[str], list[st
 
 
 def _generate_invocation_snippet(
-    positional_args: list[str], keyword_args: list[str]
+    positional_args: list[str],
+    keyword_args: list[str],
+    compile_params: list[str] | None = None,
 ) -> str:
-    """Generates a single-line Python code snippet for kernel invocation."""
+    """
+    Generates a single-line Python code snippet for kernel invocation.
+
+    Args:
+        positional_args: List of positional argument names from kernel signature.
+        keyword_args: List of keyword argument names from kernel signature.
+        compile_params: List of compile parameters as strings (e.g., ["num_warps=8"]).
+            These are Triton runtime parameters passed to the kernel launch.
+
+    Returns:
+        A string like: imported_kernel_function[tuple(grid)](args..., num_warps=8)
+    """
     # Prepare positional args for direct injection into the call
     pos_args_str = ", ".join([f'args_dict["{arg}"]' for arg in positional_args])
 
     # Prepare keyword args for direct injection
     kw_args_str = ", ".join([f'{arg}=args_dict["{arg}"]' for arg in keyword_args])
 
-    # Combine them, ensuring proper comma separation
+    # Combine all arguments
     all_args = []
     if pos_args_str:
         all_args.append(pos_args_str)
     if kw_args_str:
         all_args.append(kw_args_str)
+    if compile_params:
+        all_args.append(", ".join(compile_params))
 
     # Create the single-line call
     return f"imported_kernel_function[tuple(grid)]({', '.join(all_args)})"
