@@ -31,8 +31,7 @@ log = logging.getLogger(__name__)
 
 TEXT_FILE_EXTENSIONS = [".ttir", ".ttgir", ".llir", ".ptx", ".amdgcn", ".json"]
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit for file content extraction
-# Enable gzip compression for each line in trace files
-TRITON_TRACE_GZIP = os.getenv("TRITON_TRACE_GZIP", "0") in ["1", "true", "True"]
+
 triton_trace_log = logging.getLogger("tritonparse_trace")
 # The folder to store the triton trace log.
 triton_trace_folder = os.environ.get("TRITON_TRACE", None)
@@ -54,6 +53,20 @@ TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
     "true",
     "True",
 ]
+# Compression algorithm for raw trace files
+# When enabled, each JSON record is written as a separate gzip member,
+# concatenated in sequence within a .bin.ndjson file.
+# Supported values: "none", "gzip", "zstd" (future)
+# - "gzip": Outputs .bin.ndjson (gzip member concatenation format)
+# - "none": Outputs .ndjson (plain text)
+# If TRITON_TRACE_COMPRESSION is explicitly set, respect that value;
+# otherwise, default to "gzip" if TRITON_TRACE_LAUNCH is enabled, else "none"
+_compression_env = os.getenv("TRITON_TRACE_COMPRESSION")
+TRITON_TRACE_COMPRESSION = (
+    _compression_env
+    if _compression_env is not None
+    else ("gzip" if TRITON_TRACE_LAUNCH else "none")
+)
 # Maximum file size for full source extraction (default 10MB)
 TRITON_MAX_SOURCE_SIZE = int(os.getenv("TRITON_MAX_SOURCE_SIZE", str(10 * 1024 * 1024)))
 # Inductor compiled kernel's launch tracing needs this flag to be set.
@@ -1007,7 +1020,7 @@ class TritonTraceHandler(logging.StreamHandler):
                     filename = f"{self.prefix}{ranksuffix}"
                     self._ensure_stream_closed()
                     # Choose file extension and mode based on compression setting
-                    if TRITON_TRACE_GZIP:
+                    if TRITON_TRACE_COMPRESSION == "gzip":
                         file_extension = ".bin.ndjson"
                         file_mode = "ab+"  # Binary mode for gzip member concatenation
                     else:
@@ -1027,7 +1040,7 @@ class TritonTraceHandler(logging.StreamHandler):
 
             if self.stream:
                 formatted = self.format(record)
-                if TRITON_TRACE_GZIP:
+                if TRITON_TRACE_COMPRESSION == "gzip":
                     # Create a separate gzip member for each record
                     # This allows standard gzip readers to handle member concatenation automatically
                     buffer = io.BytesIO()
@@ -1565,11 +1578,18 @@ def init(
     global TRITON_TRACE_LAUNCH, TRITONPARSE_MORE_TENSOR_INFORMATION
     global TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK, TRITONPARSE_DUMP_SASS
     global TRITONPARSE_SAVE_TENSOR_BLOBS, TRITONPARSE_TENSOR_STORAGE_QUOTA
+    global TRITON_TRACE_COMPRESSION
 
     # Set global flags BEFORE calling init_basic, so init_logs() can see them
     if enable_trace_launch:
         TRITON_TRACE_LAUNCH = True
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
+        # Also update TRITON_TRACE_COMPRESSION if it wasn't explicitly set via env var
+        # This handles the case where the user enables launch tracing via Python API
+        # but the compression default was already computed at module load time.
+        # If user set env var to "gzip", "zstd", or "none", respect that choice.
+        if os.getenv("TRITON_TRACE_COMPRESSION") is None:
+            TRITON_TRACE_COMPRESSION = "gzip"
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
     if enable_sass_dump:
