@@ -39,6 +39,8 @@ function App() {
   const [selectedKernel, setSelectedKernel] = useState<number>(-1);
   // Track if data has been loaded
   const [dataLoaded, setDataLoaded] = useState<boolean>(false);
+  // Track if welcome screen should be shown (even when data is loaded)
+  const [showWelcome, setShowWelcome] = useState<boolean>(true);
   // Track the loaded data source URL
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   // Track if URL input is shown
@@ -70,6 +72,7 @@ function App() {
       window.history.replaceState({}, "", newUrl.toString());
     } else if (view === "file_diff") {
       // Allow direct navigation to File Diff even without json_url
+      setShowWelcome(false);
       setActiveTab("file_diff");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- handleUrlSelected is stable but ESLint cannot verify it
@@ -120,6 +123,7 @@ function App() {
         }
 
         setDataLoaded(true);
+        setShowWelcome(false);
       } else {
         console.warn("No kernels found in the processed data");
         const errorMsg = typeof source === 'string'
@@ -190,6 +194,7 @@ function App() {
           setActiveTab("file_diff");
         }
         setDataLoaded(true);
+        setShowWelcome(false);
         setLoadedUrl(url);
 
         // Update URL parameters
@@ -371,6 +376,15 @@ function App() {
           openUrlInput={openUrlInput}
         />
       );
+    } else if (showWelcome && activeTab === "overview") {
+      // Show welcome screen when user clicks title to go home (even when data is loaded)
+      return (
+        <WelcomeScreen
+          loadDefaultData={loadDefaultData}
+          handleFileSelected={handleFileSelected}
+          openUrlInput={openUrlInput}
+        />
+      );
     } else if (kernels.length === 0) {
       // Show message when no kernels are found
       return (
@@ -436,13 +450,14 @@ function App() {
               <h1
                 className="text-gray-800 text-2xl font-bold cursor-pointer hover:text-indigo-600 transition-colors"
                 onClick={() => {
-                  // Reset app state to show welcome page
-                  if (dataLoaded) {
-                    setDataLoaded(false);
-                    setSelectedIR(null);
-                    setSelectedKernel(-1);
-                    setError(null);
+                  // Clear preview state if active
+                  if (sess.preview?.active) {
+                    sess.clearPreview();
                   }
+                  // Show welcome screen without clearing data
+                  setShowWelcome(true);
+                  setActiveTab("overview");
+                  setSelectedIR(null);
                 }}
                 title="Back to home"
               >
@@ -495,6 +510,7 @@ function App() {
                       }`}
                     onClick={() => {
                       if (sess.preview?.active) sess.clearPreview();
+                      setShowWelcome(false);
                       setActiveTab("overview");
 
                       if (loadedUrl) {
@@ -511,6 +527,7 @@ function App() {
                       }`}
                     onClick={() => {
                       if (sess.preview?.active) sess.clearPreview();
+                      setShowWelcome(false);
                       setActiveTab("comparison");
 
                       if (loadedUrl) {
@@ -529,6 +546,7 @@ function App() {
                   }`}
                 onClick={() => {
                   if (sess.preview?.active) sess.clearPreview();
+                  setShowWelcome(false);
                   setActiveTab("file_diff");
                 }}
               >
@@ -540,6 +558,7 @@ function App() {
                       }`}
                     onClick={() => {
                       if (sess.preview?.active) sess.clearPreview();
+                      setShowWelcome(false);
                       setActiveTab("ir_analysis");
 
                       if (loadedUrl) {
