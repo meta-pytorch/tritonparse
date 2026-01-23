@@ -6,8 +6,7 @@ Script to decompress .bin.ndjson files back to regular .ndjson format.
 
 The .bin.ndjson format stores each JSON record as a separate gzip member,
 concatenated in sequence within a single binary file. This script uses
-gzip.open() which automatically handles member concatenation to read
-the compressed file and write out the original NDJSON format.
+the compression module which automatically handles various compression formats.
 
 Usage:
     python decompress_bin_ndjson.py trace.bin.ndjson
@@ -17,6 +16,8 @@ import argparse
 import gzip
 import sys
 from pathlib import Path
+
+from .compression import open_compressed_file
 
 
 def decompress_bin_ndjson(input_file: str, output_file: str = None) -> None:
@@ -34,7 +35,7 @@ def decompress_bin_ndjson(input_file: str, output_file: str = None) -> None:
         print(f"Error: Input file '{input_file}' does not exist", file=sys.stderr)
         return
 
-    if not input_path.suffix.endswith(".bin.ndjson"):
+    if not input_path.name.endswith(".bin.ndjson"):
         print(f"Warning: Input file '{input_file}' doesn't have .bin.ndjson extension")
 
     # Determine output file path
@@ -51,12 +52,12 @@ def decompress_bin_ndjson(input_file: str, output_file: str = None) -> None:
     try:
         line_count = 0
         # Because we use NDJSON format, each line is a complete JSON record.
-        # It is guruanteed here https://github.com/meta-pytorch/tritonparse/blob/
+        # It is guaranteed here https://github.com/meta-pytorch/tritonparse/blob/
         # c8dcc2a94ac10ede4342dba7456f6ebd8409b95d/tritonparse/structured_logging.py#L320
-        with gzip.open(input_path, "rt", encoding="utf-8") as compressed_file:
+        with open_compressed_file(input_path) as compressed_file:
             with open(output_path, "w", encoding="utf-8") as output:
                 for line in compressed_file:
-                    # gzip.open automatically handles member concatenation
+                    # open_compressed_file automatically handles compression
                     # Each line is already a complete JSON record with newline
                     output.write(line)
                     line_count += 1

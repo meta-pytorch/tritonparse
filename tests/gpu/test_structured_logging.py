@@ -27,6 +27,7 @@ from triton.compiler import ASTSource, IRSource  # @manual=//triton:triton
 from triton.knobs import CompileTimes  # @manual=//triton:triton
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT
 from tritonparse.structured_logging import convert, extract_python_source_info
+from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tools.disasm import is_nvdisasm_available
 
 
@@ -209,7 +210,8 @@ class TestStructuredLogging(GPUTestBase):
             for log_file in os.listdir(log_dir):
                 if log_file.endswith(".ndjson"):
                     log_file_path = os.path.join(log_dir, log_file)
-                    with open(log_file_path, "r") as f:
+                    # Use open_compressed_file which auto-detects compression format
+                    with open_compressed_file(log_file_path) as f:
                         for line_num, line in enumerate(f, 1):
                             try:
                                 event_data = json.loads(line.strip())
