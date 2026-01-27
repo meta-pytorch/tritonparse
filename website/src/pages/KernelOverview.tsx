@@ -17,6 +17,190 @@ interface KernelOverviewProps {
 }
 
 /**
+ * Helper function to format cell values for autotune display.
+ * Handles scalar objects ({type, value}), distribution objects ({unique_count, values}),
+ * and primitive values.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const formatCellValue = (cell: any): string => {
+  if (cell === null || cell === undefined) return '';
+  if (typeof cell === 'object' && 'type' in cell && 'value' in cell) {
+    return String(cell.value);
+  }
+  if (typeof cell === 'object' && 'unique_count' in cell) {
+    const uc = cell.unique_count;
+    if (uc === 1) {
+      const vals = cell.values || [];
+      const first = vals[0]?.value;
+      if (first && typeof first === 'object' && 'type' in first && 'value' in first) {
+        return String(first.value);
+      }
+      return String(first ?? '');
+    }
+    return '…';
+  }
+  return String(cell);
+};
+
+/**
+ * Collapsible Call Stack component for autotune sessions
+ */
+interface AutotuneSessionStackProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sessionStack: any[];
+}
+
+const AutotuneSessionStack: React.FC<AutotuneSessionStackProps> = ({ sessionStack }) => {
+  const [showStack, setShowStack] = useState(false);
+
+  if (!sessionStack || sessionStack.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setShowStack(!showStack)}
+        className="flex items-center text-sm text-gray-600 hover:text-gray-800"
+      >
+        <ChevronRightIcon
+          className={`w-4 h-4 mr-1 transition-transform ${showStack ? 'rotate-90' : ''}`}
+        />
+        Call Stack ({sessionStack.length} frames)
+      </button>
+
+      {showStack && (
+        <div className="mt-1 ml-5 font-mono text-xs bg-gray-100 p-2 rounded max-h-40 overflow-auto">
+          {sessionStack.map((frame: { filename?: string; line?: number; name?: string }, i: number) => (
+            <div key={i} className="text-gray-700">
+              <span className="text-blue-600">{frame.filename || 'unknown'}</span>
+              :<span className="text-red-600">{frame.line || '?'}</span>
+              {' in '}
+              <span className="text-green-600">{frame.name || 'unknown'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Collapsible Possible Groups component for sessions without compilation_hashes
+ * Shows which compilation groups this session might belong to (based on winner_compilation_hash lookup)
+ * Each group is rendered as a full table with autotune config parameters
+ */
+interface PossibleGroupsProps {
+  possibleGroups: string[][];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  varies: Record<string, Record<string, any>>;
+  winner: string | undefined;
+  currentKernelHash: string | undefined;
+  defaultExpanded?: boolean;
+}
+
+const PossibleGroups: React.FC<PossibleGroupsProps> = ({
+  possibleGroups,
+  varies,
+  winner,
+  currentKernelHash,
+  defaultExpanded = false,
+}) => {
+  const [showGroups, setShowGroups] = useState(defaultExpanded);
+  const varyKeys = Object.keys(varies);
+
+  if (!possibleGroups || possibleGroups.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setShowGroups(!showGroups)}
+        className="flex items-center text-sm text-gray-600 hover:text-gray-800"
+      >
+        <ChevronRightIcon
+          className={`w-4 h-4 mr-1 transition-transform ${showGroups ? 'rotate-90' : ''}`}
+        />
+        Possible Groups ({possibleGroups.length})
+        <span className="ml-2 text-xs text-gray-400">(no new compilation in this session)</span>
+      </button>
+
+      {showGroups && (
+        <div className="mt-2">
+          {/* Explanation note */}
+          <div className="mb-3 p-2 bg-gray-50 rounded text-xs text-gray-600 border border-gray-200">
+            <span className="font-medium">ℹ️ Note:</span> This session reused previously compiled kernels.
+            The autotune configs shown below are inferred from the winner hash.
+          </div>
+          <div className="space-y-4">
+          {possibleGroups.map((group, groupIdx) => (
+            <div key={groupIdx} className="bg-gray-100 p-3 rounded border border-gray-200">
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">
+                Group {groupIdx + 1}
+              </h4>
+              {/* Legend */}
+              {(winner || currentKernelHash) && (
+                <div className="mb-1 text-xs text-gray-500 flex gap-4">
+                  {winner && group.includes(winner) && <span>🏆 = Best config</span>}
+                  {currentKernelHash && group.includes(currentKernelHash) && (
+                    <span className="flex items-center gap-1">
+                      <span className="inline-block w-3 h-3 bg-blue-50 border border-blue-200 rounded-sm"></span>
+                      = Current kernel
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-600">
+                      <th className="px-2 py-1 w-56">Compilation Hash</th>
+                      {varyKeys.map((k) => (
+                        <th key={k} className="px-2 py-1">{k}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.map((ch) => {
+                      const isWinner = winner && ch === winner;
+                      const isCurrentKernel = currentKernelHash && ch === currentKernelHash;
+                      let rowClass = '';
+                      if (isWinner && isCurrentKernel) {
+                        rowClass = 'bg-yellow-100 ring-2 ring-blue-400 ring-inset';
+                      } else if (isWinner) {
+                        rowClass = 'bg-yellow-50';
+                      } else if (isCurrentKernel) {
+                        rowClass = 'bg-blue-50';
+                      }
+                      return (
+                        <tr key={ch} className={rowClass}>
+                          <td className="px-2 py-1 font-mono text-xs text-gray-800">
+                            {ch}
+                            {isWinner && ' 🏆'}
+                            {isCurrentKernel && !isWinner && ' ← current'}
+                          </td>
+                          {varyKeys.map((k) => {
+                            const cell = varies[k]?.[ch];
+                            const display = formatCellValue(cell);
+                            return <td key={k} className="px-2 py-1 align-top">{display}</td>;
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
  * Determines if a metadata value is considered "long" and should be displayed at the end
  */
 const isLongValue = (value: unknown): boolean => {
@@ -301,6 +485,128 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                     ))}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Autotune Analysis */}
+        {kernel.autotuneSessions && kernel.autotuneSessions.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-lg font-medium mb-2 text-gray-800">Autotune Analysis</h3>
+            <div className="space-y-4">
+              {kernel.autotuneSessions.map((session, idx) => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const sess = session as any;
+                const winner = sess.winner_compilation_hash as string | undefined;
+                // For cached sessions, get hashes from possible_groups since compilation_analysis is null
+                const compHashes: string[] = sess?.compilation_analysis?.compilation_hashes || [];
+                const possibleGroups: string[][] = sess?.possible_groups || [];
+                // Check if we should show possible groups (no compilation_hashes but has possible_groups)
+                const showPossibleGroups = compHashes.length === 0 && possibleGroups.length > 0;
+                // If only 1 possible group, expand by default; otherwise collapse
+                const possibleGroupsDefaultExpanded = possibleGroups.length === 1;
+                const cfgs = sess?.autotune_args_summary?.autotune_configs || {};
+                const sames = cfgs.sames || {};
+                const varies = cfgs.varies || {};
+                const varyKeys = Object.keys(varies);
+                // Get current kernel's hash to highlight it
+                const currentKernelHash = kernel.metadata?.hash;
+                // Get session stack for collapsible display
+                const sessionStack = sess.session_stack || [];
+                return (
+                  <div key={idx} className="bg-gray-50 p-4 rounded-md border border-gray-200">
+                    <div className="mb-2 text-sm text-gray-700">
+                      <span className="font-semibold">Session:</span> {sess.session_id}
+                    </div>
+                    {/* Sames inline text */}
+                    {Object.keys(sames).length > 0 && (
+                      <div className="mb-3 text-sm text-gray-700">
+                        <span className="font-semibold mr-2">Common Params:</span>
+                        {Object.entries(sames).map(([k, v]) => (
+                          <span key={k} className="mr-4">
+                            <span className="text-gray-600">{k}:</span>{" "}
+                            <span className="font-mono">{formatCellValue(v)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Collapsible Call Stack */}
+                    {sessionStack.length > 0 && (
+                      <AutotuneSessionStack sessionStack={sessionStack} />
+                    )}
+
+                    {/* Collapsible Possible Groups for sessions without compilation_hashes */}
+                    {showPossibleGroups && (
+                      <PossibleGroups
+                        possibleGroups={possibleGroups}
+                        varies={varies}
+                        winner={winner}
+                        currentKernelHash={currentKernelHash}
+                        defaultExpanded={possibleGroupsDefaultExpanded}
+                      />
+                    )}
+
+                    {/* Legend for best config and current kernel (only when showing main table) */}
+                    {!showPossibleGroups && (winner || currentKernelHash) && (
+                      <div className="mb-1 text-xs text-gray-500 flex gap-4">
+                        {winner && <span>🏆 = Best config (selected by autotuning)</span>}
+                        {currentKernelHash && compHashes.includes(currentKernelHash) && (
+                          <span className="flex items-center gap-1">
+                            <span className="inline-block w-3 h-3 bg-blue-50 border border-blue-200 rounded-sm"></span>
+                            = Current kernel
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Varies table: rows = compilation hashes, cols = varyKeys (only when NOT showing possible groups) */}
+                    {!showPossibleGroups && (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-gray-600">
+                            <th className="px-2 py-1 w-56">Compilation Hash</th>
+                            {varyKeys.map((k) => (
+                              <th key={k} className="px-2 py-1">{k}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {compHashes.map((ch) => {
+                            // Determine row styling based on winner and current kernel
+                            const isWinner = winner && ch === winner;
+                            const isCurrentKernel = currentKernelHash && ch === currentKernelHash;
+                            let rowClass = '';
+                            if (isWinner && isCurrentKernel) {
+                              rowClass = 'bg-yellow-100 ring-2 ring-blue-400 ring-inset';
+                            } else if (isWinner) {
+                              rowClass = 'bg-yellow-50';
+                            } else if (isCurrentKernel) {
+                              rowClass = 'bg-blue-50';
+                            }
+                            return (
+                              <tr key={ch} className={rowClass}>
+                                <td className="px-2 py-1 font-mono text-xs text-gray-800">
+                                  {ch}
+                                  {isWinner && ' 🏆'}
+                                  {isCurrentKernel && !isWinner && ' ← current'}
+                                </td>
+                                {varyKeys.map((k) => {
+                                  const cell = varies[k]?.[ch];
+                                  const display = formatCellValue(cell);
+                                  return <td key={k} className="px-2 py-1 align-top">{display}</td>;
+                                })}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
