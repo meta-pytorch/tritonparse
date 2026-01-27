@@ -275,6 +275,44 @@ export interface LogEntry {
     diffs?: LaunchDiffData;
     sames?: LaunchSamesData;
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
+}
+
+/** Autotune configs summary structure */
+export interface AutotuneConfigs {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sames?: Record<string, any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    varies?: Record<string, any>;
+}
+
+/** Autotune args summary structure */
+export interface AutotuneArgsSummary {
+    summary_version?: number;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    unchanged_args?: Record<string, any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    per_config_args?: Record<string, any>;
+    arg_order?: string[];
+    autotune_configs?: AutotuneConfigs;
+}
+
+/** Autotune analysis event structure */
+export interface AutotuneAnalysisEvent {
+    event_type: "autotune_analysis";
+    session_id: string;
+    name?: string;
+    occurrence_id?: number;
+    selected_hash?: string;
+    winner_compilation_hash?: string | null;
+    compilation_analysis?: {
+        compilation_hashes?: string[];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        [key: string]: any;
+    } | null;
+    autotune_args_summary?: AutotuneArgsSummary | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [key: string]: any;
 }
 
 /**
@@ -291,6 +329,7 @@ export interface ProcessedKernel {
     metadata?: KernelMetadata; // Compilation metadata
     launchDiff?: LogEntry; // Aggregated launch event differences
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
 }
 
 /**
@@ -564,6 +603,52 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
             } else {
                 console.warn(`Could not find matching kernel for ir_analysis hash: ${hash}`);
             }
+        }
+    }
+
+    // Third pass: attach autotune_analysis sessions to related kernels
+    // Use possible_groups which contains list of groups (each group is a list of hashes)
+    // This allows cached sessions to be associated with all possible kernels
+    for (const raw of logEntries) {
+        if ((raw as unknown as { event_type: string }).event_type === "autotune_analysis") {
+            const ev = raw as unknown as AutotuneAnalysisEvent;
+            // Use possible_groups for kernel association
+            // This field contains a list of groups:
+            // - For sessions with benchmarks: [[hash_A, hash_B]] (single group)
+            // - For cached sessions: [[hash_A, hash_B], [hash_A, hash_C]] (multiple possible groups)
+            const possibleGroups = (ev as unknown as { possible_groups?: string[][] })
+                .possible_groups || [];
+            if (!Array.isArray(possibleGroups) || possibleGroups.length === 0) {
+                continue;
+            }
+            // Track which kernels we've already added this session to (avoid duplicates)
+            const addedToKernels = new Set<string>();
+            for (const group of possibleGroups) {
+                if (!Array.isArray(group)) continue;
+                for (const h of group) {
+                    if (addedToKernels.has(h)) continue;
+                    addedToKernels.add(h);
+                    const k = kernelsByHash.get(h);
+                    if (!k) {
+                        continue;
+                    }
+                    if (!k.autotuneSessions) {
+                        k.autotuneSessions = [];
+                    }
+                    k.autotuneSessions.push(ev);
+                }
+            }
+        }
+    }
+
+    // Sort autotune sessions by occurrence_id for stable display
+    for (const k of kernelsByHash.values()) {
+        if (k.autotuneSessions && k.autotuneSessions.length > 1) {
+            k.autotuneSessions.sort((a, b) => {
+                const ao = a.occurrence_id ?? Number.MAX_SAFE_INTEGER;
+                const bo = b.occurrence_id ?? Number.MAX_SAFE_INTEGER;
+                return ao - bo;
+            });
         }
     }
 
