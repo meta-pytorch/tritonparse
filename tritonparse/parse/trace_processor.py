@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from tritonparse.tp_logger import get_logger
 
-from .event_diff import _generate_launch_diff
+from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
 from .ir_analysis import _generate_ir_analysis
 from .ir_parser import (
     extract_code_locations,
@@ -16,7 +16,13 @@ from .ir_parser import (
     extract_ptx_amdgcn_mappings,
 )
 from .mapper import create_bidirectional_mapping, create_python_mapping
-from .sourcemap_utils import get_file_extension, load_ir_contents
+from .sourcemap_utils import (
+    _is_autotune_benchmark_launch,
+    compute_launch_event_hash,
+    get_autotune_session_id,
+    get_file_extension,
+    load_ir_contents,
+)
 
 logger = get_logger("SourceMapping")
 
@@ -250,9 +256,25 @@ def parse_single_file(
     kernels_by_hash = defaultdict(
         lambda: {"compilation": None, "launches": [], "output_file": None}
     )
+    # Autotune session tracking
+    autotune_sessions = defaultdict(
+        lambda: {
+            "compilations": [],
+            "launch_group_hashes": set(),
+            "benchmark_occurrence_ids": [],  # occurrence_ids of benchmark launches
+            "winner_occurrence_ids": [],  # occurrence_ids of winner/cached launches
+        }
+    )
+    autotune_winners = {}  # session_id -> winning launch_group_hash
+    session_stacks = {}  # session_id -> user_stack
+    launch_by_group_hash = {}  # launch_group_hash -> launch_event
 
     output_dir = output_dir or os.path.dirname(file_path)
     is_compressed_input = file_path.endswith(".bin.ndjson")
+
+    # Global occurrence id counter across all outputs
+    # Defined outside the with block so it can be used after file processing
+    next_occurrence_id: int = 0
     file_handle = (
         gzip.open(file_path, "rt", encoding="utf-8")
         if is_compressed_input
@@ -287,6 +309,14 @@ def parse_single_file(
                 if not kernel_hash:
                     continue
 
+                # Group autotune compilations by session_id
+                stack = parsed_json.get("stack", [])
+                session_id, user_stack = get_autotune_session_id(stack)
+                if session_id:
+                    autotune_sessions[session_id]["compilations"].append(parsed_json)
+                    if user_stack and session_id not in session_stacks:
+                        session_stacks[session_id] = user_stack
+
                 # Split inductor compilations into separate files
                 # This rule follows tlparse's behavior.
                 if split_inductor_compilations:
@@ -304,13 +334,77 @@ def parse_single_file(
 
                 output_file = os.path.join(output_dir, fname)
                 # The full processing is deferred until the final write.
-                kernels_by_hash[kernel_hash]["compilation"] = json_str
+                # Assign a global occurrence_id to this compilation event
+                parsed_json["occurrence_id"] = next_occurrence_id
+                next_occurrence_id += 1
+                kernels_by_hash[kernel_hash]["compilation"] = json.dumps(
+                    parsed_json, separators=(",", ":")
+                )
                 kernels_by_hash[kernel_hash]["output_file"] = output_file
 
             elif event_type == "launch":
                 kernel_hash = parsed_json.get("compilation_metadata", {}).get("hash")
+
+                # Compute launch group hash and add to event
+                launch_group_hash = compute_launch_event_hash(parsed_json)
+                parsed_json["launch_group_hash"] = launch_group_hash
+
+                # Assign occurrence_id
+                parsed_json["occurrence_id"] = next_occurrence_id
+                occurrence_id = next_occurrence_id
+                next_occurrence_id += 1
+
+                # Check if related to autotune session
+                stack = parsed_json.get("stack", [])
+                session_id, user_stack = get_autotune_session_id(stack)
+                is_benchmark = _is_autotune_benchmark_launch(stack)
+
+                # Add autotune_launch_type field
+                # Note: This logic relies on Triton's event ordering guarantee where
+                # benchmark launches always appear before winner launches in the trace.
+                # If events were out-of-order, winner/cached_winner classification could
+                # be incorrect, but Triton autotuner ensures proper ordering.
+                if session_id:
+                    if is_benchmark:
+                        parsed_json["autotune_launch_type"] = "benchmark"
+                    else:
+                        # Determine if this is winner or cached_winner:
+                        # - If this session has benchmark launches, it performed autotuning,
+                        #   so the winner launch is "winner"
+                        # - If this session has no benchmark launches, it used cached config,
+                        #   so the launch is "cached_winner"
+                        if autotune_sessions[session_id]["benchmark_occurrence_ids"]:
+                            parsed_json["autotune_launch_type"] = "winner"
+                        else:
+                            parsed_json["autotune_launch_type"] = "cached_winner"
+
+                # Store launch by group hash
+                launch_by_group_hash[launch_group_hash] = parsed_json
+
+                if session_id:
+                    autotune_sessions[session_id]["launch_group_hashes"].add(
+                        launch_group_hash
+                    )
+                    if user_stack and session_id not in session_stacks:
+                        session_stacks[session_id] = user_stack
+
+                    # Collect occurrence_ids, distinguishing benchmark and winner/cached (8.1 + 8.4)
+                    if is_benchmark:
+                        autotune_sessions[session_id][
+                            "benchmark_occurrence_ids"
+                        ].append(occurrence_id)
+                    else:
+                        autotune_sessions[session_id]["winner_occurrence_ids"].append(
+                            occurrence_id
+                        )
+
+                # Add to kernel launches
                 if kernel_hash:
                     kernels_by_hash[kernel_hash]["launches"].append((parsed_json, i))
+
+                    # Check if this is a winning autotune launch (not a benchmark)
+                    if not is_benchmark and session_id:
+                        autotune_winners[session_id] = launch_group_hash
 
     # Organize lines for final output, keyed by output file path
     all_output_lines = defaultdict(list)
@@ -365,8 +459,28 @@ def parse_single_file(
                 "diffs": diffs,
                 "sames": sames,
             }
+            # Assign occurrence_id to launch_diff event
+            launch_diff_event["occurrence_id"] = next_occurrence_id
+            next_occurrence_id += 1
             all_output_lines[output_file].append(
                 json.dumps(launch_diff_event, separators=(",", ":")) + "\n"
+            )
+
+    # Generate autotune analysis events
+    autotune_events_by_file = _generate_autotune_analysis_events(
+        autotune_sessions,
+        autotune_winners,
+        kernels_by_hash,
+        session_stacks,
+        launch_by_group_hash,
+    )
+    for output_file, events in autotune_events_by_file.items():
+        for ev_str in events:
+            ev = json.loads(ev_str)
+            ev["occurrence_id"] = next_occurrence_id
+            next_occurrence_id += 1
+            all_output_lines[output_file].append(
+                json.dumps(ev, separators=(",", ":")) + "\n"
             )
 
     if not os.path.exists(output_dir):
