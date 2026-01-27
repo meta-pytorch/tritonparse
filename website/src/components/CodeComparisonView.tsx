@@ -470,7 +470,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                     flexShrink: 0
                 }}>
                     <span>
-                        💡 Tip: Use <kbd style={{
+                        💡 Tip: Click any line to highlight corresponding code in other IR panels. Use <kbd style={{
                             backgroundColor: '#f0f0f0',
                             border: '1px solid #ccc',
                             borderRadius: '3px',
@@ -478,7 +478,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                             fontFamily: 'monospace',
                             fontSize: '12px',
                             margin: '0 2px'
-                        }}>Shift</kbd> + Mouse Wheel to scroll horizontally
+                        }}>Shift</kbd> + Mouse Wheel to scroll horizontally.
                     </span>
                     <button
                         onClick={handleDismissScrollTip}
