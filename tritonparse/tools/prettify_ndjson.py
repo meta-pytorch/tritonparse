@@ -49,19 +49,29 @@ from .compression import open_compressed_file
 
 def parse_line_ranges(lines_arg: str) -> set[int]:
     """
-    Parse line ranges from string like "1,2,3,5-10" into a set of line numbers.
+    Parse line selections from a string like "1,2,3,5-10" into a set of line numbers.
 
-    Line numbers use 1-based indexing (first line is line 1, not 0).
+    Enhancements:
+    - Supports negative single numbers (e.g., "-1", "-5") which represent
+      selecting the last N lines from the file (-1 = last 1 line, -5 = last 5 lines).
+      These are returned as negative integers here and must be resolved to absolute
+      line numbers once the total number of lines in the file is known.
+
+    Notes:
+    - Line numbers use 1-based indexing (first line is line 1, not 0).
+    - Ranges (e.g., "5-10") must be positive-only; negative ranges like "5--1" are
+      not supported and will raise ValueError.
 
     Args:
         lines_arg: String containing comma-separated line numbers and ranges
-                  Examples: "1", "1,2,3", "5-10", "1,3,5-10,15"
+                   Examples: "1", "1,2,3", "5-10", "1,3,5-10,15", "-1", "-5"
 
     Returns:
-        Set of line numbers (1-based indexing, where 1 = first line)
+        Set of line numbers. Positive numbers are absolute (1-based). Negative
+        numbers represent "last N lines" and must be resolved later.
 
     Raises:
-        ValueError: If the format is invalid or contains non-positive numbers
+        ValueError: If the format is invalid or contains zero or unsupported ranges
     """
     line_numbers = set()
 
@@ -74,7 +84,17 @@ def parse_line_ranges(lines_arg: str) -> set[int]:
         if not part:
             continue
 
-        if "-" in part:
+        # Support single negative numbers like "-5" (index from end)
+        if part.startswith("-") and part[1:].isdigit():
+            try:
+                line_num = int(part)
+                if line_num == 0:
+                    raise ValueError("Line number 0 is invalid")
+                line_numbers.add(line_num)
+            except ValueError:
+                raise ValueError(f"Invalid line number: {part}")
+
+        elif "-" in part:
             # Handle range like "5-10"
             try:
                 start, end = part.split("-", 1)
@@ -255,7 +275,8 @@ Examples:
         type=str,
         help="Specify line numbers to include using 1-based indexing (e.g., '1,2,3,5-10'). "
         "Line 1 is the first line of the file. Only these lines from the original NDJSON will be processed. "
-        "Supports individual lines (1,2,3) and ranges (5-10).",
+        "Supports individual lines (1,2,3) and ranges (5-10). Also supports negative single numbers "
+        "to select the last N lines (e.g., '-1' = last 1 line, '-5' = last 5 lines).",
     )
 
     parser.add_argument(
@@ -290,7 +311,47 @@ Examples:
         line_filter = None
         if args.lines:
             try:
-                line_filter = parse_line_ranges(args.lines)
+                raw_line_filter = parse_line_ranges(args.lines)
+
+                # If there are negative indices, resolve them to absolute
+                # 1-based line numbers based on the total number of lines in the file.
+                if any(n < 0 for n in raw_line_filter):
+                    try:
+                        with open_compressed_file(input_path) as _f:
+                            total_physical_lines = 0
+                            last_nonempty_line_number = 0
+                            for idx, line in enumerate(_f, 1):
+                                total_physical_lines = idx
+                                if line.strip():
+                                    last_nonempty_line_number = idx
+                    except Exception as e:
+                        print(
+                            f"Failed to read file to resolve negative indices: {e}",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+
+                    # Use the last non-empty physical line as the effective end of file
+                    effective_total = (
+                        last_nonempty_line_number
+                        if last_nonempty_line_number > 0
+                        else total_physical_lines
+                    )
+
+                    resolved = set()
+                    for n in raw_line_filter:
+                        if n < 0:
+                            # Interpret -k as the last k lines (using effective_total)
+                            k = abs(n)
+                            start = max(1, effective_total - k + 1)
+                            resolved.update(range(start, effective_total + 1))
+                        else:
+                            resolved.add(n)
+
+                    line_filter = resolved
+                else:
+                    line_filter = raw_line_filter
+
                 print(
                     f"Line filtering enabled: will process {len(line_filter)} specified lines"
                 )
