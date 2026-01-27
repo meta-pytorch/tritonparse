@@ -330,6 +330,7 @@ export interface ProcessedKernel {
     launchDiff?: LogEntry; // Aggregated launch event differences
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
     autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
+    winnerRunCount?: number; // Number of times this kernel was run as the autotuning winner
 }
 
 /**
@@ -649,6 +650,24 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 const bo = b.occurrence_id ?? Number.MAX_SAFE_INTEGER;
                 return ao - bo;
             });
+        }
+    }
+
+    // Fourth pass: process autotune_summary event for winner run counts
+    // This event contains winner_run_counts: { "hash1": 5, "hash2": 3 }
+    // which tells us how many times each winner was used (including after benchmark and cached calls)
+    for (const raw of logEntries) {
+        if ((raw as unknown as { event_type: string }).event_type === "autotune_summary") {
+            const summary = raw as unknown as { winner_run_counts?: Record<string, number> };
+            const winnerRunCounts = summary.winner_run_counts || {};
+            // Set winnerRunCount on kernels that match the winner hashes
+            for (const [hash, count] of Object.entries(winnerRunCounts)) {
+                const kernel = kernelsByHash.get(hash);
+                if (kernel && count > 0) {
+                    kernel.winnerRunCount = count;
+                }
+            }
+            break; // Only one summary event expected
         }
     }
 

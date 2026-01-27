@@ -493,6 +493,19 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
         {kernel.autotuneSessions && kernel.autotuneSessions.length > 0 && (
           <div className="mb-6">
             <h3 className="text-lg font-medium mb-2 text-gray-800">Autotune Analysis</h3>
+
+            {/* Winner Run Count - shown when this kernel was selected as autotuning winner */}
+            {kernel.winnerRunCount != null && kernel.winnerRunCount > 0 && (
+              <div className="mb-4 p-3 bg-green-50 rounded-md border border-green-200">
+                <span className="text-green-700 font-medium">
+                  🎯 Winner Run Count: {kernel.winnerRunCount}
+                </span>
+                <span className="text-green-600 text-sm ml-2">
+                  (This kernel was selected as best config and used {kernel.winnerRunCount} time{kernel.winnerRunCount > 1 ? 's' : ''})
+                </span>
+              </div>
+            )}
+
             <div className="space-y-4">
               {kernel.autotuneSessions.map((session, idx) => {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
