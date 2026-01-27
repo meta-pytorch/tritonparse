@@ -1,10 +1,57 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-from typing import Any, Dict, List
+import hashlib
+import json
+from typing import Any, Dict, List, Optional, Tuple
 
 from tritonparse.tp_logger import get_logger
 
 logger = get_logger("SourceMapping")
+
+
+def _remove_keys_recursive(obj: Any, keys_to_remove: List[str]) -> Any:
+    """
+    Recursively remove any keys present in keys_to_remove from a nested dict/list structure.
+
+    Args:
+        obj: Arbitrary JSON-like object to process (dict, list, or primitive types).
+        keys_to_remove: List of dictionary keys to remove wherever they appear.
+
+    Returns:
+        A new object with matching keys removed from any dictionaries encountered.
+    """
+    if isinstance(obj, dict):
+        return {
+            key: _remove_keys_recursive(value, keys_to_remove)
+            for key, value in obj.items()
+            if key not in keys_to_remove
+        }
+    if isinstance(obj, list):
+        return [_remove_keys_recursive(item, keys_to_remove) for item in obj]
+    return obj
+
+
+def compute_launch_event_hash(launch_event: Dict[str, Any]) -> str:
+    """
+    Compute a stable hash for a launch event.
+
+    Args:
+        launch_event: The launch event dictionary
+
+    Returns:
+        A SHA-256 hash string (16 characters) of the launch event
+    """
+    # Create a deep-cleaned copy excluding volatile/non-semantic fields
+    # Excluded keys:
+    # - "timestamp", "pid": runtime-variant
+    # - "launch_group_hash", "occurrence_id": injected during processing
+    # - "function": currently unstable/None for first kernel in samples
+    excluded = ["timestamp", "pid", "launch_group_hash", "occurrence_id", "function"]
+    stable_event = _remove_keys_recursive(launch_event, excluded)
+
+    # Sort keys for stable serialization
+    stable_json = json.dumps(stable_event, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(stable_json.encode()).hexdigest()[:16]
 
 
 def get_file_extension(filename: str) -> str:
@@ -95,3 +142,77 @@ def load_ir_contents(
         with open(ir_file_path, "r") as f:
             ir_content = f.read()
     return ir_content
+
+
+def _is_autotune_benchmark_launch(stack: List[Dict[str, Any]]) -> bool:
+    """
+    Check if a stack trace corresponds to an autotune benchmark launch.
+
+    Args:
+        stack: A list of stack frame dictionaries, each containing "filename"
+            and "name" keys.
+
+    Returns:
+        True if any frame corresponds to the Triton autotuner benchmark helper
+        (_bench in triton/runtime/autotuner.py), otherwise False.
+    """
+    for frame in stack:
+        filename = frame.get("filename", "")
+        func_name = frame.get("name")
+        if "triton/runtime/autotuner.py" in filename and func_name == "_bench":
+            return True
+    return False
+
+
+def get_autotune_session_id(
+    stack_trace: List[Dict[str, Any]],
+) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+    """
+    Generate a session ID for an autotune instance by finding the user-level
+    call site and computing a hash of the complete user call stack.
+
+    Args:
+        stack_trace: The stack trace from a compilation or launch event.
+
+    Returns:
+        A tuple of (session_id, user_stack) where:
+        - session_id: A unique hash-based session ID string if the event is part
+          of an autotune process, otherwise None.
+        - user_stack: The complete user call stack before autotuner.py frames,
+          otherwise None.
+    """
+    # Find the first frame corresponding to the autotuner's method
+    autotuner_boundary = -1
+    for i, frame in enumerate(stack_trace):
+        filename = frame.get("filename", "")
+        func_name = frame.get("name")
+        if "triton/runtime/autotuner.py" in filename and func_name in [
+            "run",
+            "_bench",
+        ]:
+            autotuner_boundary = i
+            break
+
+    if autotuner_boundary == -1:
+        return None, None
+
+    # Extract user stack (everything before autotuner.py)
+    user_stack = stack_trace[:autotuner_boundary]
+
+    if not user_stack:
+        return None, None
+
+    # Create a stable string representation of the user stack
+    stack_parts = []
+    for frame in user_stack:
+        filename = frame.get("filename", "")
+        line = frame.get("line", 0)
+        name = frame.get("name", "")
+        stack_parts.append(f"{filename}:{line}:{name}")
+
+    stack_key = "|".join(stack_parts)
+
+    # Generate a hash-based session ID
+    session_id = hashlib.sha256(stack_key.encode()).hexdigest()[:16]
+
+    return session_id, user_stack
