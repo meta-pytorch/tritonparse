@@ -466,6 +466,43 @@ def _generate_autotune_analysis_events(
             json.dumps(analysis_event, separators=(",", ":")) + "\n"
         )
 
+    # Third pass: Generate autotune_summary event with winner usage statistics
+    # This provides a global view of how often each winner was used
+    # We count all winner runs, including:
+    # 1. Winner run after benchmark (winner_occurrence_ids is not empty)
+    # 2. Cached winner call (benchmark_occurrence_ids is empty)
+    winner_run_counts: Dict[str, int] = defaultdict(int)
+    for session_id, session_data in autotune_sessions.items():
+        if not session_data:
+            continue
+        winner_occurrence_ids = session_data.get("winner_occurrence_ids", [])
+        # Count sessions that have winner runs (either after benchmark or cached)
+        if len(winner_occurrence_ids) > 0:
+            # Calculate winner_compilation_hash the same way as in Second pass
+            selected_launch_group_hash = autotune_winners.get(session_id)
+            if (
+                selected_launch_group_hash
+                and selected_launch_group_hash in launch_by_group_hash
+            ):
+                selected_launch_event = launch_by_group_hash.get(
+                    selected_launch_group_hash, {}
+                )
+                winner_hash = selected_launch_event.get("compilation_metadata", {}).get(
+                    "hash"
+                )
+                if winner_hash:
+                    winner_run_counts[winner_hash] += 1
+
+    # Add summary event to each output file that has autotune_analysis events
+    if winner_run_counts:
+        summary_event: Dict[str, Any] = {
+            "event_type": "autotune_summary",
+            "winner_run_counts": dict(winner_run_counts),
+        }
+        summary_line = json.dumps(summary_event, separators=(",", ":")) + "\n"
+        for output_file in output_events.keys():
+            output_events[output_file].append(summary_line)
+
     return output_events
 
 
