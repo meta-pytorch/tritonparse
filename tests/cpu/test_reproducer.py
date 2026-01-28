@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """Tests for reproducer functionality (CPU-only, no kernel execution)."""
 
 import argparse

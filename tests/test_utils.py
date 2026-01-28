@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """Shared utility functions and base classes for tritonparse tests."""
 
 import os

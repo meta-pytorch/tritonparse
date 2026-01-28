@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # bisect_llvm.sh - Bisect LLVM commits within a compatible Triton range
 #
 # IMPORTANT: Run this script from the LLVM repository directory

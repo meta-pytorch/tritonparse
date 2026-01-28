@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """
 End-to-end tests for tritonparse reproducer functionality.
 

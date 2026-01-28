@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 
 # Setup script for tritonparse CI environment
 # This script sets up the conda environment, installs dependencies, and configures CUDA

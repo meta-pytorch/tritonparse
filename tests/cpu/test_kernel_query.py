@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """Tests for kernel query functionality."""
 
 import unittest

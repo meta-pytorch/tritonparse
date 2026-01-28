@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """
 Tests for complex Triton kernels including autotuning and launch_diff functionality.
 

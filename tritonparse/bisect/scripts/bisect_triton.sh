@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # bisect_triton.sh - Bisect Triton commits to find regressions
 #
 # This script is designed to be used with `git bisect run` to automatically

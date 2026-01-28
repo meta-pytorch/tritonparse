@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """Test TensorBlobManager functionality."""
 
 import os

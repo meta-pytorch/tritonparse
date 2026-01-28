@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 
 # Install Triton from source
 # This script clones and installs Triton from the main repository

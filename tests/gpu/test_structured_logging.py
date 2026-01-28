@@ -1,3 +1,4 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 """
 Tests for tritonparse structured logging functionality.
 

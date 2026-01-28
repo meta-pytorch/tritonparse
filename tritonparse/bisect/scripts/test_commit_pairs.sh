@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # test_commit_pairs.sh - Test (Triton, LLVM) commit pairs sequentially
 #
 # This script tests pairs of (Triton commit, LLVM commit) from a CSV file

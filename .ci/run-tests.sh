@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 
 # Run tritonparse tests
 # This script runs the test suite with proper environment setup

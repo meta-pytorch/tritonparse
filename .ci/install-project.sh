@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 
 # Install tritonparse project dependencies
 # This script installs the project in editable mode with test dependencies
