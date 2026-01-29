@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DiffComparisonView from "../components/DiffComparisonView";
 import { useFileDiffSession } from "../context/FileDiffSession";
 import { ProcessedKernel, loadLogData, loadLogDataFromFile, processKernelData, getIRType } from "../utils/dataLoader";
+import { normalizeDataUrl } from "../utils/urlUtils";
 import "../types/global.d.ts";
 
 type DiffMode = "single" | "all";
@@ -395,7 +396,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   const handleLoadRight = async () => {
     if (!pendingUrl) return;
     setRightLoadedFromLocal(false);
-    setRightLoadedUrl(pendingUrl);
+    setRightLoadedUrl(normalizeDataUrl(pendingUrl));
   };
 
   const handleLoadRightLocal = async (file: File | null) => {
@@ -428,7 +429,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   const handleLoadLeft = async () => {
     if (!leftPendingUrlLocal) return;
     setLeftLoadedFromLocal(false);
-    setLeftLoadedUrlLocal(leftPendingUrlLocal);
+    setLeftLoadedUrlLocal(normalizeDataUrl(leftPendingUrlLocal));
   };
   const handleLoadLeftLocal = async (file: File | null) => {
     if (!file) return;
