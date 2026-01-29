@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PaperClipIcon, LinkIcon } from "./icons";
+import { normalizeDataUrl } from "../utils/urlUtils";
 
 interface DataSourceSelectorProps {
   onFileSelected: (file: File) => void;
@@ -60,10 +61,11 @@ const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({
     }
 
     try {
+      const normalizedUrl = normalizeDataUrl(url);
       // Basic URL validation
-      new URL(url);
+      new URL(normalizedUrl);
       setError(null);
-      onUrlSelected(url);
+      onUrlSelected(normalizedUrl);
     } catch {
       setError("Please enter a valid URL");
     }
