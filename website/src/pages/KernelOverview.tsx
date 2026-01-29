@@ -97,6 +97,8 @@ interface PossibleGroupsProps {
   winner: string | undefined;
   currentKernelHash: string | undefined;
   defaultExpanded?: boolean;
+  /** Callback when a kernel hash row is clicked */
+  onKernelClick?: (hash: string) => void;
 }
 
 const PossibleGroups: React.FC<PossibleGroupsProps> = ({
@@ -105,6 +107,7 @@ const PossibleGroups: React.FC<PossibleGroupsProps> = ({
   winner,
   currentKernelHash,
   defaultExpanded = false,
+  onKernelClick,
 }) => {
   const [showGroups, setShowGroups] = useState(defaultExpanded);
   const varyKeys = Object.keys(varies);
@@ -173,8 +176,18 @@ const PossibleGroups: React.FC<PossibleGroupsProps> = ({
                       } else if (isCurrentKernel) {
                         rowClass = 'bg-blue-50';
                       }
+                      const hoverClass = isWinner
+                        ? 'hover:bg-yellow-100'
+                        : isCurrentKernel
+                          ? 'hover:bg-blue-100'
+                          : 'hover:bg-gray-100';
                       return (
-                        <tr key={ch} className={rowClass}>
+                        <tr
+                          key={ch}
+                          className={`${rowClass} ${hoverClass} cursor-pointer transition-colors`}
+                          onClick={() => onKernelClick?.(ch)}
+                          title="Click to view this kernel"
+                        >
                           <td className="px-2 py-1 font-mono text-xs text-gray-800">
                             {ch}
                             {isWinner && ' 🏆'}
@@ -289,6 +302,32 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
   const [isSticky, setIsSticky] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(true);
   const buttonsContainerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Finds the index of a kernel by its compilation hash.
+   * @param hash - The compilation hash to search for
+   * @returns The index of the kernel, or -1 if not found
+   */
+  const findKernelIndexByHash = useCallback(
+    (hash: string): number => {
+      return kernels.findIndex((k) => k.metadata?.hash === hash);
+    },
+    [kernels]
+  );
+
+  /**
+   * Handles clicking on an autotune table row to navigate to that kernel.
+   * @param hash - The compilation hash of the kernel to navigate to
+   */
+  const handleAutotuneRowClick = useCallback(
+    (hash: string) => {
+      const targetIndex = findKernelIndexByHash(hash);
+      if (targetIndex >= 0 && targetIndex !== selectedKernel) {
+        onSelectKernel(targetIndex);
+      }
+    },
+    [findKernelIndexByHash, selectedKernel, onSelectKernel]
+  );
 
   /**
    * Adjusts the scroll position of the kernel buttons container to ensure
@@ -557,6 +596,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                         winner={winner}
                         currentKernelHash={currentKernelHash}
                         defaultExpanded={possibleGroupsDefaultExpanded}
+                        onKernelClick={handleAutotuneRowClick}
                       />
                     )}
 
@@ -598,8 +638,18 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                             } else if (isCurrentKernel) {
                               rowClass = 'bg-blue-50';
                             }
+                            const hoverClass = isWinner
+                              ? 'hover:bg-yellow-100'
+                              : isCurrentKernel
+                                ? 'hover:bg-blue-100'
+                                : 'hover:bg-gray-100';
                             return (
-                              <tr key={ch} className={rowClass}>
+                              <tr
+                                key={ch}
+                                className={`${rowClass} ${hoverClass} cursor-pointer transition-colors`}
+                                onClick={() => handleAutotuneRowClick(ch)}
+                                title="Click to view this kernel"
+                              >
                                 <td className="px-2 py-1 font-mono text-xs text-gray-800">
                                   {ch}
                                   {isWinner && ' 🏆'}
