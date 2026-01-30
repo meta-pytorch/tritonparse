@@ -1111,11 +1111,9 @@ def init_logs():
     # 1) Create the handler on first use (root_dir may be None)
     if TRITON_TRACE_HANDLER is None:
         TRITON_TRACE_HANDLER = TritonTraceHandler(triton_trace_folder)
-    # 2) If the handler has no root_dir but we now have
-    #    `triton_trace_folder`, fill it in.
-    if TRITON_TRACE_HANDLER.root_dir is None and triton_trace_folder is not None:
+    if triton_trace_folder is not None:
         TRITON_TRACE_HANDLER.root_dir = triton_trace_folder
-    # 3) Re-evaluate whether we have a writable directory
+    # 2) Re-evaluate whether we have a writable directory
     #    (`get_root_dir()` also checks /logs logic, permissions, etc.)
     root_dir = TRITON_TRACE_HANDLER.get_root_dir()
     if root_dir is None:
@@ -1123,7 +1121,7 @@ def init_logs():
         if TRITON_TRACE_HANDLER in triton_trace_log.handlers:
             triton_trace_log.removeHandler(TRITON_TRACE_HANDLER)
         return  # quiet exit, no blank lines
-    # 4) Tracing is enabled: attach the handler (if not already
+    # 3) Tracing is enabled: attach the handler (if not already
     #    attached) and set the JSON formatter.
     if TRITON_TRACE_HANDLER not in triton_trace_log.handlers:
         TRITON_TRACE_HANDLER.setFormatter(TritonJsonFormatter())
