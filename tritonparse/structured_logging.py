@@ -56,8 +56,9 @@ TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
 # Compression algorithm for raw trace files
 # When enabled, each JSON record is written as a separate gzip member,
 # concatenated in sequence within a .bin.ndjson file.
-# Supported values: "none", "gzip", "zstd" (future)
+# Supported values: "none", "gzip", "clp", "zstd" (future)
 # - "gzip": Outputs .bin.ndjson (gzip member concatenation format)
+# - "clp": Outputs .clp (Compressed Log Processor format)
 # - "none": Outputs .ndjson (plain text)
 # If TRITON_TRACE_COMPRESSION is explicitly set, respect that value;
 # otherwise, default to "gzip" if TRITON_TRACE_LAUNCH is enabled, else "none"
@@ -67,6 +68,8 @@ TRITON_TRACE_COMPRESSION = (
     if _compression_env is not None
     else ("gzip" if TRITON_TRACE_LAUNCH else "none")
 )
+if TRITON_TRACE_COMPRESSION == "clp":
+    from .clp import clp_open
 # Maximum file size for full source extraction (default 10MB)
 TRITON_MAX_SOURCE_SIZE = int(os.getenv("TRITON_MAX_SOURCE_SIZE", str(10 * 1024 * 1024)))
 # Inductor compiled kernel's launch tracing needs this flag to be set.
@@ -1023,16 +1026,22 @@ class TritonTraceHandler(logging.StreamHandler):
                     if TRITON_TRACE_COMPRESSION == "gzip":
                         file_extension = ".bin.ndjson"
                         file_mode = "ab+"  # Binary mode for gzip member concatenation
+                    elif TRITON_TRACE_COMPRESSION == "clp":
+                        file_extension = ".clp"
+                        file_mode = "w"  # CLP write mode
                     else:
                         file_extension = ".ndjson"
                         file_mode = "a+"
                     log_file_name = os.path.abspath(
                         os.path.join(root_dir, f"{filename}{file_extension}")
                     )
-                    self.stream = open(
-                        log_file_name,
-                        mode=file_mode,
-                    )
+                    if TRITON_TRACE_COMPRESSION == "clp":
+                        self.stream = clp_open(log_file_name, file_mode)
+                    else:
+                        self.stream = open(
+                            log_file_name,
+                            mode=file_mode,
+                        )
                     log.debug("TritonTraceHandler: logging to %s", log_file_name)
                 else:
                     triton_trace_log.removeHandler(self)
@@ -1049,6 +1058,8 @@ class TritonTraceHandler(logging.StreamHandler):
                     # Write the complete gzip member to the file
                     compressed_data = buffer.getvalue()
                     self.stream.write(compressed_data)
+                elif TRITON_TRACE_COMPRESSION == "clp":
+                    self.stream.add(io.StringIO(formatted))
                 else:
                     self.stream.write(formatted)
                 self.flush()
@@ -1067,6 +1078,8 @@ class TritonTraceHandler(logging.StreamHandler):
                     try:
                         self.flush()
                     finally:
+                        if TRITON_TRACE_COMPRESSION == "clp":
+                            self.stream._compress()
                         self.stream.close()
                         self.stream = None
             finally:

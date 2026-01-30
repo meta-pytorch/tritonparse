@@ -101,12 +101,17 @@ def oss_run(
         # Copy the single file to a temp directory, then parse it
         logs = copy_local_to_tmpdir(local_path, verbose)
 
-    parsed_log_dir, _ = parse_logs(
-        logs,
-        rank_config,
-        verbose,
-        split_inductor_compilations=split_inductor_compilations,
-    )
+    if not source.type == SourceType.LOCAL_CLP:
+        # Parse the logs
+        parsed_log_dir, _ = parse_logs(
+            logs,
+            rank_config,
+            verbose,
+            split_inductor_compilations=split_inductor_compilations,
+        )
+    else:
+        parsed_log_dir = source.value
+
     if out is not None:
         save_logs(Path(out), parsed_log_dir, overwrite, verbose)
     # Print beautiful summary of all parsed files
