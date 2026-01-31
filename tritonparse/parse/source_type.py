@@ -10,6 +10,7 @@ class SourceType(str, Enum):
 
     LOCAL = "local"
     LOCAL_FILE = "local_file"
+    LOCAL_CLP = "local_clp"
 
     @classmethod
     def _missing_(cls, value: object) -> "SourceType":
@@ -46,6 +47,8 @@ class Source:
     def _parse_source(self) -> Tuple[SourceType, str]:
         # Check if it's a local path
         path = Path(self.source_str)
+        if path.is_dir() and any(".clp" in p.name for p in path.iterdir()):
+            return SourceType.LOCAL_CLP, str(path.absolute())
         if path.is_dir():
             return SourceType.LOCAL, str(path.absolute())
         elif path.is_file():

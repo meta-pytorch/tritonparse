@@ -250,7 +250,13 @@ def copy_local_to_tmpdir(local_path: str, verbose: bool = False) -> str:
             if verbose:
                 logger.info(f"Copying {item_path} to {temp_dir}")
             shutil.copy2(item_path, temp_dir)
-
+        if os.path.isdir(item_path) and os.path.basename(item_path).startswith(
+            LOG_PREFIX
+        ):
+            dir_name = os.path.basename(item_path)
+            if verbose:
+                logger.info(f"Copying {item_path} to {temp_dir}/{dir_name}")
+            shutil.copytree(item_path, f"{temp_dir}/{dir_name}")
     return temp_dir
 
 
