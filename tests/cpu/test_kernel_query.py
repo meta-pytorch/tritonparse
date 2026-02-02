@@ -5,12 +5,14 @@ import unittest
 
 from tests.test_utils import get_test_ndjson_file
 from tritonparse.info.kernel_query import (
+    find_best_autotuned_launch_index,
     find_launch_index_by_kernel,
     find_similar_kernels,
     list_kernels,
     list_kernels_fast,
     list_launches_for_kernel,
 )
+from tritonparse.parse.sourcemap_utils import _is_autotune_benchmark_launch
 from tritonparse.tools.prettify_ndjson import load_ndjson
 
 
@@ -169,6 +171,149 @@ class TestKernelQuery(unittest.TestCase):
         fast_dict = {k.name: k.total_launches for k in kernels_fast}
         slow_dict = {k.name: k.total_launches for k in kernels_slow}
         self.assertEqual(fast_dict, slow_dict)
+
+
+class TestAutotuningLaunchDetection(unittest.TestCase):
+    """Tests for autotuning benchmark launch detection functions."""
+
+    def test_is_autotuning_benchmark_launch_with_benchmark(self):
+        """Test detection of benchmark launches (should return True)."""
+        # Stack with triton autotuner _bench function (the real detection pattern)
+        stack_with_bench = [
+            {"filename": "triton/runtime/autotuner.py", "name": "_bench"},
+            {"filename": "some/other/call.py", "name": "run"},
+        ]
+        self.assertTrue(_is_autotune_benchmark_launch(stack_with_bench))
+
+    def test_is_autotuning_benchmark_launch_without_benchmark(self):
+        """Test detection of non-benchmark launches (should return False)."""
+        # Normal production launch without benchmark markers
+        stack_normal = [
+            {"filename": "my_model.py", "name": "forward"},
+            {"filename": "torch/nn/module.py", "name": "__call__"},
+        ]
+        self.assertFalse(_is_autotune_benchmark_launch(stack_normal))
+
+        # Empty stack
+        self.assertFalse(_is_autotune_benchmark_launch([]))
+
+    def test_find_best_autotuned_launch_index_with_benchmarks(self):
+        """Test finding best config launch when benchmarks are present."""
+        # Create mock events: 3 benchmark launches + 1 final production launch
+        events = [
+            {"event_type": "compilation", "name": "matmul_kernel"},  # index 0
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel"},
+                "stack": [
+                    {"filename": "triton/runtime/autotuner.py", "name": "_bench"}
+                ],
+            },  # index 1 - benchmark
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel"},
+                "stack": [
+                    {"filename": "triton/runtime/autotuner.py", "name": "_bench"}
+                ],
+            },  # index 2 - benchmark
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel"},
+                "stack": [
+                    {"filename": "my_model.py", "name": "forward"},
+                    {"filename": "triton/runtime/autotuner.py", "name": "run"},
+                ],
+            },  # index 3 - production (best config)
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel"},
+                "stack": [
+                    {"filename": "triton/runtime/autotuner.py", "name": "_bench"}
+                ],
+            },  # index 4 - benchmark
+        ]
+
+        # Should return index 3 (the production launch, not benchmark)
+        result = find_best_autotuned_launch_index(events, "matmul_kernel")
+        self.assertEqual(result, 3)
+
+    def test_find_best_autotuned_launch_index_no_benchmarks(self):
+        """Test that non-autotuned kernels return None."""
+        events = [
+            {"event_type": "compilation", "name": "simple_kernel"},
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "simple_kernel"},
+                "stack": [{"filename": "my_model.py", "name": "forward"}],
+            },  # index 1
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "simple_kernel"},
+                "stack": [{"filename": "my_model.py", "name": "forward"}],
+            },  # index 2
+        ]
+
+        # Should return None since no benchmark launches means not autotuned
+        result = find_best_autotuned_launch_index(events, "simple_kernel")
+        self.assertIsNone(result)
+
+    def test_find_best_autotuned_launch_index_kernel_not_found(self):
+        """Test finding best config launch for non-existent kernel."""
+        events = [
+            {"event_type": "compilation", "name": "some_kernel"},
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "some_kernel"},
+                "stack": [],
+            },
+        ]
+
+        # Should return None for non-existent kernel
+        result = find_best_autotuned_launch_index(events, "nonexistent_kernel")
+        self.assertIsNone(result)
+
+    def test_find_best_autotuned_launch_index_all_benchmarks(self):
+        """Test edge case where all launches are benchmarks."""
+        events = [
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel"},
+                "stack": [
+                    {"filename": "triton/runtime/autotuner.py", "name": "_bench"}
+                ],
+            },  # index 0
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel"},
+                "stack": [
+                    {"filename": "triton/runtime/autotuner.py", "name": "_bench"}
+                ],
+            },  # index 1
+        ]
+
+        # Should return None since all launches are benchmarks (no production run found)
+        result = find_best_autotuned_launch_index(events, "matmul_kernel")
+        self.assertIsNone(result)
+
+    def test_find_best_autotuned_launch_index_with_real_data(self):
+        """Test with real NDJSON data file."""
+        gz_file = get_test_ndjson_file()
+        events = load_ndjson(gz_file)
+
+        # Test with a kernel from the test file
+        result = find_best_autotuned_launch_index(events, "matmul_kernel")
+
+        # Should return a valid index or None (depending on whether autotuning was used)
+        if result is not None:
+            self.assertIsInstance(result, int)
+            self.assertGreaterEqual(result, 0)
+            self.assertLess(result, len(events))
+            # Verify it's a launch event for the correct kernel
+            event = events[result]
+            self.assertEqual(event.get("event_type"), "launch")
+            self.assertEqual(
+                event.get("compilation_metadata", {}).get("name"), "matmul_kernel"
+            )
 
 
 if __name__ == "__main__":

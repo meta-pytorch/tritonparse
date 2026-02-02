@@ -3,9 +3,14 @@
 import json
 from abc import ABC
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
-from tritonparse.reproducer.function_extractor import extract_utility_functions
+from tritonparse.reproducer.function_extractor import (
+    extract_autotune_config_params,
+    extract_function_with_decorators,
+    extract_utility_functions,
+    is_constexpr_param,
+)
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
 from tritonparse.reproducer.templates.utils import (
     _disable_triton_autotune,
@@ -84,6 +89,16 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
     - # {{KERNEL_SYSPATH_PLACEHOLDER}}: Replaced with sys.path setup code
     - # {{KERNEL_IMPORT_PLACEHOLDER}}: Replaced with kernel import statement
     - # {{KERNEL_INVOCATION_PLACEHOLDER}}: Replaced with kernel invocation code
+
+    Args:
+        preserve_autotune: If True, preserves @triton.autotune decorator behavior
+            instead of disabling it. When enabled:
+            1. Does NOT inject _disable_triton_autotune() function
+            2. Re-extracts kernel WITH its @triton.autotune decorator from source
+            3. Filters autotune-provided params from kernel invocation
+            4. Places dependent functions before kernel (for config generators)
+            This allows reproducers to re-autotune fresh, potentially finding
+            better configurations for the given inputs. Default: False.
     """
 
     KERNEL_NAME_PLACEHOLDER = "{{KERNEL_NAME_PLACEHOLDER}}"
@@ -100,8 +115,9 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
     # Placeholder for reproducer metadata in docstring
     REPRODUCER_METADATA_PLACEHOLDER = "{{REPRODUCER_METADATA_PLACEHOLDER}}"
 
-    def __init__(self):
+    def __init__(self, preserve_autotune: bool = False):
         super().__init__()
+        self.preserve_autotune = preserve_autotune
         # Register all default handlers
         self.register(self.JSON_FILE_NAME_PLACEHOLDER, self._replace_json_filename)
         self.register(
@@ -227,7 +243,13 @@ triton.autotune = _patched_autotune
     def _replace_kernel_import(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
-        """Replace the kernel import placeholder."""
+        """Replace the kernel import placeholder.
+
+        When preserve_autotune is enabled for COPY mode:
+        - Does NOT inject _disable_triton_autotune() function
+        - Re-extracts kernel WITH its @triton.autotune decorator from source
+        - Adds a note that autotuning is enabled
+        """
         kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
 
         if kernel_import == KernelImportMode.DEFAULT:
@@ -235,6 +257,7 @@ triton.autotune = _patched_autotune
                 context_bundle.kernel_info
             )
 
+            # For DEFAULT mode, always disable autotune (import from original file)
             final_stmt = "\n".join(
                 [import_statement, ""] + get_function_source(_disable_triton_autotune)
             )
@@ -250,7 +273,19 @@ triton.autotune = _patched_autotune
                     "Cannot determine kernel function name for 'copy' mode"
                 )
 
-            if kernel_import == KernelImportMode.COPY:
+            # When preserve_autotune is enabled, re-extract kernel with decorators
+            if self.preserve_autotune:
+                source_with_decorators = extract_function_with_decorators(
+                    context_bundle.kernel_info.file_path,
+                    func_name,
+                    context_bundle.source_repo_dir,
+                )
+                if source_with_decorators:
+                    source_code = source_with_decorators
+                    logger.debug("Using kernel source with decorators for autotuning")
+
+            else:
+                # Standard behavior: add dependent functions after kernel
                 dependent_source_map = get_dependent_source_map(
                     context_bundle.kernel_info.function_name,
                     context_bundle.kernel_info.file_path,
@@ -274,7 +309,16 @@ triton.autotune = _patched_autotune
                 "import triton.language as tl",
                 "from typing import List, Tuple",
                 "",
-            ] + get_function_source(_disable_triton_autotune)
+            ]
+
+            # Only add autotune disabling code when not preserving autotune
+            if self.preserve_autotune:
+                import_lines.append(
+                    "# NOTE: Autotuning is ENABLED - kernel will autotune on first run"
+                )
+                import_lines.append("")
+            else:
+                import_lines.extend(get_function_source(_disable_triton_autotune))
 
             # Combine: imports + kernel source code + alias
             embedded_code = "\n".join(import_lines)
@@ -291,27 +335,130 @@ triton.autotune = _patched_autotune
     def _replace_utility_functions(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
-        """Replace the utility functions placeholder with extracted functions."""
+        """Replace the utility functions placeholder with extracted functions.
+
+        When preserve_autotune is enabled for COPY mode, also injects dependent
+        functions (like config generators) before the kernel source so they're
+        defined when referenced by @triton.autotune decorator.
+        """
         embed_context = kwargs.get("embed_context", False)
         utility_code = extract_utility_functions(embed_context=embed_context)
-        return code.replace(self.UTILITY_FUNCTIONS_PLACEHOLDER, utility_code)
+        code = code.replace(self.UTILITY_FUNCTIONS_PLACEHOLDER, utility_code)
+
+        # For preserve_autotune + COPY mode, inject dependent functions before kernel
+        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
+        if self.preserve_autotune and kernel_import == KernelImportMode.COPY:
+            func_name = context_bundle.kernel_info.function_name
+            if func_name:
+                dependent_source_map = get_dependent_source_map(
+                    func_name,
+                    context_bundle.kernel_info.file_path,
+                    context_bundle.source_repo_dir,
+                )
+                if dependent_source_map:
+                    # Insert dependent functions before "# isort: off"
+                    dependent_code = (
+                        "\n# Dependent functions for autotuning\n\n"
+                        + "\n\n".join(dependent_source_map.values())
+                        + "\n\n"
+                    )
+                    code = code.replace("# isort: off", dependent_code + "# isort: off")
+
+        return code
 
     def _replace_kernel_invocation(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
-        """Replace the kernel invocation placeholder with compile parameters."""
+        """Replace the kernel invocation placeholder.
+
+        When preserve_autotune is enabled:
+        - Does NOT pass compile params (num_warps, num_stages, etc.) - autotuner handles these
+        - Does NOT pass params that autotune configs provide (BLOCK_SIZE_*, etc.)
+        - Passes remaining constexpr params as keyword args to avoid positional conflicts
+
+        Otherwise, passes all args plus compile params as usual.
+        """
         source_code = context_bundle.kernel_info.source_code
         pos_args, kw_args = _parse_kernel_signature(source_code)
 
-        # Extract compile parameters from metadata to pass to kernel launch
-        compile_params = _get_compile_params_for_invocation(
-            context_bundle.compile, kw_args
-        )
+        if self.preserve_autotune:
+            # Get full kernel source with decorators to find autotune config params
+            func_name = context_bundle.kernel_info.function_name
+            full_source_code = extract_function_with_decorators(
+                context_bundle.kernel_info.file_path,
+                func_name,
+                context_bundle.source_repo_dir,
+            )
+            # Fall back to captured source if extraction fails
+            if not full_source_code:
+                full_source_code = source_code
 
-        invocation_snippet = _generate_invocation_snippet(
-            pos_args, kw_args, compile_params
-        )
+            # Also get dependent functions - they may contain triton.Config definitions
+            dependent_source_map = get_dependent_source_map(
+                func_name,
+                context_bundle.kernel_info.file_path,
+                context_bundle.source_repo_dir,
+            )
+            all_source_code = full_source_code
+            if dependent_source_map:
+                all_source_code += "\n\n" + "\n\n".join(dependent_source_map.values())
+
+            # Get params that autotune configs provide
+            autotune_config_params = extract_autotune_config_params(all_source_code)
+
+            # Filter out params provided by autotune configs
+            # Remaining constexpr params must be passed as keyword args
+            filtered_pos_args = []
+            extra_kw_args = []
+            for arg in pos_args:
+                if arg in autotune_config_params:
+                    continue
+                if autotune_config_params and is_constexpr_param(arg, source_code):
+                    extra_kw_args.append(arg)
+                else:
+                    filtered_pos_args.append(arg)
+
+            filtered_kw_args = [
+                arg for arg in kw_args if arg not in autotune_config_params
+            ]
+            all_filtered_kw_args = extra_kw_args + filtered_kw_args
+
+            # Generate invocation WITHOUT compile_params
+            invocation_snippet = self._generate_autotune_invocation_snippet(
+                filtered_pos_args, all_filtered_kw_args
+            )
+        else:
+            # Standard behavior: pass compile params
+            compile_params = _get_compile_params_for_invocation(
+                context_bundle.compile, kw_args
+            )
+            invocation_snippet = _generate_invocation_snippet(
+                pos_args, kw_args, compile_params
+            )
+
         return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
+
+    def _generate_autotune_invocation_snippet(
+        self,
+        positional_args: List[str],
+        keyword_args: List[str],
+    ) -> str:
+        """Generate kernel invocation snippet for autotuned kernels.
+
+        Unlike the default generator, this does NOT include compile params
+        and passes non-autotune constexpr params as keyword arguments to
+        avoid positional conflicts.
+        """
+        pos_args_str = ", ".join([f'args_dict["{arg}"]' for arg in positional_args])
+        kw_args_str = ", ".join([f'{arg}=args_dict["{arg}"]' for arg in keyword_args])
+
+        all_args = []
+        if pos_args_str:
+            all_args.append(pos_args_str)
+        if kw_args_str:
+            all_args.append(kw_args_str)
+
+        return f"imported_kernel_function[tuple(grid)]({', '.join(all_args)})"
 
     def _replace_context_json(
         self, code: str, context_bundle: ContextBundle, **kwargs
