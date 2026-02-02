@@ -12,6 +12,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+from tritonparse.parse.sourcemap_utils import _is_autotune_winner_run
+
 
 @dataclass
 class KernelSummary:
@@ -207,3 +209,40 @@ def list_kernels_fast(events: List[Dict[str, Any]]) -> List[KernelSummary]:
     else:
         # Fall back to full traversal
         return list_kernels(events)
+
+
+def find_best_autotuned_launch_index(
+    events: List[Dict[str, Any]], kernel_name: str
+) -> int | None:
+    """
+    Find the index of the first non-benchmark launch for an autotuned kernel.
+
+    For autotuned kernels, returns the first launch that isn't a benchmark run
+    (i.e., the production run with the best config). Returns None if the kernel
+    is not autotuned (no benchmark launches found) or not found.
+
+    Args:
+        events: List of parsed events from NDJSON.
+        kernel_name: Exact kernel name (case-sensitive).
+
+    Returns:
+        Index of the best config launch, or None if kernel not found or not autotuned.
+    """
+    launch_events = [
+        (i, e)
+        for i, e in enumerate(events)
+        if e.get("event_type") == "launch"
+        and e.get("compilation_metadata", {}).get("name") == kernel_name
+    ]
+
+    if not launch_events:
+        return None
+
+    # Find the first non-benchmark launch (the production run with best config)
+    for idx, event in launch_events:
+        stack = event.get("stack", [])
+        if _is_autotune_winner_run(stack):
+            return idx
+
+    # If all launches are benchmark runs (edge case), return None
+    return None

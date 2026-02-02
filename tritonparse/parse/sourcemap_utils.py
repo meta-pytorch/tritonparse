@@ -164,6 +164,46 @@ def _is_autotune_benchmark_launch(stack: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def _is_autotune_launch(stack: List[Dict[str, Any]]) -> bool:
+    """
+    Check if a stack trace corresponds to an autotune launch.
+
+    Args:
+        stack: A list of stack frame dictionaries, each containing "filename"
+            and "name" keys.
+
+    Returns:
+        True if any frame corresponds to the Triton autotuner
+        (run in triton/runtime/autotuner.py), otherwise False.
+    """
+    for frame in stack:
+        filename = frame.get("filename", "")
+        func_name = frame.get("name")
+        if "triton/runtime/autotuner.py" in filename and func_name == "run":
+            return True
+    return False
+
+
+def _is_autotune_winner_run(stack: List[Dict[str, Any]]) -> bool:
+    """
+    Check if a stack trace corresponds to an autotune winner run.
+
+    An autotune winner run is a launch that goes through the autotuner
+    (has "run" in autotuner.py) but is NOT a benchmark run (does not have
+    "_bench" in autotuner.py). This identifies the production run with
+    the best autotuned config.
+
+    Args:
+        stack: A list of stack frame dictionaries, each containing "filename"
+            and "name" keys.
+
+    Returns:
+        True if this is an autotune winner run (autotune launch but not
+        a benchmark run), otherwise False.
+    """
+    return _is_autotune_launch(stack) and not _is_autotune_benchmark_launch(stack)
+
+
 def get_autotune_session_id(
     stack_trace: List[Dict[str, Any]],
 ) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
