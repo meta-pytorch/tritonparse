@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
 from tritonparse.bisect.base_bisector import BaseBisector, BisectError
+from tritonparse.bisect.git_utils import ensure_git_repo
 from tritonparse.bisect.logger import BisectLogger
 from tritonparse.bisect.scripts import get_bisect_llvm_script
 
@@ -195,35 +196,19 @@ class LLVMBisector(BaseBisector):
         """
         LLVM_REPO_URL = "https://github.com/llvm/llvm-project"
 
-        if not self.llvm_dir.exists():
-            self.logger.info(f"LLVM repo not found at {self.llvm_dir}")
-            self.logger.info(f"Cloning LLVM repo from {LLVM_REPO_URL}...")
-
-            result = self.executor.run_command_streaming(
-                ["git", "clone", LLVM_REPO_URL, str(self.llvm_dir)],
-                cwd=str(self.triton_dir),
+        try:
+            ensure_git_repo(
+                repo_dir=self.llvm_dir,
+                repo_url=LLVM_REPO_URL,
+                repo_name="LLVM",
+                executor=self.executor,
+                logger=self.logger,
+                use_streaming=True,
+                fetch_updates=False,
+                cwd=self.triton_dir,
             )
-
-            if not result.success:
-                raise LLVMBisectError(f"Failed to clone LLVM repo: {result.stderr}")
-
-            self.logger.info("LLVM repo cloned successfully")
-
-        # Verify it's a valid git repository
-        result = self.executor.run_command(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(self.llvm_dir),
-        )
-
-        if not result.success:
-            raise LLVMBisectError(
-                f"LLVM directory exists but is not a valid git repository: {self.llvm_dir}\n"
-                f"Please remove it and retry: rm -rf {self.llvm_dir}"
-            )
-
-        current_commit = result.stdout.strip()
-        self.logger.info(f"LLVM repo verified at: {self.llvm_dir}")
-        self.logger.info(f"Current LLVM commit: {current_commit[:12]}")
+        except RuntimeError as e:
+            raise LLVMBisectError(str(e)) from e
 
     def _get_next_commit(self, good_llvm: str, bad_llvm: str) -> str:
         """
