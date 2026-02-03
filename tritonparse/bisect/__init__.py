@@ -12,6 +12,7 @@ from tritonparse.bisect.commit_detector import (
     CommitDetectorError,
     LLVMBumpInfo,
 )
+from tritonparse.bisect.env_manager import EnvironmentManager
 from tritonparse.bisect.executor import CommandResult, ShellExecutor
 from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
 from tritonparse.bisect.logger import BisectLogger
@@ -44,6 +45,7 @@ __all__ = [
     "CommitDetector",
     "CommitDetectorError",
     "CommitPair",
+    "EnvironmentManager",
     "is_rich_available",
     "LLVMBisectError",
     "LLVMBisector",
