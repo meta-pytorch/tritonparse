@@ -61,13 +61,9 @@ TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
 # - "clp": Outputs .clp (Compressed Log Processor format)
 # - "none": Outputs .ndjson (plain text)
 # If TRITON_TRACE_COMPRESSION is explicitly set, respect that value;
-# otherwise, default to "gzip" if TRITON_TRACE_LAUNCH is enabled, else "none"
+# otherwise, default to "gzip" for better storage efficiency.
 _compression_env = os.getenv("TRITON_TRACE_COMPRESSION")
-TRITON_TRACE_COMPRESSION = (
-    _compression_env
-    if _compression_env is not None
-    else ("gzip" if TRITON_TRACE_LAUNCH else "none")
-)
+TRITON_TRACE_COMPRESSION = _compression_env if _compression_env is not None else "gzip"
 if TRITON_TRACE_COMPRESSION == "clp":
     from .clp import clp_open
 # Maximum file size for full source extraction (default 10MB)
@@ -1573,6 +1569,7 @@ def init(
     enable_sass_dump: Optional[bool] = False,
     enable_tensor_blob_storage: bool = False,
     tensor_storage_quota: Optional[int] = None,
+    compression: Optional[str] = None,
 ):
     """
     This function is a wrapper around init_basic() that also sets up the compilation listener. Its arguments have higher priority than the environment variables for same settings.
@@ -1585,6 +1582,8 @@ def init(
         enable_sass_dump (Optional[bool]): Whether to enable SASS dumping.
         enable_tensor_blob_storage (bool): Whether to enable tensor blob storage.
         tensor_storage_quota (Optional[int]): Storage quota in bytes for tensor blobs (default: 100GB).
+        compression (Optional[str]): Compression format for trace files ("none", "gzip", or "clp").
+            If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "gzip".
     """
     global TRITON_TRACE_LAUNCH, TRITONPARSE_MORE_TENSOR_INFORMATION
     global TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK, TRITONPARSE_DUMP_SASS
@@ -1595,12 +1594,6 @@ def init(
     if enable_trace_launch:
         TRITON_TRACE_LAUNCH = True
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
-        # Also update TRITON_TRACE_COMPRESSION if it wasn't explicitly set via env var
-        # This handles the case where the user enables launch tracing via Python API
-        # but the compression default was already computed at module load time.
-        # If user set env var to "gzip", "zstd", or "none", respect that choice.
-        if os.getenv("TRITON_TRACE_COMPRESSION") is None:
-            TRITON_TRACE_COMPRESSION = "gzip"
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
     if enable_sass_dump:
@@ -1611,6 +1604,12 @@ def init(
     # Set the quota in global var for TensorBlobManager creation in init_logs()
     if tensor_storage_quota is not None:
         TRITONPARSE_TENSOR_STORAGE_QUOTA = tensor_storage_quota
+
+    # Handle compression setting (follows enable_trace_launch pattern)
+    # Priority: env var > Python API > module default ("gzip")
+    if compression is not None:
+        if os.getenv("TRITON_TRACE_COMPRESSION") is None:
+            TRITON_TRACE_COMPRESSION = compression
 
     init_basic(trace_folder)
     from triton import knobs
