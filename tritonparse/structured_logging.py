@@ -943,7 +943,14 @@ class TritonTraceHandler(logging.StreamHandler):
     It supports creating new files for different compilation events and handles
     proper cleanup of file resources. When running in a distributed environment,
     it automatically adds rank information to filenames.
+
+    The handler automatically detects when torch.distributed becomes initialized
+    and switches to a rank-specific log file to avoid multiple ranks writing to
+    the same file.
     """
+
+    # Sentinel value to distinguish "uninitialized" from "no rank available (None)"
+    _UNINITIALIZED = object()
 
     def __init__(
         self, root_dir: Optional[str] = None, prefix=DEFAULT_TRACE_FILE_PREFIX
@@ -953,9 +960,26 @@ class TritonTraceHandler(logging.StreamHandler):
         self.prefix = prefix
         self.stream = None
         self.first_record = True
+        # Track the rank used when creating the current log file
+        # _UNINITIALIZED means we haven't created a file yet
+        self._last_rank = self._UNINITIALIZED
         # If the program is unexpected terminated, atexit can ensure  file resources are properly closed and released.
         # it is because we use `self.stream` to keep the opened file stream, if the program is interrupted by some errors, the stream may not be closed.
         atexit.register(self._cleanup)
+
+    def _get_current_rank(self) -> Optional[int]:
+        """
+        Get the current distributed rank if available.
+
+        Returns:
+            The rank number if torch.distributed is initialized, None otherwise.
+        """
+        if TORCH_INSTALLED:
+            import torch.distributed as dist
+
+            if dist.is_available() and dist.is_initialized():
+                return dist.get_rank()
+        return None
 
     def get_root_dir(self):
         # For meta internal runs, we use the /logs directory by default
@@ -1006,16 +1030,30 @@ class TritonTraceHandler(logging.StreamHandler):
         # reference implementation
         # https://github.com/pytorch/pytorch/blob/5fe58ab5bd9e14cce3107150a9956a2ed40d2f79/torch/_logging/_internal.py#L1071
         try:
+            # Check if rank status has changed since we created the current log file
+            # This handles the case where torch.distributed is initialized after
+            # some kernel compilations have already been logged
+            current_rank = self._get_current_rank()
+            if (
+                self.stream is not None
+                and self._last_rank is not self._UNINITIALIZED
+                and current_rank != self._last_rank
+            ):
+                log.debug(
+                    "TritonTraceHandler: rank changed from %s to %s, switching log file",
+                    self._last_rank,
+                    current_rank,
+                )
+                self._ensure_stream_closed()
+                self.stream = None
+
             if self.stream is None:
                 root_dir = self.get_root_dir()
                 if root_dir is not None:
                     os.makedirs(root_dir, exist_ok=True)
                     ranksuffix = ""
-                    if TORCH_INSTALLED:
-                        import torch.distributed as dist
-
-                        if dist.is_available() and dist.is_initialized():
-                            ranksuffix = f"rank_{dist.get_rank()}_"
+                    if current_rank is not None:
+                        ranksuffix = f"rank_{current_rank}_"
                     filename = f"{self.prefix}{ranksuffix}"
                     self._ensure_stream_closed()
                     # Choose file extension and mode based on compression setting
@@ -1038,6 +1076,8 @@ class TritonTraceHandler(logging.StreamHandler):
                             log_file_name,
                             mode=file_mode,
                         )
+                    # Update _last_rank after successfully creating the file
+                    self._last_rank = current_rank
                     log.debug("TritonTraceHandler: logging to %s", log_file_name)
                 else:
                     triton_trace_log.removeHandler(self)
