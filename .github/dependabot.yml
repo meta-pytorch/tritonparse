@@ -7,6 +7,9 @@ updates:
       time: "09:00"
       timezone: "America/Los_Angeles"
 
+    commit-message:
+      prefix: "[dependabot]"
+
     # Group all updates into a single PR to reduce "PR bombing"
     groups:
       website-all:
