@@ -254,9 +254,13 @@ def _generate_autotune_analysis_events(
                 # No compilation_analysis: look up config params from compilations_by_hash
                 for ch in per_config_args.keys():
                     if ch in compilations_by_hash:
-                        comp_json_str = compilations_by_hash[ch].get("compilation")
-                        if comp_json_str:
-                            comp_event = json.loads(comp_json_str)
+                        comp_data = compilations_by_hash[ch].get("compilation")
+                        if comp_data:
+                            # Handle both dict and JSON string formats
+                            if isinstance(comp_data, dict):
+                                comp_event = comp_data
+                            else:
+                                comp_event = json.loads(comp_data)
                             meta = comp_event.get("payload", {}).get("metadata", {})
                             config_params = {}
                             for key in (

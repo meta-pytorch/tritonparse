@@ -1,11 +1,11 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import gzip
 import json
 import os
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set, Tuple
 
+from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
 from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
@@ -136,6 +136,104 @@ def process_ir(
     return mapping
 
 
+def _prescan_for_fake_compilations(
+    file_path: str,
+) -> Tuple[Set[str], Dict[str, Dict[str, Any]]]:
+    """
+    Pre-scan a trace file to identify kernels that need fake compilation events.
+
+    This function scans the file once to collect all kernel hashes from compilation
+    and launch events, then identifies which kernels only have launch events without
+    corresponding compilation events.
+
+    Args:
+        file_path: Path to the trace file to scan.
+
+    Returns:
+        Tuple of:
+        - compilation_hashes: Set of kernel hashes that have real compilation events
+        - first_launch_by_hash: Dict mapping kernel_hash to its first launch event
+    """
+    compilation_hashes: Set[str] = set()
+    first_launch_by_hash: Dict[str, Dict[str, Any]] = {}
+
+    with open_compressed_file(file_path) as f:
+        for line in f:
+            json_str = line.strip()
+            if not json_str:
+                continue
+
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = parsed.get("event_type")
+
+            if event_type == "compilation":
+                kernel_hash = parsed.get("payload", {}).get("metadata", {}).get("hash")
+                if kernel_hash:
+                    compilation_hashes.add(kernel_hash)
+
+            elif event_type == "launch":
+                kernel_hash = parsed.get("compilation_metadata", {}).get("hash")
+                if kernel_hash and kernel_hash not in first_launch_by_hash:
+                    # Only store the first launch event for each kernel
+                    first_launch_by_hash[kernel_hash] = parsed
+
+    return compilation_hashes, first_launch_by_hash
+
+
+def _create_fake_compilation(
+    launch_event: Dict[str, Any],
+    kernel_hash: str,
+) -> Dict[str, Any]:
+    """
+    Create a fake compilation event from a launch event.
+
+    This is used to handle cases where only launch events exist without corresponding
+    compilation events (e.g., Triton cache hit scenarios).
+
+    Args:
+        launch_event: The launch event to infer compilation info from.
+        kernel_hash: The unique identifier for the kernel.
+
+    Returns:
+        A synthetic compilation event dictionary.
+    """
+    compilation_metadata = launch_event.get("compilation_metadata", {})
+
+    fake_compilation = {
+        "event_type": "compilation",
+        # Mark this as a fake compilation
+        "is_fake": True,
+        "fake_reason": "No compilation event found; inferred from launch event",
+        # Copy basic info from launch event
+        "pid": launch_event.get("pid"),
+        "timestamp": launch_event.get("timestamp"),
+        "stack": launch_event.get("stack", []),
+        # payload structure must match real compilation events
+        "payload": {
+            "metadata": {
+                "hash": kernel_hash,
+                "name": (launch_event.get("name") or compilation_metadata.get("name")),
+                # Copy available config parameters from compilation_metadata
+                "num_warps": compilation_metadata.get("num_warps"),
+                "num_stages": compilation_metadata.get("num_stages"),
+                "num_ctas": compilation_metadata.get("num_ctas"),
+                "maxnreg": compilation_metadata.get("maxnreg"),
+                "cluster_dims": compilation_metadata.get("cluster_dims"),
+            },
+            # Empty IR content (cannot be recovered)
+            "file_content": {},
+            "file_path": {},
+            # Note: pt_info and python_source are not available
+        },
+    }
+
+    return fake_compilation
+
+
 def parse_single_trace_content(trace_content: str) -> str:
     """
     Process a single trace content and extract source code mappings.
@@ -165,7 +263,8 @@ def parse_single_trace_content(trace_content: str) -> str:
         # Skip if no IR files found
         if not (ttir_key or ttgir_key or ptx_key or amdgcn_key or sass_key):
             logger.warning("No IR files found in the payload.")
-            return trace_content
+            # Still return with proper NDJSON format (with newline)
+            return json.dumps(entry, separators=(",", ":")) + "\n"
 
         # generate ttir->source, ttgir->source, ptx->source, sass->source
         ttir_map = process_ir(ttir_key, file_content, file_path)
@@ -253,6 +352,28 @@ def parse_single_file(
             output files by frame_id, compile_id, attempt_id, and compiled_autograd_id.
             Defaults to True. This rule follows tlparse's behavior.
     """
+    # =====================================================
+    # Pass 1: Pre-scan to identify kernels needing fake compilations
+    # =====================================================
+    compilation_hashes, first_launch_by_hash = _prescan_for_fake_compilations(file_path)
+
+    # Identify kernel hashes that need fake compilations
+    kernels_needing_fake = set(first_launch_by_hash.keys()) - compilation_hashes
+
+    # Create fake compilations
+    fake_compilations: List[Dict[str, Any]] = []
+    for kernel_hash in kernels_needing_fake:
+        launch_event = first_launch_by_hash[kernel_hash]
+        fake_comp = _create_fake_compilation(launch_event, kernel_hash)
+        fake_compilations.append(fake_comp)
+        logger.info(
+            f"[Fake Compilation] Created for kernel_hash={kernel_hash}, "
+            f"name={fake_comp['payload']['metadata'].get('name')}"
+        )
+
+    # =====================================================
+    # Pass 2: Process all events (fake compilations first, then real events)
+    # =====================================================
     kernels_by_hash = defaultdict(
         lambda: {"compilation": None, "launches": [], "output_file": None}
     )
@@ -275,13 +396,36 @@ def parse_single_file(
     # Global occurrence id counter across all outputs
     # Defined outside the with block so it can be used after file processing
     next_occurrence_id: int = 0
-    file_handle = (
-        gzip.open(file_path, "rt", encoding="utf-8")
-        if is_compressed_input
-        else open(file_path, "r")
+
+    # Get file name for output file naming
+    file_name = os.path.basename(file_path)
+    file_name_without_extension = (
+        file_name[:-11] if is_compressed_input else os.path.splitext(file_name)[0]
     )
 
-    with file_handle as f:
+    # Prepare fake compilations (occurrence_id will be assigned AFTER real events)
+    # This ensures fake compilations don't occupy indices that should belong to real events
+    for fake_comp in fake_compilations:
+        kernel_hash = fake_comp["payload"]["metadata"]["hash"]
+
+        # Set output_file (use default file name since pt_info is not available)
+        fname = f"{file_name_without_extension}_mapped.ndjson"
+        output_file = os.path.join(output_dir, fname)
+
+        # Store in kernels_by_hash (without occurrence_id for now)
+        kernels_by_hash[kernel_hash]["compilation"] = fake_comp
+        kernels_by_hash[kernel_hash]["output_file"] = output_file
+
+        # Process autotune session (same as real compilation)
+        stack = fake_comp.get("stack", [])
+        session_id, user_stack = get_autotune_session_id(stack)
+        if session_id:
+            autotune_sessions[session_id]["compilations"].append(fake_comp)
+            if user_stack and session_id not in session_stacks:
+                session_stacks[session_id] = user_stack
+
+    # Now process real events from file
+    with open_compressed_file(file_path) as f:
         file_name = os.path.basename(file_path)
         file_name_without_extension = (
             file_name[:-11] if is_compressed_input else os.path.splitext(file_name)[0]
@@ -337,9 +481,8 @@ def parse_single_file(
                 # Assign a global occurrence_id to this compilation event
                 parsed_json["occurrence_id"] = next_occurrence_id
                 next_occurrence_id += 1
-                kernels_by_hash[kernel_hash]["compilation"] = json.dumps(
-                    parsed_json, separators=(",", ":")
-                )
+                # Store as dict (not JSON string) for consistent handling
+                kernels_by_hash[kernel_hash]["compilation"] = parsed_json
                 kernels_by_hash[kernel_hash]["output_file"] = output_file
 
             elif event_type == "launch":
@@ -409,7 +552,7 @@ def parse_single_file(
     # Organize lines for final output, keyed by output file path
     all_output_lines = defaultdict(list)
     for _kernel_hash, data in kernels_by_hash.items():
-        compilation_json_str = data["compilation"]
+        compilation_data = data["compilation"]
         launches_with_indices = data["launches"]
         output_file = data["output_file"]
 
@@ -418,7 +561,15 @@ def parse_single_file(
             continue
 
         # Process the compilation event now to include source mappings
-        if compilation_json_str:
+        if compilation_data:
+            # Check if this is a fake compilation using the is_fake field
+            if compilation_data.get("is_fake"):
+                # Fake compilation: assign occurrence_id now (after all real events)
+                compilation_data["occurrence_id"] = next_occurrence_id
+                next_occurrence_id += 1
+
+            compilation_json_str = json.dumps(compilation_data, separators=(",", ":"))
+
             processed_compilation_line = parse_single_trace_content(
                 compilation_json_str
             )
