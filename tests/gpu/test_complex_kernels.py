@@ -195,14 +195,21 @@ class TestComplexKernels(GPUTestBase):
             )
             return output
 
-        # Set up test environment
-        parsed_output_path = tempfile.mkdtemp()
-        print(f"Parsed output directory: {parsed_output_path}")
+        # Set up test environment with separate directories for logs and parsed output
+        temp_dir = tempfile.mkdtemp()
+        temp_dir_logs = os.path.join(temp_dir, "logs")
+        temp_dir_parsed = os.path.join(temp_dir, "parsed_output")
+        os.makedirs(temp_dir_logs, exist_ok=True)
+        os.makedirs(temp_dir_parsed, exist_ok=True)
+        print(f"Temporary directory: {temp_dir}")
+        print(f"  - Logs directory: {temp_dir_logs}")
+        print(f"  - Parsed output directory: {temp_dir_parsed}")
 
-        # Use TritonParseManager context manager for proper logging setup
+        # Use TritonParseManager context manager with log_dir to preserve raw logs
         with tritonparse.context_manager.TritonParseManager(
             enable_trace_launch=True,
-            out=parsed_output_path,
+            log_dir=temp_dir_logs,
+            out=temp_dir_parsed,
         ):
             # Main test function logic
             torch.manual_seed(0)
@@ -264,19 +271,24 @@ class TestComplexKernels(GPUTestBase):
 
             torch.cuda.synchronize()
 
-        # After exiting context manager, parsed output should be available
-        # Verify that parsed output was generated
-        parsed_files = os.listdir(parsed_output_path)
-        assert len(parsed_files) > 0, f"No parsed files found in {parsed_output_path}"
-        print(f"✓ Generated {len(parsed_files)} parsed files")
+        # After exiting context manager, both logs and parsed output should be available
+        # Verify that raw logs were generated
+        log_files = os.listdir(temp_dir_logs)
+        assert len(log_files) > 0, f"No log files found in {temp_dir_logs}"
+        print(f"✓ Generated {len(log_files)} raw log files in {temp_dir_logs}")
 
-        # Verify we have both json and ndjson.gz files
+        # Verify that parsed output was generated
+        parsed_files = os.listdir(temp_dir_parsed)
+        assert len(parsed_files) > 0, f"No parsed files found in {temp_dir_parsed}"
+        print(f"✓ Generated {len(parsed_files)} parsed files in {temp_dir_parsed}")
+
+        # Verify we have both json and ndjson.gz files in parsed output
         json_files = [f for f in parsed_files if f.endswith(".json")]
         ndjson_gz_files = [f for f in parsed_files if f.endswith(".ndjson.gz")]
 
-        assert len(json_files) > 0, f"No .json files found in {parsed_output_path}"
+        assert len(json_files) > 0, f"No .json files found in {temp_dir_parsed}"
         assert len(ndjson_gz_files) > 0, (
-            f"No .ndjson.gz files found in {parsed_output_path}"
+            f"No .ndjson.gz files found in {temp_dir_parsed}"
         )
         print(
             f"✓ Found {len(json_files)} .json files and {len(ndjson_gz_files)} .ndjson.gz files"
@@ -284,7 +296,7 @@ class TestComplexKernels(GPUTestBase):
 
         # Unzip and check launch_diff events in the .ndjson.gz file
         for ndjson_gz_file in ndjson_gz_files:
-            ndjson_gz_path = os.path.join(parsed_output_path, ndjson_gz_file)
+            ndjson_gz_path = os.path.join(temp_dir_parsed, ndjson_gz_file)
             launch_diff_count = 0
 
             print(f"Checking launch_diff events in {ndjson_gz_file}")
@@ -311,12 +323,12 @@ class TestComplexKernels(GPUTestBase):
 
         # Clean up
         if TEST_KEEP_OUTPUT:
-            print(
-                f"✓ Preserving parsed output directory (TEST_KEEP_OUTPUT=1): {parsed_output_path}"
-            )
+            print(f"✓ Preserving temporary directory (TEST_KEEP_OUTPUT=1): {temp_dir}")
+            print(f"  - Raw logs: {temp_dir_logs}")
+            print(f"  - Parsed output: {temp_dir_parsed}")
         else:
-            shutil.rmtree(parsed_output_path)
-            print("✓ Cleaned up parsed output directory")
+            shutil.rmtree(temp_dir)
+            print("✓ Cleaned up temporary directory")
 
 
 if __name__ == "__main__":
