@@ -15,6 +15,8 @@ import importlib.resources
 from pathlib import Path
 from typing import Optional
 
+from tritonparse.reproducer.utils import TRITON_COMPILE_PARAMS
+
 
 def _read_source_from_package(package: str, resource: str) -> str:
     """
@@ -391,8 +393,6 @@ def _is_triton_config_call(node: ast.Call) -> bool:
 # user-defined kernel config parameters.
 # Reference: triton.Config class in triton/runtime/autotuner.py
 # https://github.com/triton-lang/triton/blob/main/python/triton/runtime/autotuner.py
-from tritonparse.reproducer.utils import TRITON_COMPILE_PARAMS
-
 _TRITON_CONFIG_KWARGS = set(TRITON_COMPILE_PARAMS) | {
     "pre_hook",
     # Warp specialization parameters that may appear in some Triton versions
