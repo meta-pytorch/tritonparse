@@ -330,7 +330,9 @@ def parse_logs(
         if not os.path.isfile(path):
             continue
         # Check if this is a tritonparse log file
-        if not item.startswith(LOG_PREFIX):
+        # Use 'in' instead of 'startswith' to support lg's --store-by-source format
+        # which produces filenames like: log.source.dedicated_log_triton_trace_xxx_.ndjson
+        if LOG_PREFIX not in item:
             continue
 
         # Check if the log has a rank in its name
