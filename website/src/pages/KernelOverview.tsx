@@ -473,6 +473,14 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
           <div className="mb-6">
             <h3 className="text-lg font-medium mb-3 text-gray-800">
               Compilation Metadata
+              {kernel.isFake && (
+                <span
+                  className="ml-2 px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded border border-yellow-300"
+                  title={kernel.fakeReason || "No compilation event found; inferred from launch event"}
+                >
+                  ⚠️ Inferred from Launch
+                </span>
+              )}
             </h3>
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
               {/* Short fields in responsive grid */}
@@ -801,6 +809,14 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
         <div className="mb-4">
           <h3 className="text-lg font-medium mb-2 text-gray-800">
             Compilation Stack Trace
+            {kernel.isFake && (
+              <span
+                className="ml-2 px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded border border-yellow-300"
+                title={kernel.fakeReason || "No compilation event found; inferred from launch event"}
+              >
+                ⚠️ Inferred from Launch
+              </span>
+            )}
           </h3>
           <div className="bg-gray-50 p-3 rounded-md border border-gray-200 overflow-auto resize-y h-80 min-h-24">
             {kernel.stack.map((entry, index) => (
