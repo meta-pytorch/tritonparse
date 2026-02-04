@@ -260,6 +260,9 @@ export interface LogEntry {
     pid?: number;
     stack?: StackEntry[];
     timestamp?: string; // Format: "2025-03-25T13:22:04.%fZ"
+    // Fields for fake compilation events (inferred from launch events)
+    is_fake?: boolean;
+    fake_reason?: string;
     payload?: {
         metadata?: KernelMetadata;
         file_path?: Record<string, string>; // Mapping from filename to filepath
@@ -331,6 +334,9 @@ export interface ProcessedKernel {
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
     autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
     winnerRunCount?: number; // Number of times this kernel was run as the autotuning winner
+    // Fields for fake compilation events (inferred from launch events when no real compilation exists)
+    isFake?: boolean;
+    fakeReason?: string;
 }
 
 /**
@@ -564,6 +570,9 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                     nameParts.length > 1
                         ? nameParts.slice(0, -1).join(".")
                         : fileName;
+            } else if (entry.payload.metadata?.name) {
+                // Fallback to metadata.name for fake compilations (no IR files)
+                kernelName = entry.payload.metadata.name;
             }
 
             const sourceMappings = entry.payload.source_mappings || {};
@@ -580,6 +589,9 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 sourceMappings,
                 pythonSourceInfo: entry.payload.python_source,
                 metadata: entry.payload.metadata,
+                // Fake compilation fields
+                isFake: entry.is_fake,
+                fakeReason: entry.fake_reason,
             };
             kernelsByHash.set(hash, newKernel);
         }
