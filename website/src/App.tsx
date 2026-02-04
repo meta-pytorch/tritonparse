@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import "./App.css";
 import {
   loadLogData,
@@ -6,7 +6,9 @@ import {
   ProcessedKernel,
   processKernelData,
   getIRType,
+  processArrayBuffer,
 } from "./utils/dataLoader";
+import { useIframeMessaging } from "./hooks/useIframeMessaging";
 import CodeView from "./pages/CodeView";
 import FileDiffView from "./pages/FileDiffView";
 import SingleCodeViewer from "./components/SingleCodeViewer";
@@ -45,6 +47,43 @@ function App() {
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   // Track if URL input is shown
   const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
+
+  /**
+   * Handler for ArrayBuffer data received from parent iframe
+   * Processes the data and updates the kernel state
+   */
+  const handleIframeData = useCallback(async (data: ArrayBuffer) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Process the ArrayBuffer data
+      const logEntries = await processArrayBuffer(data);
+      const processedKernels = processKernelData(logEntries);
+
+      if (processedKernels.length > 0) {
+        setKernels(processedKernels);
+        setSelectedKernel(0);
+        setDataLoaded(true);
+        setShowWelcome(false); // Hide welcome screen when data is loaded
+        setLoadedUrl(null); // Data came from iframe, not URL
+      } else {
+        setError("No kernels found in the received data.");
+      }
+    } catch (err) {
+      console.error("Error processing iframe data:", err);
+      setError(`Failed to process data: ${err instanceof Error ? err.message : String(err)}`);
+      throw err; // Re-throw so iframe messaging can send ERROR response
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Set up iframe messaging for communication with parent window
+  useIframeMessaging({
+    onDataReceived: handleIframeData,
+    debug: false,
+  });
 
   /**
    * Helper function to find a kernel by its hash

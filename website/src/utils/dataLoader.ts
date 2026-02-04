@@ -443,7 +443,7 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
  * @param buffer - ArrayBuffer containing the data
  * @returns Promise resolving to an array of LogEntry objects
  */
-async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[]> {
+export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[]> {
     // Check if file is gzip compressed
     if (isGzipFile(buffer)) {
         try {
