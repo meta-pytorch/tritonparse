@@ -148,6 +148,15 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         help="Path to state file (for --resume or --status)",
     )
 
+    # Auto-setup argument (for --llvm-only mode)
+    parser.add_argument(
+        "--auto-env-setup",
+        action="store_true",
+        help="Automatically set up environment before running bisect. "
+        "Clones/updates Triton and LLVM repos at --triton-dir, creates conda env. "
+        "Use with --llvm-only.",
+    )
+
     # TUI control
     parser.add_argument(
         "--tui",
@@ -975,6 +984,9 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
     It's useful when you already know the Triton commit to use and want to
     find the culprit LLVM commit directly.
 
+    When --auto-env-setup is provided, first sets up the environment
+    (clones repos, creates conda env) before running bisect.
+
     Args:
         args: Parsed arguments including triton_dir, test_script,
               triton_commit (optional), good_llvm, bad_llvm, etc.
@@ -982,6 +994,8 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
     Returns:
         0 on success, 1 on failure.
     """
+    from pathlib import Path
+
     from .llvm_bisector import LLVMBisectError, LLVMBisector
     from .ui import BisectUI, print_final_summary, SummaryMode
 
@@ -992,6 +1006,10 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
     culprit = None
     error_msg = None
     logger = None
+
+    # Determine total phases based on --auto-env-setup
+    auto_env_setup = getattr(args, "auto_env_setup", False)
+    total_phases = 2 if auto_env_setup else 1
 
     # Use context manager to start/stop TUI - entire workflow inside
     with ui:
@@ -1005,11 +1023,28 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
             ui.append_output(ui.get_tui_status_message())
 
-            # Set initial progress: LLVM only mode has 1 phase
+            # Handle --auto-env-setup: set up environment before bisect
+            if auto_env_setup:
+                from .env_manager import EnvironmentManager
+
+                ui.update_progress(
+                    phase="Environment Setup",
+                    phase_number=1,
+                    total_phases=total_phases,
+                    log_dir=str(logger.log_dir),
+                    log_file=logger.module_log_path.name,
+                    command_log=logger.command_log_path.name,
+                )
+
+                triton_dir = Path(args.triton_dir).expanduser()
+                env_manager = EnvironmentManager(triton_dir, logger)
+                env_manager.ensure_environment(args.conda_env)
+
+            # Set progress for LLVM bisect phase
             ui.update_progress(
                 phase="LLVM Bisect",
-                phase_number=1,
-                total_phases=1,
+                phase_number=2 if auto_env_setup else 1,
+                total_phases=total_phases,
                 log_dir=str(logger.log_dir),
                 log_file=logger.module_log_path.name,
                 command_log=logger.command_log_path.name,
@@ -1017,7 +1052,7 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
 
             # Create bisector (its logs will go to TUI)
             bisector = LLVMBisector(
-                triton_dir=args.triton_dir,
+                triton_dir=str(Path(args.triton_dir).expanduser()),
                 test_script=args.test_script,
                 conda_env=args.conda_env,
                 logger=logger,
