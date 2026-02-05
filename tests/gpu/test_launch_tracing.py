@@ -8,6 +8,7 @@ Test cases:
 1. No additional flag - only compilation events collected
 2. Enable trace launch - all launch events collected
 3. Profile-aware launch tracing - only launch events during RECORD phase (transparent)
+4. Both flags set - enable_trace_launch takes priority (traces all launches)
 """
 
 import glob
@@ -16,11 +17,12 @@ import os
 import shutil
 import tempfile
 import unittest
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
+from torch.profiler import ProfilerActivity
 from tritonparse.structured_logging import init
 from tritonparse.tools.compression import iter_lines
 
@@ -54,6 +56,52 @@ def run_kernel(block_size: int = 256) -> None:
     grid = lambda meta: (triton.cdiv(size, meta["BLOCK_SIZE"]),)  # noqa: E731
     add_kernel[grid](x, y, output, size, BLOCK_SIZE=block_size)
     torch.cuda.synchronize()
+
+
+def run_training_loop(
+    block_size: int,
+    num_steps: int,
+    wait: Optional[int] = None,
+    warmup: Optional[int] = None,
+    active: Optional[int] = None,
+    repeat: int = 1,
+) -> int:
+    """
+    Run a training loop with optional torch.profiler integration.
+
+    Args:
+        block_size: Block size for the triton kernel (use unique values per test)
+        num_steps: Total number of kernel launches to execute
+        wait: Profiler schedule wait steps (None to disable profiler)
+        warmup: Profiler schedule warmup steps
+        active: Profiler schedule active/record steps
+        repeat: Profiler schedule repeat count
+
+    Returns:
+        Total number of steps executed
+    """
+    use_profiler = wait is not None and warmup is not None and active is not None
+
+    if use_profiler:
+        schedule = torch.profiler.schedule(
+            wait=wait,
+            warmup=warmup,
+            active=active,
+            repeat=repeat,
+        )
+
+        with torch.profiler.profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=schedule,
+        ) as prof:
+            for _ in range(num_steps):
+                run_kernel(block_size=block_size)
+                prof.step()
+    else:
+        for _ in range(num_steps):
+            run_kernel(block_size=block_size)
+
+    return num_steps
 
 
 def count_events(trace_folder: str) -> Tuple[int, int]:
@@ -136,17 +184,13 @@ class TestTritonparseLaunchTracing(unittest.TestCase):
         With just init(), only compilation events should be logged.
         Launch events should NOT be collected.
         """
-
         init(self.trace_folder)
 
-        # Run kernel multiple times (use block_size=256 for this test)
         num_launches = 5
-        for _ in range(num_launches):
-            run_kernel(block_size=256)
+        run_training_loop(block_size=256, num_steps=num_launches)
 
         compilation_count, launch_count = count_events(self.trace_folder)
 
-        # Should have at least 1 compilation event
         self.assertGreaterEqual(
             compilation_count, 1, "Should have at least 1 compilation event"
         )
@@ -158,25 +202,20 @@ class TestTritonparseLaunchTracing(unittest.TestCase):
 
         With init(enable_trace_launch=True), ALL launch events should be logged.
         """
-
         init(self.trace_folder, enable_trace_launch=True)
 
-        # Run kernel multiple times (use block_size=512 for this test)
         num_launches = 5
-        for _ in range(num_launches):
-            run_kernel(block_size=512)
+        run_training_loop(block_size=512, num_steps=num_launches)
 
         compilation_count, launch_count = count_events(self.trace_folder)
 
-        # Should have at least 1 compilation event
         self.assertGreaterEqual(
             compilation_count, 1, "Should have at least 1 compilation event"
         )
-        # Should have launch events matching number of launches
         self.assertEqual(
             launch_count,
             num_launches,
-            f"Expected {num_launches} launch events, got {launch_count}",
+            f"Expected {num_launches} launch events (ALL launches)",
         )
 
     def test_case3_profile_aware_launch_tracing(self) -> None:
@@ -187,48 +226,64 @@ class TestTritonparseLaunchTracing(unittest.TestCase):
         is automatically patched to enable launch tracing during RECORD phase.
         This is transparent to users - no code changes needed.
         """
-        from torch.profiler import ProfilerActivity
-
-        # Initialize tritonparse with enable_trace_launch_within_profiling=True
-        # This patches torch.profiler.schedule automatically
         init(self.trace_folder, enable_trace_launch_within_profiling=True)
 
-        num_none_launches = 2
-        num_warmup_launches = 1
-        num_record_launches = 5
-        num_extra_launches = 1
-        total_steps = num_none_launches + num_warmup_launches + num_record_launches
+        wait, warmup, active, repeat = 2, 1, 5, 1
+        total_steps = wait + warmup + active
 
-        # User just uses regular torch.profiler.schedule - no wrapping needed
-        schedule = torch.profiler.schedule(
-            wait=num_none_launches,
-            warmup=num_warmup_launches,
-            active=num_record_launches,
-            repeat=num_extra_launches,
+        run_training_loop(
+            block_size=128,
+            num_steps=total_steps,
+            wait=wait,
+            warmup=warmup,
+            active=active,
+            repeat=repeat,
         )
-
-        with torch.profiler.profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=schedule,
-        ) as prof:
-            for _ in range(total_steps):
-                run_kernel(block_size=128)  # Use block_size=128 for this test
-                prof.step()
 
         compilation_count, launch_count = count_events(self.trace_folder)
 
-        # Should have at least 1 compilation event
         self.assertGreaterEqual(
             compilation_count, 1, "Should have at least 1 compilation event"
         )
-        # Should only have launch events from RECORD phase
+        self.assertEqual(
+            launch_count, active, f"Expected {active} launch events (RECORD phase only)"
+        )
+
+    def test_case4_both_flags_trace_launch_takes_priority(self) -> None:
+        """
+        Case 4: Both flags set - enable_trace_launch takes priority.
+
+        When both enable_trace_launch=True and enable_trace_launch_within_profiling=True
+        are set, enable_trace_launch takes priority and ALL launches are traced
+        (not just during RECORD phase).
+        """
+        init(
+            self.trace_folder,
+            enable_trace_launch=True,
+            enable_trace_launch_within_profiling=True,
+        )
+
+        wait, warmup, active, repeat = 2, 1, 3, 1
+        total_steps = wait + warmup + active
+
+        run_training_loop(
+            block_size=64,
+            num_steps=total_steps,
+            wait=wait,
+            warmup=warmup,
+            active=active,
+            repeat=repeat,
+        )
+
+        compilation_count, launch_count = count_events(self.trace_folder)
+
+        self.assertGreaterEqual(
+            compilation_count, 1, "Should have at least 1 compilation event"
+        )
         self.assertEqual(
             launch_count,
-            num_record_launches,
-            f"Expected {num_record_launches} launch events (RECORD phase only), "
-            f"got {launch_count}. "
-            f"NONE={num_none_launches}, WARMUP={num_warmup_launches}, "
-            f"RECORD={num_record_launches}, EXTRA={num_extra_launches}",
+            total_steps,
+            f"Expected {total_steps} launch events (ALL launches, enable_trace_launch priority)",
         )
 
 

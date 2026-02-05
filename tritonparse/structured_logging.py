@@ -1565,13 +1565,21 @@ def maybe_enable_trace_launch():
     """
     Enable launch tracing based on configured flags.
 
-    - TRITON_TRACE_LAUNCH: Enable tracing for ALL kernel launches
+    - TRITON_TRACE_LAUNCH: Enable tracing for ALL kernel launches (high priority)
     - TRITON_TRACE_LAUNCH_WITHIN_PROFILING: Enable tracing only during
       torch.profiler's RECORD phase (patches torch.profiler.schedule)
+
+    These flags are mutually exclusive. TRITON_TRACE_LAUNCH takes priority
+    and will override TRITON_TRACE_LAUNCH_WITHIN_PROFILING if both are set.
     """
     if TRITON_TRACE_LAUNCH:
+        if TRITON_TRACE_LAUNCH_WITHIN_PROFILING:
+            log.warning(
+                "[tritonparse] Both TRITON_TRACE_LAUNCH and TRITON_TRACE_LAUNCH_WITHIN_PROFILING are set. "
+                "TRITON_TRACE_LAUNCH takes priority - tracing ALL launches."
+            )
         enable_launch_tracing()
-    if TRITON_TRACE_LAUNCH_WITHIN_PROFILING:
+    elif TRITON_TRACE_LAUNCH_WITHIN_PROFILING:
         patch_profiler_schedule()
 
 
@@ -1664,6 +1672,11 @@ def init(
         enable_trace_launch (bool): Whether to enable the trace launch hook for ALL launches.
         enable_trace_launch_within_profiling (bool): Whether to enable launch tracing only
             during torch.profiler's RECORD phase. This patches torch.profiler.schedule.
+
+        Note: enable_trace_launch and enable_trace_launch_within_profiling are mutually
+        exclusive. If both are set, enable_trace_launch takes priority and ALL launches
+        will be traced.
+
         enable_more_tensor_information (bool): Whether to enable more tensor information logging.
             It only works when enable_trace_launch/TRITON_TRACE_LAUNCH is True.
         enable_sass_dump (Optional[bool]): Whether to enable SASS dumping.
@@ -1679,10 +1692,17 @@ def init(
     global TRITON_TRACE_COMPRESSION
 
     # Set global flags BEFORE calling init_basic, so init_logs() can see them
+    # TRITON_TRACE_LAUNCH and TRITON_TRACE_LAUNCH_WITHIN_PROFILING are mutually exclusive.
+    # TRITON_TRACE_LAUNCH has higher priority.
     if enable_trace_launch:
         TRITON_TRACE_LAUNCH = True
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
-    if enable_trace_launch_within_profiling:
+        if enable_trace_launch_within_profiling:
+            log.warning(
+                "[tritonparse] Both enable_trace_launch and enable_trace_launch_within_profiling are set. "
+                "enable_trace_launch takes priority - tracing ALL launches."
+            )
+    elif enable_trace_launch_within_profiling:
         TRITON_TRACE_LAUNCH_WITHIN_PROFILING = True
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
     if enable_more_tensor_information:
