@@ -43,6 +43,11 @@ TRITONPARSE_KERNEL_ALLOWLIST = os.environ.get("TRITONPARSE_KERNEL_ALLOWLIST", No
 _KERNEL_ALLOWLIST_PATTERNS: Optional[List[str]] = None
 # Enable launch trace. WARNNING: it will overwrite launch_metadata function for each triton kernel.
 TRITON_TRACE_LAUNCH = os.getenv("TRITON_TRACE_LAUNCH", None) in ["1", "true", "True"]
+# Enable launch tracing only during torch.profiler's RECORD phase.
+# When set, torch.profiler.schedule is monkey patched to toggle launch tracing.
+TRITON_TRACE_LAUNCH_WITHIN_PROFILING = os.getenv(
+    "TRITON_TRACE_LAUNCH_WITHIN_PROFILING", None
+) in ["1", "true", "True"]
 # Enable more tensor information collection in trace logs.
 TRITONPARSE_MORE_TENSOR_INFORMATION = os.getenv(
     "TRITONPARSE_MORE_TENSOR_INFORMATION", None
@@ -1557,16 +1562,55 @@ class LaunchHookImpl(LaunchHook):
 
 
 def maybe_enable_trace_launch():
+    """
+    Enable launch tracing based on configured flags.
+
+    - TRITON_TRACE_LAUNCH: Enable tracing for ALL kernel launches
+    - TRITON_TRACE_LAUNCH_WITHIN_PROFILING: Enable tracing only during
+      torch.profiler's RECORD phase (patches torch.profiler.schedule)
+    """
+    if TRITON_TRACE_LAUNCH:
+        enable_launch_tracing()
+    if TRITON_TRACE_LAUNCH_WITHIN_PROFILING:
+        patch_profiler_schedule()
+
+
+def enable_launch_tracing() -> None:
+    """
+    Enable launch event tracing.
+    """
+
     global _trace_launch_enabled
-    if TRITON_TRACE_LAUNCH and not _trace_launch_enabled:
-        from triton import knobs
+    if _trace_launch_enabled:
+        return
 
-        launch_hook = LaunchHookImpl()
-        jit_hook = JITHookImpl()
-        knobs.runtime.jit_post_compile_hook = jit_hook
-        knobs.runtime.launch_enter_hook = launch_hook
+    from triton import knobs
 
-        _trace_launch_enabled = True
+    launch_hook = LaunchHookImpl()
+    jit_hook = JITHookImpl()
+    knobs.runtime.jit_post_compile_hook = jit_hook
+    knobs.runtime.launch_enter_hook = launch_hook
+
+    _trace_launch_enabled = True
+
+    log.debug("[tritonparse] Launch tracing enabled")
+
+
+def disable_launch_tracing() -> None:
+    """
+    Disable launch event tracing.
+    """
+    global _trace_launch_enabled
+    if not _trace_launch_enabled:
+        return
+
+    from triton import knobs
+
+    knobs.runtime.jit_post_compile_hook = None
+    knobs.runtime.launch_enter_hook = None
+
+    _trace_launch_enabled = False
+    log.debug("[tritonparse] Launch tracing disabled")
 
 
 def init_basic(trace_folder: Optional[str] = None):
@@ -1605,6 +1649,7 @@ def init_basic(trace_folder: Optional[str] = None):
 def init(
     trace_folder: Optional[str] = None,
     enable_trace_launch: bool = False,
+    enable_trace_launch_within_profiling: bool = False,
     enable_more_tensor_information: bool = False,
     enable_sass_dump: Optional[bool] = False,
     enable_tensor_blob_storage: bool = False,
@@ -1616,7 +1661,9 @@ def init(
 
     Args:
         trace_folder (Optional[str]): The folder to store the trace files.
-        enable_trace_launch (bool): Whether to enable the trace launch hook.
+        enable_trace_launch (bool): Whether to enable the trace launch hook for ALL launches.
+        enable_trace_launch_within_profiling (bool): Whether to enable launch tracing only
+            during torch.profiler's RECORD phase. This patches torch.profiler.schedule.
         enable_more_tensor_information (bool): Whether to enable more tensor information logging.
             It only works when enable_trace_launch/TRITON_TRACE_LAUNCH is True.
         enable_sass_dump (Optional[bool]): Whether to enable SASS dumping.
@@ -1625,7 +1672,8 @@ def init(
         compression (Optional[str]): Compression format for trace files ("none", "gzip", or "clp").
             If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "gzip".
     """
-    global TRITON_TRACE_LAUNCH, TRITONPARSE_MORE_TENSOR_INFORMATION
+    global TRITON_TRACE_LAUNCH, TRITON_TRACE_LAUNCH_WITHIN_PROFILING
+    global TRITONPARSE_MORE_TENSOR_INFORMATION
     global TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK, TRITONPARSE_DUMP_SASS
     global TRITONPARSE_SAVE_TENSOR_BLOBS, TRITONPARSE_TENSOR_STORAGE_QUOTA
     global TRITON_TRACE_COMPRESSION
@@ -1633,6 +1681,9 @@ def init(
     # Set global flags BEFORE calling init_basic, so init_logs() can see them
     if enable_trace_launch:
         TRITON_TRACE_LAUNCH = True
+        TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
+    if enable_trace_launch_within_profiling:
+        TRITON_TRACE_LAUNCH_WITHIN_PROFILING = True
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
@@ -1702,3 +1753,95 @@ def clear_logging_config():
     knobs.compilation.listener = None
     knobs.runtime.jit_post_compile_hook = None
     knobs.runtime.launch_enter_hook = None
+
+    # 5. Unpatch torch.profiler.schedule if patched
+    unpatch_profiler_schedule()
+
+
+def _wrap_schedule_with_launch_tracing(schedule_fn):
+    """
+    Wrap a torch.profiler schedule to enable launch tracing during RECORD phase.
+
+    This is an internal helper used by patch_profiler_schedule().
+    """
+    from torch.profiler import ProfilerAction
+
+    prev_action = [None]  # Use list to allow mutation in closure
+
+    def wrapped_schedule(step: int) -> ProfilerAction:
+        action = schedule_fn(step)
+
+        # Check for phase transitions
+        is_record = action in (ProfilerAction.RECORD, ProfilerAction.RECORD_AND_SAVE)
+        was_record = prev_action[0] in (
+            ProfilerAction.RECORD,
+            ProfilerAction.RECORD_AND_SAVE,
+        )
+
+        if is_record and not was_record:
+            # Entering RECORD phase
+            log.debug(
+                f"[tritonparse] Step {step}: entering RECORD phase, enabling launch tracing"
+            )
+            enable_launch_tracing()
+        elif was_record and not is_record:
+            # Leaving RECORD phase
+            log.debug(
+                f"[tritonparse] Step {step}: leaving RECORD phase, disabling launch tracing"
+            )
+            disable_launch_tracing()
+
+        prev_action[0] = action
+        return action
+
+    return wrapped_schedule
+
+
+# Store original torch.profiler.schedule for restoration
+_original_profiler_schedule = None
+_profiler_schedule_patched = False
+
+
+def patch_profiler_schedule() -> None:
+    """
+    Monkey patch torch.profiler.schedule to automatically enable launch tracing.
+
+    After calling this, any torch.profiler.profile() using a schedule will
+    automatically enable launch tracing during RECORD phase.
+
+    This is called automatically by init_basic() when TRITON_TRACE_LAUNCH_WITHIN_PROFILING
+    is set, making launch tracing transparent to users.
+    """
+    global _original_profiler_schedule, _profiler_schedule_patched
+
+    if _profiler_schedule_patched:
+        return
+
+    import torch.profiler
+
+    _original_profiler_schedule = torch.profiler.schedule
+
+    def patched_schedule(*args, **kwargs):
+        original_schedule_fn = _original_profiler_schedule(*args, **kwargs)
+        return _wrap_schedule_with_launch_tracing(original_schedule_fn)
+
+    torch.profiler.schedule = patched_schedule
+    _profiler_schedule_patched = True
+    log.debug("[tritonparse] Patched torch.profiler.schedule for launch tracing")
+
+
+def unpatch_profiler_schedule() -> None:
+    """Restore original torch.profiler.schedule."""
+    global _original_profiler_schedule, _profiler_schedule_patched
+
+    if not _profiler_schedule_patched:
+        return
+
+    import torch.profiler
+
+    if _original_profiler_schedule is not None:
+        torch.profiler.schedule = _original_profiler_schedule
+        _original_profiler_schedule = None
+
+    _profiler_schedule_patched = False
+    log.debug("[tritonparse] Restored original torch.profiler.schedule")
