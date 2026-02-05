@@ -30,12 +30,15 @@ else:
 class Rank:
     """Class representing a rank in distributed training."""
 
+    NO_RANK = -1  # Special value representing no rank (before torch.distributed init)
+
     def __init__(self, rank_value: Optional[int] = None):
         """
         Initialize a Rank object.
 
         Args:
-            rank_value: Specific rank value, or None for default rank
+            rank_value: Specific rank value, or None for default rank.
+                       Use Rank.NO_RANK (-1) for files without rank suffix.
         """
         if rank_value is not None:
             self.value = rank_value
@@ -44,19 +47,51 @@ class Rank:
             self.value = 0
             self.is_default = True
 
+    @property
+    def is_no_rank(self) -> bool:
+        """Check if this represents a no-rank file (before torch.distributed init)."""
+        return self.value == self.NO_RANK
+
     def to_string(self, prefix: str = "", suffix: str = "") -> str:
         """
-        Convert rank to string representation with optional prefix.
+        Convert rank to user-friendly string representation.
+
+        Used for:
+        - Output directory names: rank_0, rank_1, rank_none
+        - CLI parameter display
+        - Log output
+
+        Note: Do NOT use this for building lg filenames. Use to_file_suffix() instead.
 
         Args:
             prefix: Prefix to add before rank string
+            suffix: Suffix to add after rank string
 
         Returns:
             String representation of the rank
         """
         if self.is_default:
             return ""
+        if self.is_no_rank:
+            return f"{prefix}rank_none{suffix}"
         return f"{prefix}rank_{self.value}{suffix}"
+
+    def to_file_suffix(self) -> str:
+        """
+        Return the rank suffix for lg filenames.
+
+        File naming conventions:
+        - With rank: dedicated_log_triton_trace_{USER}_rank_{N}_.ndjson.gz
+        - Without rank: dedicated_log_triton_trace_{USER}_.ndjson.gz
+
+        Returns:
+            "_rank_{N}_" for specific rank, "" for no-rank files
+        """
+        if self.is_no_rank:
+            return ""  # No rank files don't have this suffix
+        if self.is_default:
+            return "_rank_0_"
+        return f"_rank_{self.value}_"
 
     def to_int(self) -> int:
         """
@@ -75,19 +110,21 @@ class RankConfig:
         self,
         rank: Optional[Rank] = None,
         all_ranks: bool = False,
-        is_local: bool = False,
     ):
         """
         Initialize a RankConfig object.
 
         Args:
-            rank: Specific rank to process
-            all_ranks: Whether to process all ranks
-            is_local: Whether processing local logs
+            rank: Specific rank to process (use Rank(Rank.NO_RANK) for no-rank files)
+            all_ranks: Whether to process all ranks (includes no-rank files)
         """
         self.rank = rank
         self.all_ranks = all_ranks
-        self.is_local = is_local
+
+    @property
+    def is_no_rank(self) -> bool:
+        """Check if this config is for processing no-rank files only."""
+        return self.rank is not None and self.rank.is_no_rank
 
     @classmethod
     def from_cli_args(
@@ -97,7 +134,7 @@ class RankConfig:
         Create a RankConfig from command line arguments.
 
         Args:
-            rank: Specific rank value from CLI
+            rank: Specific rank value from CLI (use Rank.NO_RANK for --rank none)
             all_ranks: Whether --all-ranks flag was specified
             source_type: Type of source
 
@@ -112,7 +149,8 @@ class RankConfig:
         if rank is not None:
             return cls(rank=Rank(rank))
         if source_type in [SourceType.LOCAL, SourceType.LOCAL_FILE]:
-            return cls(is_local=True)
+            # For local files, default to all_ranks to include no-rank files
+            return cls(all_ranks=True)
         elif is_fbcode():
             from tritonparse.fb.utils import rank_config_from_cli_args
 
@@ -305,23 +343,31 @@ def parse_logs(
         path = os.path.join(raw_log_dir, item)
         if not os.path.isfile(path):
             continue
-        log_name = f"{LOG_PREFIX}.*{rank_config.to_rank().to_string('')}"
-        pattern = re.compile(log_name)
-        if pattern.search(item):
-            # Check if the log has a rank in its name
-            rank_match = LOG_RANK_REGEX.search(item)
-            if rank_match:
-                # If we have a rank, add it to the list of ranks
-                rank_value = int(rank_match.group(1))
-                rank = Rank(rank_value)
-                ranks[rank].append(path)
-            elif rank_config.is_local:
-                # Local logs don't always have a rank associated with them, we can push as default
-                rank = Rank()
-                if rank in ranks:
-                    ranks[rank].append(path)
-                else:
-                    ranks[rank] = [path]
+        # Check if this is a tritonparse log file
+        if not item.startswith(LOG_PREFIX):
+            continue
+
+        # Check if the log has a rank in its name
+        rank_match = LOG_RANK_REGEX.search(item)
+        if rank_match:
+            # File has rank suffix: dedicated_log_triton_trace_{USER}_rank_{N}_.ndjson.gz
+            rank_value = int(rank_match.group(1))
+            if rank_config.all_ranks:
+                # --all-ranks: include all ranked files
+                ranks[Rank(rank_value)].append(path)
+            elif not rank_config.is_no_rank and rank_config.rank is not None:
+                # --rank N: only include specified rank
+                if rank_config.rank.value == rank_value:
+                    ranks[Rank(rank_value)].append(path)
+            elif rank_config.rank is None and not rank_config.all_ranks:
+                # Default case (no --rank, no --all-ranks): include rank 0
+                if rank_value == 0:
+                    ranks[Rank(rank_value)].append(path)
+        else:
+            # File has no rank suffix: dedicated_log_triton_trace_{USER}_.ndjson.gz
+            if rank_config.all_ranks or rank_config.is_no_rank:
+                # --all-ranks or --rank none: include no-rank files
+                ranks[Rank(Rank.NO_RANK)].append(path)
     if not ranks:
         raise RuntimeError(f"No eligible structured trace logs found in {raw_log_dir}")
     file_mapping = {"tritonparse_url_prefix": tritonparse_url_prefix}
@@ -334,17 +380,28 @@ def parse_logs(
             )
             use_filenames = True
         # Determine rank key for file mapping
-        rank_key = "rank_default" if rank.is_default else f"rank_{rank.value}"
+        if rank.is_default:
+            rank_key = "rank_default"
+        elif rank.is_no_rank:
+            rank_key = "rank_none"
+        else:
+            rank_key = f"rank_{rank.value}"
         for file_path in files:
             filename = os.path.basename(file_path)
             input_file = os.path.join(raw_log_dir, filename)
 
             relative_path = ""
             if use_filenames:
-                rank_prefix = "" if rank.is_default else f"{rank.to_string('')}/"
+                # For no-rank files, don't create a subdirectory (same as default)
+                rank_prefix = (
+                    ""
+                    if (rank.is_default or rank.is_no_rank)
+                    else f"{rank.to_string('')}/"
+                )
                 relative_path = f"{rank_prefix}{filename}"
             else:
-                relative_path = rank.to_string("")
+                # For no-rank files, output directly to parsed_log_dir (no subdirectory)
+                relative_path = "" if rank.is_no_rank else rank.to_string("")
             output_dir = os.path.join(parsed_log_dir, relative_path)
             # Parse the file
             parse_single_file(input_file, output_dir, split_inductor_compilations)

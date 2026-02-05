@@ -12,10 +12,34 @@ from .common import (
     copy_local_to_tmpdir,
     parse_logs,
     print_parsed_files_summary,
+    Rank,
     RankConfig,
     save_logs,
 )
 from .source_type import Source, SourceType
+
+
+def _validate_rank(value: str) -> int:
+    """
+    Validate and parse the --rank argument.
+
+    Args:
+        value: The string value from CLI (e.g., "0", "1", "none")
+
+    Returns:
+        Integer rank value (Rank.NO_RANK for "none")
+
+    Raises:
+        argparse.ArgumentTypeError: If value is not a valid rank
+    """
+    if value.lower() == "none":
+        return Rank.NO_RANK  # -1
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid rank '{value}': must be an integer or 'none'"
+        )
 
 
 def _add_parse_args(parser: argparse.ArgumentParser) -> None:
@@ -40,10 +64,15 @@ def _add_parse_args(parser: argparse.ArgumentParser) -> None:
         ),
         action="store_true",
     )
-    parser.add_argument("-r", "--rank", help="Rank of logs to be analyzed", type=int)
+    parser.add_argument(
+        "-r",
+        "--rank",
+        help="Rank of logs to be analyzed (integer or 'none' for files without rank)",
+        type=_validate_rank,
+    )
     parser.add_argument(
         "--all-ranks",
-        help="Analyze all ranks",
+        help="Analyze all ranks (includes files without rank)",
         action="store_true",
     )
     parser.add_argument("-v", "--verbose", help="Verbose logging", action="store_true")
