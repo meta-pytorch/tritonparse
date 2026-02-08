@@ -10,44 +10,24 @@ and generates a comprehensive diff result.
 Per the design document, this module delegates to specialized analyzer modules:
 - Level 1: MetadataAnalyzer (metadata_analyzer.py)
 - Level 2: SourceAnalyzer (source_analyzer.py)
-- Level 3: IR stats comparison (ir_analyzer.py)
+- Level 3: IRStatsAnalyzer (ir_stats_analyzer.py)
 - Level 4: SourcemapAnalyzer (sourcemap_analyzer.py)
 - Summary: Summary generation (inline, to be extracted in D7)
 """
 
-import re
 import uuid
-from collections import Counter
 from typing import Any
 
-from tritonparse.diff.core.diff_types import (
-    CompilationDiffResult,
-    DiffSummary,
-    IRStats,
-    IRStatsDiff,
-    OperationDiff,
-)
+from tritonparse.diff.core.diff_types import CompilationDiffResult, DiffSummary
 from tritonparse.diff.core.event_matcher import (
     ensure_source_mappings,
     get_kernel_hash,
     get_kernel_name,
 )
+from tritonparse.diff.core.ir_stats_analyzer import IRStatsAnalyzer
 from tritonparse.diff.core.metadata_analyzer import MetadataAnalyzer
 from tritonparse.diff.core.source_analyzer import SourceAnalyzer
 from tritonparse.diff.core.sourcemap_analyzer import SourcemapAnalyzer
-
-
-# IR types to analyze
-IR_TYPES = ["ttir", "ttgir", "llir", "ptx", "amdgcn"]
-
-# Operation patterns for different IR types
-OP_PATTERNS = {
-    "ttir": r"(tt\.\w+|arith\.\w+|scf\.\w+|cf\.\w+)",
-    "ttgir": r"(ttg\.\w+|tt\.\w+|arith\.\w+|scf\.\w+|cf\.\w+)",
-    "llir": r"(define|call|load|store|alloca|getelementptr|br|ret|icmp|fcmp|add|sub|mul|div|and|or|xor|shl|lshr|ashr)",
-    "ptx": r"(ld\.|st\.|mov\.|add\.|sub\.|mul\.|mad\.|fma\.|cvt\.|setp\.|bra|ret|bar\.sync|cp\.async)",
-    "amdgcn": r"(v_\w+|s_\w+|ds_\w+|buffer_\w+|global_\w+|flat_\w+)",
-}
 
 
 class DiffEngine:
@@ -140,97 +120,10 @@ class DiffEngine:
     def _diff_ir_stats(self) -> None:
         """Level 3: Compare IR statistics and operations.
 
-        Note: This logic is also available in ir_analyzer.py for standalone use.
+        Delegates to IRStatsAnalyzer for the analysis.
         """
-        self.result.ir_stats = self._analyze_ir_stats()
-        self.result.operation_diff = self._analyze_operation_diff()
-
-    def _analyze_ir_stats(self) -> dict[str, IRStatsDiff]:
-        """Analyze IR statistics for all IR types."""
-        result: dict[str, IRStatsDiff] = {}
-
-        for ir_type in IR_TYPES:
-            content_a = self._get_ir_content(self.comp_a, ir_type)
-            content_b = self._get_ir_content(self.comp_b, ir_type)
-
-            if not content_a and not content_b:
-                continue
-
-            stats_a = self._compute_ir_stats(content_a, ir_type)
-            stats_b = self._compute_ir_stats(content_b, ir_type)
-
-            line_diff = stats_b.lines - stats_a.lines
-            line_diff_pct = (
-                (line_diff / stats_a.lines * 100) if stats_a.lines > 0 else 0.0
-            )
-
-            result[ir_type] = IRStatsDiff(
-                a=stats_a,
-                b=stats_b,
-                line_diff=line_diff,
-                line_diff_pct=line_diff_pct,
-            )
-
-        return result
-
-    def _get_ir_content(self, comp: dict[str, Any], ir_type: str) -> str:
-        """Extract IR content from a compilation event."""
-        payload = comp.get("payload", {})
-
-        # Try direct field first
-        content = payload.get(ir_type, "")
-        if content:
-            return content
-
-        # Try file_content
-        file_content = payload.get("file_content", {})
-        for key, value in file_content.items():
-            if key.endswith(f".{ir_type}"):
-                return value
-
-        return ""
-
-    def _compute_ir_stats(self, content: str, ir_type: str) -> IRStats:
-        """Compute statistics for IR content."""
-        if not content:
-            return IRStats()
-
-        lines = content.splitlines()
-        line_count = len(lines)
-
-        # Count operations
-        pattern = OP_PATTERNS.get(ir_type)
-        if pattern:
-            operations: list[str] = []
-            for line in lines:
-                operations.extend(re.findall(pattern, line))
-            op_counts = dict(Counter(operations))
-            ops_count = len(operations)
-        else:
-            op_counts = {}
-            ops_count = 0
-
-        return IRStats(lines=line_count, ops=ops_count, op_counts=op_counts)
-
-    def _analyze_operation_diff(self) -> dict[str, OperationDiff]:
-        """Analyze operation-level differences for all IR types."""
-        result: dict[str, OperationDiff] = {}
-
-        for ir_type, ir_stats in self.result.ir_stats.items():
-            ops_a = set(ir_stats.a.op_counts.keys())
-            ops_b = set(ir_stats.b.op_counts.keys())
-
-            added = sorted(ops_b - ops_a)
-            removed = sorted(ops_a - ops_b)
-
-            result[ir_type] = OperationDiff(
-                added=added,
-                removed=removed,
-                counts_a=ir_stats.a.op_counts,
-                counts_b=ir_stats.b.op_counts,
-            )
-
-        return result
+        analyzer = IRStatsAnalyzer(self.comp_a, self.comp_b)
+        self.result.ir_stats, self.result.operation_diff = analyzer.analyze()
 
     def _diff_by_python_line(self) -> None:
         """Level 4: Compare IR organized by Python source line.
@@ -246,10 +139,7 @@ class DiffEngine:
         self.result.by_python_line = analyzer.analyze()
 
     def _generate_summary(self) -> None:
-        """Generate summary from all diff results.
-
-        Note: This will be extracted to summary_generator.py in D6.
-        """
+        """Generate summary from all diff results."""
         highlights: list[str] = []
         stats: dict[str, int] = {}
 
