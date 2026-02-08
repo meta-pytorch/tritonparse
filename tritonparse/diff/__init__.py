@@ -19,8 +19,16 @@ from tritonparse.diff.core.diff_types import (
     PythonLineDiff,
     PythonSourceDiff,
 )
+from tritonparse.diff.output import (
+    append_diff_to_file,
+    ConsolidatedDiffWriter,
+    create_diff_event,
+    format_summary,
+    write_consolidated_output,
+)
 
 __all__ = [
+    # Data types
     "CompilationDiffResult",
     "DiffNote",
     "DiffSummary",
@@ -30,4 +38,10 @@ __all__ = [
     "OperationDiff",
     "PythonLineDiff",
     "PythonSourceDiff",
+    # Output functions
+    "append_diff_to_file",
+    "ConsolidatedDiffWriter",
+    "create_diff_event",
+    "format_summary",
+    "write_consolidated_output",
 ]
