@@ -7,13 +7,12 @@ The DiffEngine is the central orchestrator for comparing two compilation events.
 It coordinates multiple analyzers (metadata, source, IR stats, source mapping)
 and generates a comprehensive diff result.
 
-Per the design document, this module delegates to specialized analyzer modules
-where available:
+Per the design document, this module delegates to specialized analyzer modules:
 - Level 1: MetadataAnalyzer (metadata_analyzer.py)
 - Level 2: SourceAnalyzer (source_analyzer.py)
-- Level 3: IR stats comparison (inline, to be extracted in D5)
-- Level 4: Source mapping based comparison (inline)
-- Summary: Summary generation (inline, to be extracted in D6)
+- Level 3: IR stats comparison (ir_analyzer.py)
+- Level 4: SourcemapAnalyzer (sourcemap_analyzer.py)
+- Summary: Summary generation (inline, to be extracted in D7)
 """
 
 import re
@@ -27,7 +26,6 @@ from tritonparse.diff.core.diff_types import (
     IRStats,
     IRStatsDiff,
     OperationDiff,
-    PythonLineDiff,
 )
 from tritonparse.diff.core.event_matcher import (
     ensure_source_mappings,
@@ -36,6 +34,7 @@ from tritonparse.diff.core.event_matcher import (
 )
 from tritonparse.diff.core.metadata_analyzer import MetadataAnalyzer
 from tritonparse.diff.core.source_analyzer import SourceAnalyzer
+from tritonparse.diff.core.sourcemap_analyzer import SourcemapAnalyzer
 
 
 # IR types to analyze
@@ -141,7 +140,7 @@ class DiffEngine:
     def _diff_ir_stats(self) -> None:
         """Level 3: Compare IR statistics and operations.
 
-        Note: This will be extracted to ir_analyzer.py in D5.
+        Note: This logic is also available in ir_analyzer.py for standalone use.
         """
         self.result.ir_stats = self._analyze_ir_stats()
         self.result.operation_diff = self._analyze_operation_diff()
@@ -234,85 +233,17 @@ class DiffEngine:
         return result
 
     def _diff_by_python_line(self) -> None:
-        """Level 4: Compare IR organized by Python source line."""
+        """Level 4: Compare IR organized by Python source line.
+
+        Delegates to SourcemapAnalyzer for the actual analysis.
+        Only performs comparison if Python sources are identical.
+        """
         # Only perform line-level comparison if Python sources are identical
         if self.result.python_source_diff.status != "identical":
             return
 
-        mappings_a = self.comp_a.get("payload", {}).get("source_mappings", {})
-        mappings_b = self.comp_b.get("payload", {}).get("source_mappings", {})
-
-        python_a = mappings_a.get("python", {})
-        python_b = mappings_b.get("python", {})
-
-        # Get all Python line numbers from both compilations
-        all_lines: set[int] = set()
-        all_lines.update(int(k) for k in python_a.keys() if k.isdigit())
-        all_lines.update(int(k) for k in python_b.keys() if k.isdigit())
-
-        result: dict[int, PythonLineDiff] = {}
-
-        for py_line in sorted(all_lines):
-            a_mapping: dict[str, list[int]] = {}
-            b_mapping: dict[str, list[int]] = {}
-            expansion: dict[str, int] = {}
-
-            for ir_type in IR_TYPES:
-                lines_a = self._get_ir_lines_for_python_line(
-                    mappings_a, py_line, ir_type
-                )
-                lines_b = self._get_ir_lines_for_python_line(
-                    mappings_b, py_line, ir_type
-                )
-
-                if lines_a or lines_b:
-                    a_mapping[ir_type] = lines_a
-                    b_mapping[ir_type] = lines_b
-                    expansion[ir_type] = len(lines_b) - len(lines_a)
-
-            # Get Python code for this line
-            python_code = self._get_python_line_code(py_line)
-
-            result[py_line] = PythonLineDiff(
-                python_line=py_line,
-                python_code=python_code,
-                a=a_mapping,
-                b=b_mapping,
-                expansion=expansion,
-            )
-
-        self.result.by_python_line = result
-
-    def _get_ir_lines_for_python_line(
-        self, source_mappings: dict[str, Any], python_line: int, ir_type: str
-    ) -> list[int]:
-        """Get IR line numbers corresponding to a Python line."""
-        python_mappings = source_mappings.get("python", {})
-        line_mapping = python_mappings.get(str(python_line), {})
-        ir_lines = line_mapping.get(f"{ir_type}_lines", [])
-        return [int(ln) if isinstance(ln, str) else ln for ln in ir_lines]
-
-    def _get_python_line_code(self, line_number: int) -> str:
-        """Get the Python source code at a specific line number."""
-        payload = self.comp_a.get("payload", {})
-
-        python_source = payload.get("python_source", {})
-        if isinstance(python_source, dict) and "content" in python_source:
-            source = python_source["content"]
-            start_line = python_source.get("start_line", 1)
-        else:
-            source = payload.get("python", "")
-            start_line = 1
-
-        if not source:
-            return ""
-
-        lines = source.splitlines()
-        idx = line_number - start_line
-        if 0 <= idx < len(lines):
-            return lines[idx]
-
-        return ""
+        analyzer = SourcemapAnalyzer(self.comp_a, self.comp_b)
+        self.result.by_python_line = analyzer.analyze()
 
     def _generate_summary(self) -> None:
         """Generate summary from all diff results.
