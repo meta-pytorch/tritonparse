@@ -25,6 +25,22 @@ class KernelSummary:
 
 
 @dataclass
+class CompilationSummary:
+    """Summary information about a compilation event.
+
+    Used by the diff module to list available compilations for comparison.
+    """
+
+    index: int  # Compilation index (0-based, for use with --events)
+    original_index: int  # Line index in the ndjson file
+    kernel_name: str
+    kernel_hash: str  # First 12 chars of kernel hash
+    num_stages: int | None
+    num_warps: int | None
+    has_source_mappings: bool
+
+
+@dataclass
 class LaunchInfo:
     """Information about a specific kernel launch."""
 
@@ -70,6 +86,65 @@ def list_kernels(events: List[Dict[str, Any]]) -> List[KernelSummary]:
     summaries.sort(key=lambda x: x.name)
 
     return summaries
+
+
+def list_compilations(events: List[Dict[str, Any]]) -> List[CompilationSummary]:
+    """
+    List all compilation events with summary info.
+
+    Used by the diff CLI to show available compilations for comparison.
+
+    Args:
+        events: List of parsed event dictionaries from NDJSON file
+
+    Returns:
+        List of CompilationSummary objects
+    """
+    result = []
+    comp_idx = 0
+
+    for orig_idx, event in enumerate(events):
+        if event.get("event_type") != "compilation":
+            continue
+
+        payload = event.get("payload", {})
+        metadata = payload.get("metadata", {})
+        compilation_metadata = event.get("compilation_metadata", {})
+
+        # Get kernel name from various possible locations
+        kernel_name = event.get("kernel_name") or metadata.get("name") or "unknown"
+
+        # Get kernel hash
+        kernel_hash = (
+            event.get("kernel_hash")
+            or metadata.get("hash")
+            or compilation_metadata.get("hash")
+            or ""
+        )
+
+        # Get compilation parameters
+        num_stages = compilation_metadata.get("num_stages") or metadata.get(
+            "num_stages"
+        )
+        num_warps = compilation_metadata.get("num_warps") or metadata.get("num_warps")
+
+        # Check for source mappings
+        has_source_mappings = bool(payload.get("source_mappings"))
+
+        result.append(
+            CompilationSummary(
+                index=comp_idx,
+                original_index=orig_idx,
+                kernel_name=kernel_name,
+                kernel_hash=kernel_hash[:12] if kernel_hash else "",
+                num_stages=num_stages,
+                num_warps=num_warps,
+                has_source_mappings=has_source_mappings,
+            )
+        )
+        comp_idx += 1
+
+    return result
 
 
 def find_launch_index_by_kernel(

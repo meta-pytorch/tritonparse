@@ -8,6 +8,7 @@ from .bisect.cli import (
     _validate_args as _validate_bisect_args,
     bisect_command,
 )
+from .diff.cli import _add_diff_args, diff_command
 from .info.cli import _add_info_args, info_command
 from .parse.utils import _add_parse_args, unified_parse
 from .reproducer.cli import _add_reproducer_args
@@ -39,6 +40,8 @@ def main():
             f"  {prog_name} reproduce /path/to/trace.ndjson --line 1 --out-dir repro_output\n"
             f"  {prog_name} info /path/to/trace.ndjson\n"
             f"  {prog_name} info /path/to/trace.ndjson --kernel matmul_kernel\n"
+            f"  {prog_name} diff /path/to/trace.ndjson --events 0,1\n"
+            f"  {prog_name} diff /path/to/trace.ndjson --list\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -75,6 +78,26 @@ def main():
     )
     _add_info_args(info_parser)
     info_parser.set_defaults(func="info")
+
+    # diff subcommand
+    diff_parser = subparsers.add_parser(
+        "diff",
+        help="Compare different compilation events of the same kernel",
+        description=(
+            "Compare two Triton compilation events and identify differences.\n\n"
+            "Modes:\n"
+            "  Single-file: Compare events within one ndjson file\n"
+            "  Dual-file:   Compare events across two ndjson files\n\n"
+            "Examples:\n"
+            "  tritonparse diff trace.ndjson --list\n"
+            "  tritonparse diff trace.ndjson --events 0,1\n"
+            "  tritonparse diff trace.ndjson --kernel add_kernel --events 0,1\n"
+            "  tritonparse diff file_a.ndjson file_b.ndjson --events 0,0"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_diff_args(diff_parser)
+    diff_parser.set_defaults(func="diff")
 
     # bisect subcommand
     bisect_parser = subparsers.add_parser(
@@ -139,6 +162,17 @@ def main():
             skip_logger=True,
             args_list=args.args_list,
         )  # Already logged above
+    elif args.func == "diff":
+        diff_command(
+            input_paths=args.input,
+            events=args.events,
+            kernel=args.kernel,
+            output=args.output,
+            in_place=args.in_place,
+            list_compilations_flag=args.list_compilations,
+            quiet=args.quiet,
+            skip_logger=True,  # Already logged above
+        )
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)
         exit_code = bisect_command(args)

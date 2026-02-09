@@ -159,65 +159,6 @@ def match_events_by_kernel(
     return matches
 
 
-def list_available_compilations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """List all available compilations with summary info.
-
-    Useful for CLI to show users what compilation events are available
-    for comparison.
-
-    Args:
-        events: List of all events.
-
-    Returns:
-        List of summary dictionaries with keys:
-        - index: Compilation index (for use with --events)
-        - original_index: Line index in the ndjson file
-        - kernel_name: Name of the kernel
-        - kernel_hash: First 12 chars of kernel hash
-        - num_stages: Pipeline stages (if available)
-        - num_warps: Number of warps (if available)
-        - has_source_mappings: Whether source_mappings exist
-    """
-    compilations = get_compilation_events(events)
-    result = []
-
-    for comp_idx, (orig_idx, event) in enumerate(compilations):
-        payload = event.get("payload", {})
-        metadata = payload.get("metadata", {})
-        compilation_metadata = event.get("compilation_metadata", {})
-
-        # Get kernel name from various possible locations
-        kernel_name = event.get("kernel_name") or metadata.get("name") or "unknown"
-
-        # Get kernel hash
-        kernel_hash = (
-            event.get("kernel_hash")
-            or metadata.get("hash")
-            or compilation_metadata.get("hash")
-            or ""
-        )
-
-        # Get compilation parameters
-        num_stages = compilation_metadata.get("num_stages") or metadata.get(
-            "num_stages"
-        )
-        num_warps = compilation_metadata.get("num_warps") or metadata.get("num_warps")
-
-        result.append(
-            {
-                "index": comp_idx,
-                "original_index": orig_idx,
-                "kernel_name": kernel_name,
-                "kernel_hash": kernel_hash[:12] if kernel_hash else "",
-                "num_stages": num_stages,
-                "num_warps": num_warps,
-                "has_source_mappings": has_source_mappings(event),
-            }
-        )
-
-    return result
-
-
 def get_kernel_name(event: dict[str, Any]) -> str:
     """Extract kernel name from a compilation event.
 

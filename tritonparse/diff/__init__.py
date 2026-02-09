@@ -8,6 +8,7 @@ and identify differences in metadata, Python source, IR statistics, and
 source mapping-based line-level comparisons.
 """
 
+from tritonparse.diff.cli import _add_diff_args, diff_command
 from tritonparse.diff.core.diff_types import (
     CompilationDiffResult,
     DiffNote,
@@ -28,6 +29,9 @@ from tritonparse.diff.output import (
 )
 
 __all__ = [
+    # CLI
+    "_add_diff_args",
+    "diff_command",
     # Data types
     "CompilationDiffResult",
     "DiffNote",
