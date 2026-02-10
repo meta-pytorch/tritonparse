@@ -66,9 +66,9 @@ TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
 # - "clp": Outputs .clp (Compressed Log Processor format)
 # - "none": Outputs .ndjson (plain text)
 # If TRITON_TRACE_COMPRESSION is explicitly set, respect that value;
-# otherwise, default to "gzip" for better storage efficiency.
+# otherwise, default to "none" (no compression).
 _compression_env = os.getenv("TRITON_TRACE_COMPRESSION")
-TRITON_TRACE_COMPRESSION = _compression_env if _compression_env is not None else "gzip"
+TRITON_TRACE_COMPRESSION = _compression_env if _compression_env is not None else "none"
 if TRITON_TRACE_COMPRESSION == "clp":
     from .clp import clp_open
 # Maximum file size for full source extraction (default 10MB)
@@ -1683,7 +1683,7 @@ def init(
         enable_tensor_blob_storage (bool): Whether to enable tensor blob storage.
         tensor_storage_quota (Optional[int]): Storage quota in bytes for tensor blobs (default: 100GB).
         compression (Optional[str]): Compression format for trace files ("none", "gzip", or "clp").
-            If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "gzip".
+            If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "none".
     """
     global TRITON_TRACE_LAUNCH, TRITON_TRACE_LAUNCH_WITHIN_PROFILING
     global TRITONPARSE_MORE_TENSOR_INFORMATION
@@ -1717,7 +1717,7 @@ def init(
         TRITONPARSE_TENSOR_STORAGE_QUOTA = tensor_storage_quota
 
     # Handle compression setting (follows enable_trace_launch pattern)
-    # Priority: env var > Python API > module default ("gzip")
+    # Priority: env var > Python API > module default ("none")
     if compression is not None:
         if os.getenv("TRITON_TRACE_COMPRESSION") is None:
             TRITON_TRACE_COMPRESSION = compression
