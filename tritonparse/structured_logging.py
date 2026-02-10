@@ -557,6 +557,17 @@ def _is_from_triton_kernels_module(obj):
     )
 
 
+def _is_tensor_descriptor(obj):
+    """
+    Check if an object is a TensorDescriptor from triton.tools.tensor_descriptor.
+    Used for TMA (Tensor Memory Accelerator) operations.
+    """
+    t = type(obj)
+    module_name = getattr(t, "__module__", "")
+    type_name = getattr(t, "__name__", "")
+    return type_name == "TensorDescriptor" and "triton" in module_name
+
+
 def _log_torch_tensor_info(tensor_value):
     """
     Extracts metadata from a torch.Tensor object.
@@ -1376,6 +1387,23 @@ def extract_arg_info(arg_dict):
                     arg_info["layout"] = convert(arg_value.layout)
             else:
                 log.warning(f"Unknown type: {type(arg_value)}")
+        # Handle TensorDescriptor from triton.tools.tensor_descriptor (used for TMA)
+        elif _is_tensor_descriptor(arg_value):
+            arg_info["type"] = "TensorDescriptor"
+            # Capture all attributes needed for reconstruction
+            if hasattr(arg_value, "base") and TORCH_INSTALLED:
+                base_tensor = arg_value.base
+                if isinstance(base_tensor, torch.Tensor):
+                    arg_info["base"] = _log_torch_tensor_info(base_tensor)
+            if hasattr(arg_value, "shape"):
+                arg_info["shape"] = convert(arg_value.shape)
+            if hasattr(arg_value, "strides"):
+                arg_info["strides"] = convert(arg_value.strides)
+            if hasattr(arg_value, "block_shape"):
+                arg_info["block_shape"] = convert(arg_value.block_shape)
+            # Handle padding - defaults to "zero" if not present
+            padding = getattr(arg_value, "padding", "zero")
+            arg_info["padding"] = convert(padding) if padding else "zero"
 
         # Handle scalar values
         elif isinstance(arg_value, (int, float, bool)):

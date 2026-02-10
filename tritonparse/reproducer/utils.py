@@ -102,6 +102,19 @@ def _get_triton_tensor_types():
     )
 
 
+@lru_cache(maxsize=1)
+def _get_tensor_descriptor_type():
+    """
+    Get the TensorDescriptor class from triton.tools.tensor_descriptor.
+    Returns None if not available.
+    """
+    try:
+        mod = importlib.import_module("triton.tools.tensor_descriptor")
+        return mod.TensorDescriptor
+    except (ImportError, AttributeError):
+        return None
+
+
 def create_args_from_json_file(json_path):
     """
     Load and parse a reproducer JSON file.
@@ -394,6 +407,29 @@ def _create_arg_from_info(arg_info):
             )
         Tensor, Storage, StridedLayout = _get_triton_tensor_types()
         return StridedLayout(shape=arg_info.get("initial_shape"))
+
+    elif arg_type == "TensorDescriptor":
+        # Reconstruct TensorDescriptor from triton.tools.tensor_descriptor
+        TensorDescriptor = _get_tensor_descriptor_type()
+        if TensorDescriptor is None:
+            raise RuntimeError(
+                "triton.tools.tensor_descriptor.TensorDescriptor is not available; "
+                "cannot construct TensorDescriptor."
+            )
+        # Reconstruct the base tensor
+        base_info = arg_info.get("base")
+        if base_info is None:
+            raise RuntimeError(
+                "TensorDescriptor requires 'base' tensor information for reconstruction."
+            )
+        base_tensor = _create_tensor(base_info)
+        shape = arg_info.get("shape")
+        strides = arg_info.get("strides")
+        block_shape = arg_info.get("block_shape")
+        padding = arg_info.get("padding", "zero")
+        return TensorDescriptor(
+            base_tensor, shape, strides, block_shape, padding=padding
+        )
 
     elif arg_type == "dtype":
         dtype_repr = arg_info.get("repr")
