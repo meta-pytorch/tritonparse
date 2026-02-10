@@ -115,8 +115,8 @@ def count_events(trace_folder: str) -> Tuple[int, int]:
     launch_count = 0
 
     # Get all ndjson files, avoiding double-counting
-    # Use *.bin.ndjson pattern only since raw logs are compressed
-    for filepath in glob.glob(os.path.join(trace_folder, "*.bin.ndjson")):
+    # *.ndjson matches both plain .ndjson and compressed .bin.ndjson
+    for filepath in glob.glob(os.path.join(trace_folder, "*.ndjson")):
         try:
             for line in iter_lines(filepath):
                 try:
