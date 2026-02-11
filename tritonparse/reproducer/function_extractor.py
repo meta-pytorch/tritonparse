@@ -72,6 +72,7 @@ def extract_utility_functions(embed_context: bool = False) -> str:
     # since the JSON is embedded directly in the script
     utils_function_names = [
         "_get_triton_tensor_types",
+        "_get_tensor_descriptor_type",
         "create_args_from_json",
         "_apply_stride_and_offset",
         "_create_base_tensor",

@@ -317,6 +317,18 @@ triton.autotune = _patched_autotune
                     "# NOTE: Autotuning is ENABLED - kernel will autotune on first run"
                 )
                 import_lines.append("")
+
+                # Inject dependent functions after imports so they can use @triton.jit
+                dependent_source_map = get_dependent_source_map(
+                    func_name,
+                    context_bundle.kernel_info.file_path,
+                    context_bundle.source_repo_dir,
+                )
+                if dependent_source_map:
+                    import_lines.append("# Dependent functions for autotuning")
+                    import_lines.append("")
+                    import_lines.extend(dependent_source_map.values())
+                    import_lines.append("")
             else:
                 import_lines.extend(get_function_source(_disable_triton_autotune))
 
@@ -335,34 +347,10 @@ triton.autotune = _patched_autotune
     def _replace_utility_functions(
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
-        """Replace the utility functions placeholder with extracted functions.
-
-        When preserve_autotune is enabled for COPY mode, also injects dependent
-        functions (like config generators) before the kernel source so they're
-        defined when referenced by @triton.autotune decorator.
-        """
+        """Replace the utility functions placeholder with extracted functions."""
         embed_context = kwargs.get("embed_context", False)
         utility_code = extract_utility_functions(embed_context=embed_context)
         code = code.replace(self.UTILITY_FUNCTIONS_PLACEHOLDER, utility_code)
-
-        # For preserve_autotune + COPY mode, inject dependent functions before kernel
-        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
-        if self.preserve_autotune and kernel_import == KernelImportMode.COPY:
-            func_name = context_bundle.kernel_info.function_name
-            if func_name:
-                dependent_source_map = get_dependent_source_map(
-                    func_name,
-                    context_bundle.kernel_info.file_path,
-                    context_bundle.source_repo_dir,
-                )
-                if dependent_source_map:
-                    # Insert dependent functions before "# isort: off"
-                    dependent_code = (
-                        "\n# Dependent functions for autotuning\n\n"
-                        + "\n\n".join(dependent_source_map.values())
-                        + "\n\n"
-                    )
-                    code = code.replace("# isort: off", dependent_code + "# isort: off")
 
         return code
 
