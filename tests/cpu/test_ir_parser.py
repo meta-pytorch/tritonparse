@@ -4,7 +4,11 @@
 import unittest
 
 from tests.test_utils import get_sass_test_file
-from tritonparse.parse.ir_parser import extract_loc_definitions, extract_sass_mappings
+from tritonparse.parse.ir_parser import (
+    extract_loc_definitions,
+    extract_sass_mappings,
+    extract_sass_pc_mappings,
+)
 from tritonparse.parse.mapper import create_bidirectional_mapping, create_ir_mapping
 from tritonparse.parse.trace_processor import generate_source_mappings
 
@@ -170,6 +174,59 @@ module {
             )
 
         print("✓ SASS parsing tests passed")
+
+    def test_extract_sass_pc_mappings(self):
+        """Test SASS PC-offset-keyed source mapping extraction."""
+        sass_content = get_sass_test_file("test_kernel.sass").read_text()
+
+        pc_mappings = extract_sass_pc_mappings(sass_content)
+
+        # All keys must be int (PC offsets)
+        for pc in pc_mappings:
+            self.assertIsInstance(pc, int, f"PC key should be int, got {type(pc)}")
+
+        # Verify first SASS instruction: /*0000*/ LDC R1...
+        # Inherits source from "//## File ...test_structured_logging.py", line 140
+        self.assertIn(0x0000, pc_mappings)
+        self.assertEqual(
+            pc_mappings[0x0000]["file"],
+            "/home/test/tritonparse/tests/gpu/test_structured_logging.py",
+        )
+        self.assertEqual(pc_mappings[0x0000]["line"], 140)
+        self.assertEqual(pc_mappings[0x0000]["column"], 0)
+
+        # Verify second SASS instruction: /*0010*/ S2R R0...
+        # Inherits source from "//## File ...test_structured_logging.py", line 143
+        self.assertIn(0x0010, pc_mappings)
+        self.assertEqual(pc_mappings[0x0010]["line"], 143)
+
+        # Verify .nv_debug_ptx_txt never appears as a file value
+        for pc, mapping in pc_mappings.items():
+            self.assertNotIn(
+                ".nv_debug_ptx_txt",
+                mapping["file"],
+                f"PC 0x{pc:04x} should not map to .nv_debug_ptx_txt",
+            )
+
+        # //## File comment lines (pc_hex=None) must NOT appear in pc_mappings
+        # The fixture has //## File lines at text lines 2, 5, 8, ... which have
+        # no PC offset — they should be absent from the result.
+        line_based = extract_sass_mappings(sass_content)
+        self.assertGreater(
+            len(line_based),
+            len(pc_mappings),
+            "Line-based mappings include //## File comment lines, "
+            "PC mappings should have fewer entries",
+        )
+
+        # Each value must contain the expected keys
+        for _pc, mapping in pc_mappings.items():
+            self.assertIn("file", mapping)
+            self.assertIn("line", mapping)
+            self.assertIn("column", mapping)
+            self.assertIn("sass_line", mapping)
+
+        print("✓ SASS PC-offset mapping tests passed")
 
     def test_sass_fuzzy_matching(self):
         """Test that ignore_column parameter enables fuzzy matching."""

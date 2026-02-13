@@ -38,6 +38,10 @@ AMDGCN_LOC_PATTERN = re.compile(
 # Example: //## File "/path/to/source.py", line 188
 SASS_LOC_PATTERN = re.compile(r'//## File "([^"]+)", line (\d+)')
 
+# the definition of the SASS PC offset pattern.
+# Example: /*0000*/ LDC R1, c[0x0][0x28] ;
+SASS_PC_PATTERN = re.compile(r".*\/\*([0-9a-fA-F]+)\*\/.*")
+
 
 # alias loc definitions in TTGIR/TTIR
 # Example: #loc16 = loc("pid"(#loc2))
@@ -212,58 +216,117 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     return locations
 
 
-def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
+def _iter_sass_instructions(sass_content: str):
     """
-    Extract source mappings from SASS content.
+    Iterate over SASS content, yielding source-mapped entries.
 
-    SASS format:
-        Function:kernel_name
-                //## File "/path/to/source.py", line 188
-                //## File ".nv_debug_ptx_txt", line 19    # Skip this line
-                        /*0000*/                   MOV R1, c[0x0][0x28] ;
+    Parses SASS text line by line, tracking the current source location from
+    ``//## File`` comments and matching SASS instruction lines that contain
+    ``/*hex_offset*/`` patterns.
 
-    Args:
-        sass_content (str): The content of the SASS file as a string.
+    Lines referencing ``.nv_debug_ptx_txt`` are skipped so they never become
+    the active source location.
 
-    Returns:
-        Dict[str, Dict[str, Any]]: A dictionary mapping line numbers to their corresponding
-        source file, line numbers, and column numbers.
+    Yields:
+        Tuple of (line_num, pc_hex, source_info):
+        - line_num: 1-based line number in the SASS text
+        - pc_hex: hex offset string (e.g., "0180"), or None for //## File
+          comment lines
+        - source_info: dict with {file, line, column}
     """
-    mappings = {}
     current_source_info = None
-
     lines = sass_content.split("\n")
 
     for line_num, line in enumerate(lines, 1):
-        # Skip lines related to .nv_debug_ptx_txt - these cannot be mapped to Python source
         if ".nv_debug_ptx_txt" in line:
             continue
 
-        # Check if this is a source location comment
         match = SASS_LOC_PATTERN.match(line.strip())
         if match:
             file_path, source_line = match.groups()
             current_source_info = {
                 "file": file_path,
                 "line": int(source_line),
-                "column": 0,  # SASS comments don't include column info
-            }
-            # Add the comment line itself to mappings so it can be highlighted
-            mappings[str(line_num)] = {
-                "file": file_path,
-                "line": int(source_line),
                 "column": 0,
-                "sass_line": line_num,
             }
-        # Check if this is a SASS instruction line (contains /*address*/ format)
-        elif current_source_info and re.match(r".*\/\*[0-9a-fA-F]+\*\/.*", line):
-            mappings[str(line_num)] = {
-                "file": current_source_info["file"],
-                "line": current_source_info["line"],
-                "column": current_source_info["column"],
-                "sass_line": line_num,
-            }
+            yield line_num, None, current_source_info
 
+        elif current_source_info:
+            pc_match = SASS_PC_PATTERN.match(line)
+            if pc_match:
+                yield line_num, pc_match.group(1), current_source_info
+
+
+def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Extract source mappings from SASS content.
+
+    Key = SASS text line number (str). Used by tritonparse UI and cross-IR
+    mapping.
+
+    SASS format::
+
+        Function:kernel_name
+                //## File "/path/to/source.py", line 188
+                //## File ".nv_debug_ptx_txt", line 19    # Skip this line
+                        /*0000*/                   MOV R1, c[0x0][0x28] ;
+
+    Args:
+        sass_content: The content of the SASS file as a string.
+
+    Returns:
+        A dictionary mapping SASS text line numbers (str) to their
+        corresponding source file, line numbers, and column numbers.
+    """
+    mappings = {}
+    for line_num, _pc_hex, source_info in _iter_sass_instructions(sass_content):
+        mappings[str(line_num)] = {
+            "file": source_info["file"],
+            "line": source_info["line"],
+            "column": source_info["column"],
+            "sass_line": line_num,
+        }
+    return mappings
+
+
+def extract_sass_pc_mappings(sass_content: str) -> Dict[int, Dict[str, Any]]:
+    """
+    Extract PC-offset-keyed source mappings from SASS content.
+
+    Key = PC offset (int). Designed for trace-analysis tools (e.g. CUTracer)
+    that record per-instruction PC offsets and need to resolve them back to
+    Python source locations.
+
+    ``//## File`` comment lines (which have no PC offset) are skipped.
+
+    Args:
+        sass_content: The SASS text produced by ``nvdisasm -c -gi``.
+
+    Returns:
+        A dictionary mapping PC offset integers to source location info.
+        Example::
+
+            {
+                0:   {"file": "/path/to/source.py", "line": 267, "column": 0, "sass_line": 16},
+                16:  {"file": "/path/to/source.py", "line": 267, "column": 0, "sass_line": 17},
+                304: {"file": "/path/to/standard.py", "line": 41, "column": 0, "sass_line": 37},
+            }
+    """
+    mappings = {}
+    for line_num, pc_hex, source_info in _iter_sass_instructions(sass_content):
+        if pc_hex is None:
+            continue
+        # Use int as key to normalize hex format differences across tools:
+        # nvdisasm outputs "0180", CUTracer trace records "0x180".
+        # Converting to int (e.g., 384) makes matching straightforward —
+        # consumers just do int(their_hex_string, 16) without worrying
+        # about zero-padding or "0x" prefixes.
+        mappings[int(pc_hex, 16)] = {
+            "file": source_info["file"],
+            "line": source_info["line"],
+            "column": source_info["column"],
+            "sass_line": line_num,
+        }
     return mappings
 
 
