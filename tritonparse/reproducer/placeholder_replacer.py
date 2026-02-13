@@ -2,6 +2,7 @@
 
 import json
 from abc import ABC
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -27,6 +28,74 @@ from tritonparse.tp_logger import logger
 
 # Size threshold for embedded JSON warning (50KB)
 EMBEDDED_JSON_SIZE_THRESHOLD = 50 * 1024
+
+# Imports already provided by the hardcoded import block in _replace_kernel_import.
+# Used to deduplicate imports discovered by MultiFileCallGraphAnalyzer.
+_SKIP_IMPORTS = {
+    "import triton",
+    "import torch",
+    "import numpy",
+    "import numpy as np",
+}
+
+# Bare module names that are submodule references (e.g. triton.language) and
+# not valid standalone imports.  Discovered imports like "import language" are
+# filtered out using this set.
+_SKIP_BARE_MODULES = {
+    "triton",
+    "language",
+    "tl",
+    "tlx",
+    "torch",
+    "numpy",
+    "np",
+    "extra",
+    "math",
+    "typing",
+    "functools",
+    "types",
+}
+
+# Base import lines injected into every reproducer.  Shared between
+# _replace_kernel_import (which emits them) and the skip-sets above
+# (which prevent duplicates from the analyzer).
+_BASE_IMPORT_LINES = [
+    "import torch",
+    "import numpy as np",
+    "import triton",
+    "import triton.language as tl",
+    "from typing import List, Tuple",
+]
+
+# Known additional imports that may be needed by kernel source code.
+# Maps module reference patterns found in kernel source to their import statement.
+_EXTRA_IMPORT_PATTERNS = [
+    # Triton Language Extensions (warp specialization, TMA, etc.)
+    ("tlx.", "import triton.language.extra.tlx as tlx"),
+    ("tlx ", "import triton.language.extra.tlx as tlx"),
+]
+
+
+def _detect_extra_imports(source_code: str) -> list[str]:
+    """Scan kernel source code for usage of modules that need extra imports.
+
+    Detects patterns like ``tlx.async_task(...)`` and returns the corresponding
+    import statement (e.g. ``import triton.language.extra.tlx as tlx``).
+    Deduplicates so each import appears at most once.
+
+    Args:
+        source_code: Combined kernel + dependent function source code.
+
+    Returns:
+        List of unique import statement strings.
+    """
+    seen: set[str] = set()
+    imports: list[str] = []
+    for pattern, import_stmt in _EXTRA_IMPORT_PATTERNS:
+        if pattern in source_code and import_stmt not in seen:
+            seen.add(import_stmt)
+            imports.append(import_stmt)
+    return imports
 
 
 class HandlerProtocol(Protocol):
@@ -286,30 +355,35 @@ triton.autotune = _patched_autotune
 
             else:
                 # Standard behavior: add dependent functions after kernel
-                dependent_source_map = get_dependent_source_map(
+                dep_result = get_dependent_source_map(
                     context_bundle.kernel_info.function_name,
                     context_bundle.kernel_info.file_path,
                     context_bundle.source_repo_dir,
                 )
                 # Only add dependent functions if extraction was successful
-                if dependent_source_map:
-                    # Add separator, import statements, and dependent functions
+                if dep_result:
+                    # Add imports required by dependent functions
+                    if dep_result.import_statements:
+                        dep_imports_code = "\n".join(dep_result.import_statements)
+                        source_code = dep_imports_code + "\n\n" + source_code
+                    # Add separator and dependent functions
                     dependent_code = (
                         "\n\n# Dependent functions extracted from source file\n\n"
                     )
-                    dependent_code += "\n\n".join(dependent_source_map.values())
+                    dependent_code += "\n\n".join(dep_result.functions.values())
                     source_code += "\n\n" + dependent_code
                     logger.debug("Appended dependent functions to kernel source code")
 
             # Add common imports needed for most Triton kernels
-            import_lines = [
-                "import torch",
-                "import numpy as np",
-                "import triton",
-                "import triton.language as tl",
-                "from typing import List, Tuple",
-                "",
-            ]
+            import_lines = list(_BASE_IMPORT_LINES) + [""]
+
+            # Scan kernel and dependent source for additional imports
+            # (e.g., "import triton.language.extra.tlx as tlx")
+            all_source_for_imports = source_code
+            extra_imports = _detect_extra_imports(all_source_for_imports)
+            if extra_imports:
+                import_lines.extend(extra_imports)
+                import_lines.append("")
 
             # Only add autotune disabling code when not preserving autotune
             if self.preserve_autotune:
@@ -319,15 +393,19 @@ triton.autotune = _patched_autotune
                 import_lines.append("")
 
                 # Inject dependent functions after imports so they can use @triton.jit
-                dependent_source_map = get_dependent_source_map(
+                dep_result = get_dependent_source_map(
                     func_name,
                     context_bundle.kernel_info.file_path,
                     context_bundle.source_repo_dir,
                 )
-                if dependent_source_map:
+                if dep_result:
+                    # Add imports required by dependent functions
+                    if dep_result.import_statements:
+                        import_lines.extend(dep_result.import_statements)
+                        import_lines.append("")
                     import_lines.append("# Dependent functions for autotuning")
                     import_lines.append("")
-                    import_lines.extend(dependent_source_map.values())
+                    import_lines.extend(dep_result.functions.values())
                     import_lines.append("")
             else:
                 import_lines.extend(get_function_source(_disable_triton_autotune))
@@ -382,39 +460,70 @@ triton.autotune = _patched_autotune
                 full_source_code = source_code
 
             # Also get dependent functions - they may contain triton.Config definitions
-            dependent_source_map = get_dependent_source_map(
+            dep_result_for_invocation = get_dependent_source_map(
                 func_name,
                 context_bundle.kernel_info.file_path,
                 context_bundle.source_repo_dir,
             )
             all_source_code = full_source_code
-            if dependent_source_map:
-                all_source_code += "\n\n" + "\n\n".join(dependent_source_map.values())
+            if dep_result_for_invocation:
+                all_source_code += "\n\n" + "\n\n".join(
+                    dep_result_for_invocation.functions.values()
+                )
 
             # Get params that autotune configs provide
             autotune_config_params = extract_autotune_config_params(all_source_code)
 
-            # Filter out params provided by autotune configs
-            # Remaining constexpr params must be passed as keyword args
-            filtered_pos_args = []
-            extra_kw_args = []
-            for arg in pos_args:
-                if arg in autotune_config_params:
-                    continue
-                if autotune_config_params and is_constexpr_param(arg, source_code):
-                    extra_kw_args.append(arg)
-                else:
-                    filtered_pos_args.append(arg)
+            if not autotune_config_params:
+                # No autotune configs found (decorator extraction may have failed).
+                # Fall back to injecting compile params so the kernel launches with
+                # the correct num_warps / num_stages instead of Triton defaults,
+                # which can deadlock warp-specialized kernels.
+                logger.debug(
+                    "No autotune config params found; injecting compile params"
+                )
+                compile_params = _get_compile_params_for_invocation(
+                    context_bundle.compile, kw_args
+                )
+                invocation_snippet = _generate_invocation_snippet(
+                    pos_args, kw_args, compile_params
+                )
+            else:
+                # Filter out params provided by autotune configs
+                # Remaining constexpr params must be passed as keyword args
+                filtered_pos_args = []
+                extra_kw_args = []
+                for arg in pos_args:
+                    if arg in autotune_config_params:
+                        continue
+                    if autotune_config_params and is_constexpr_param(arg, source_code):
+                        extra_kw_args.append(arg)
+                    else:
+                        filtered_pos_args.append(arg)
 
-            filtered_kw_args = [
-                arg for arg in kw_args if arg not in autotune_config_params
-            ]
-            all_filtered_kw_args = extra_kw_args + filtered_kw_args
+                filtered_kw_args = [
+                    arg for arg in kw_args if arg not in autotune_config_params
+                ]
+                all_filtered_kw_args = extra_kw_args + filtered_kw_args
 
-            # Generate invocation WITHOUT compile_params
-            invocation_snippet = self._generate_autotune_invocation_snippet(
-                filtered_pos_args, all_filtered_kw_args
-            )
+                # Get compile params that are NOT provided by autotune configs
+                # (e.g., num_warps=8 when configs don't specify num_warps)
+                from tritonparse.reproducer.utils import TRITON_COMPILE_PARAMS
+
+                autotune_compile_params = set(autotune_config_params) & set(
+                    TRITON_COMPILE_PARAMS
+                )
+                # Add autotune-handled compile params to the filter list so
+                # _get_compile_params_for_invocation excludes them from the result
+                extended_kw_args = list(kw_args) + list(autotune_compile_params)
+                remaining_compile_params = _get_compile_params_for_invocation(
+                    context_bundle.compile, extended_kw_args
+                )
+
+                # Generate invocation with remaining compile_params not handled by autotuner
+                invocation_snippet = self._generate_autotune_invocation_snippet(
+                    filtered_pos_args, all_filtered_kw_args, remaining_compile_params
+                )
         else:
             # Standard behavior: pass compile params
             compile_params = _get_compile_params_for_invocation(
@@ -430,12 +539,13 @@ triton.autotune = _patched_autotune
         self,
         positional_args: List[str],
         keyword_args: List[str],
+        compile_params: Optional[List[str]] = None,
     ) -> str:
         """Generate kernel invocation snippet for autotuned kernels.
 
-        Unlike the default generator, this does NOT include compile params
-        and passes non-autotune constexpr params as keyword arguments to
-        avoid positional conflicts.
+        Unlike the default generator, this only includes compile params that are
+        NOT handled by the autotuner, and passes non-autotune constexpr params
+        as keyword arguments to avoid positional conflicts.
         """
         pos_args_str = ", ".join([f'args_dict["{arg}"]' for arg in positional_args])
         kw_args_str = ", ".join([f'{arg}=args_dict["{arg}"]' for arg in keyword_args])
@@ -445,6 +555,10 @@ triton.autotune = _patched_autotune
             all_args.append(pos_args_str)
         if kw_args_str:
             all_args.append(kw_args_str)
+
+        # Add compile params that are not handled by autotuner
+        if compile_params:
+            all_args.append(", ".join(compile_params))
 
         return f"imported_kernel_function[tuple(grid)]({', '.join(all_args)})"
 
@@ -496,19 +610,47 @@ triton.autotune = _patched_autotune
         embed_context = kwargs.get("embed_context", False)
         temp_json_path = kwargs.get("temp_json_path")
 
+        body_lines: list[str] = []
+
+        # Inject triton.set_allocator when the kernel requires scratch memory.
+        # Kernels compiled with global_scratch_size > 0 need a custom allocator;
+        # without one the kernel launch will fail or hang.
+        global_scratch_size = context_bundle.compile.get("global_scratch_size")
+        if global_scratch_size and int(global_scratch_size) > 0:
+            body_lines.extend(
+                [
+                    f"# This kernel requires scratch memory (global_scratch_size={global_scratch_size}).",
+                    "# A default allocator is provided below. If the kernel hangs or produces",
+                    "# incorrect results, replace this with the allocator from the original application.",
+                    "def _alloc_fn(size: int, align: int, stream):",
+                    "    return torch.empty(size, dtype=torch.int8, device='cuda')",
+                    "triton.set_allocator(_alloc_fn)",
+                    "",
+                ]
+            )
+
         if embed_context:
             # Embedded mode: parse JSON string directly
-            body = """data = json.loads(CONTEXT_JSON)
-    grid, args_dict = create_args_from_json(data)"""
+            body_lines.extend(
+                [
+                    "data = json.loads(CONTEXT_JSON)",
+                    "grid, args_dict = create_args_from_json(data)",
+                ]
+            )
         else:
             # File mode: load from external JSON file
             json_filename = (
                 temp_json_path.name if temp_json_path else "repro_context.json"
             )
-            body = f"""script_dir = Path(__file__).resolve().parent
-    json_file = script_dir / "{json_filename}"
-    grid, args_dict = create_args_from_json_file(str(json_file))"""
+            body_lines.extend(
+                [
+                    "script_dir = Path(__file__).resolve().parent",
+                    f'json_file = script_dir / "{json_filename}"',
+                    "grid, args_dict = create_args_from_json_file(str(json_file))",
+                ]
+            )
 
+        body = "\n    ".join(body_lines)
         return code.replace(self.LAUNCH_KERNEL_BODY_PLACEHOLDER, body)
 
     def _warn_if_blob_path_present(self, raw_launch_event: dict) -> None:
@@ -549,18 +691,25 @@ To regenerate this reproducer:
         return code.replace(self.REPRODUCER_METADATA_PLACEHOLDER, metadata)
 
 
+@dataclass
+class DependentSourceResult:
+    """Result of dependent function extraction, including functions and their imports."""
+
+    functions: Dict[str, str]  # qualified_name -> source_code
+    import_statements: List[str]  # formatted import statements needed by dependencies
+
+
 def get_dependent_source_map(
     function_name: str,
     file_path: str,
     source_repo_dir: Optional[str] = None,
-) -> Optional[dict[str, str]]:
+) -> Optional[DependentSourceResult]:
     """
     Extract dependent functions and their required imports.
 
     Returns:
-        A tuple of (functions_dict, import_statements_list) or None if extraction fails.
-        - functions_dict: Maps qualified function names to their source code
-        - import_statements_list: List of formatted import statements needed by dependent functions
+        DependentSourceResult with functions and their import statements,
+        or None if extraction fails.
     """
     from pathlib import Path
 
@@ -596,7 +745,32 @@ def get_dependent_source_map(
                 "  - %s. %s", short_name, result.functions[func_name].splitlines()[0]
             )
 
-        return result.functions
+        # Filter out imports already covered by _BASE_IMPORT_LINES and
+        # bare submodule names that aren't valid standalone imports.
+        import_stmts: List[str] = []
+        for imp in result.imports:
+            if imp.import_type == "from_import":
+                names_str = ", ".join(imp.names)
+                stmt = f"from {imp.module} import {names_str}"
+            else:
+                if imp.names:
+                    stmt = f"import {imp.names[0]}"
+                else:
+                    stmt = f"import {imp.module}"
+            # Skip duplicate or already-covered imports
+            if stmt in import_stmts or stmt in _SKIP_IMPORTS:
+                continue
+            # Skip bare module names that are submodule references
+            if imp.import_type == "import":
+                module = imp.names[0] if imp.names else imp.module
+                if module in _SKIP_BARE_MODULES:
+                    continue
+            import_stmts.append(stmt)
+
+        return DependentSourceResult(
+            functions=result.functions,
+            import_statements=import_stmts,
+        )
 
     except Exception as e:
         # If AST analysis fails, continue without dependent functions

@@ -214,6 +214,8 @@ def build_context_bundle(
         "backend": comp_meta.get("backend_name") or comp_meta.get("backend"),
         "triton_version": comp_meta.get("triton_version"),
         "hash": comp_meta.get("hash"),
+        # Scratch memory (kernels with global_scratch_size > 0 need set_allocator)
+        "global_scratch_size": comp_meta.get("global_scratch_size"),
     }
 
     # kwargs: include constexpr + explicit scalars used for launch (skip tensor args)
