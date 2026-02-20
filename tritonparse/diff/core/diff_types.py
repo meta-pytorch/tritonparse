@@ -138,10 +138,14 @@ class TensorArgDiff:
         dtype_a: Dtype string of tensor A (e.g., "torch.float32").
         dtype_b: Dtype string of tensor B.
         metrics: Dict of computed numeric metrics. Standard keys include:
-            max_abs_error, mean_abs_error, max_rel_error, rmse,
-            cosine_similarity, allclose, atol, rtol,
-            nan_count_a, nan_count_b, inf_count_a, inf_count_b,
-            num_mismatched_elements, mismatch_ratio.
+            comparison_mode: "blob" for full tensor comparison or
+                "stats" for inline statistics comparison.
+            Blob mode keys: max_abs_error, mean_abs_error, max_rel_error,
+                rmse, cosine_similarity, allclose, atol, rtol,
+                nan_count_a, nan_count_b, inf_count_a, inf_count_b,
+                num_mismatched_elements, mismatch_ratio.
+            Stats mode keys: min_a, min_b, min_diff, max_a, max_b, max_diff,
+                mean_a, mean_b, mean_diff, std_a, std_b, std_diff, atol.
             New metrics can be added here without schema changes.
         metadata_a: Full tensor metadata from extracted_args for inspection.
         metadata_b: Full tensor metadata from extracted_args for inspection.
@@ -153,7 +157,7 @@ class TensorArgDiff:
     shape_b: list[int] = field(default_factory=list)
     dtype_a: str = ""
     dtype_b: str = ""
-    metrics: dict[str, float | int | bool | None] = field(default_factory=dict)
+    metrics: dict[str, float | int | bool | str | None] = field(default_factory=dict)
     metadata_a: dict[str, Any] = field(default_factory=dict)
     metadata_b: dict[str, Any] = field(default_factory=dict)
 

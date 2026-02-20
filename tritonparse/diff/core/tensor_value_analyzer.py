@@ -6,7 +6,10 @@ Tensor value analyzer for the diff module.
 This module provides Level 5 comparison of actual tensor values
 between two launch events. When tensor blobs are saved
 (TRITONPARSE_SAVE_TENSOR_BLOBS=1), loads the saved tensors and
-computes comprehensive numeric error metrics.
+computes comprehensive numeric error metrics. When blobs are not
+available but inline statistics are present
+(TRITONPARSE_MORE_TENSOR_INFORMATION=1), falls back to comparing
+min/max/mean/std summary statistics.
 """
 
 import logging
@@ -16,12 +19,38 @@ from tritonparse.diff.core.diff_types import TensorArgDiff, TensorValueDiff
 
 logger = logging.getLogger(__name__)
 
+_INLINE_STAT_KEYS = ("min", "max", "mean", "std")
+
+
+def _has_inline_stats(info: dict[str, Any]) -> bool:
+    """Check if a tensor arg has all required inline statistics.
+
+    Uses ``is not None`` rather than truthiness because 0.0 is a valid
+    stat value that would be falsy.
+
+    Args:
+        info: Tensor metadata dictionary from extracted_args.
+
+    Returns:
+        True if all of min, max, mean, std are present and non-None.
+    """
+    return all(info.get(k) is not None for k in _INLINE_STAT_KEYS)
+
 
 class TensorValueAnalyzer:
     """Analyzer for Level 5 tensor value comparison.
 
-    Compares actual numeric tensor values between two launch events
-    by loading saved tensor blobs and computing error metrics.
+    Compares actual numeric tensor values between two launch events.
+    Supports two comparison modes:
+
+    - **blob mode**: Loads saved tensor blobs (requires
+      TRITONPARSE_SAVE_TENSOR_BLOBS=1) and computes comprehensive
+      element-wise error metrics.
+    - **stats mode**: Compares inline summary statistics (min, max,
+      mean, std) when blobs are unavailable but
+      TRITONPARSE_MORE_TENSOR_INFORMATION=1 was set during tracing.
+
+    Blob mode is preferred when available; stats mode is a fallback.
 
     Attributes:
         launch_a: First launch event.
@@ -80,17 +109,23 @@ class TensorValueAnalyzer:
                 warning="No common tensor arguments found between launch events",
             )
 
-        # Check if any tensor has blob_path on both sides
+        # Check if any tensor has blob_path or inline stats on both sides
         has_any_blobs = any(
             args_a[name].get("blob_path") and args_b[name].get("blob_path")
             for name in common_tensors
         )
-        if not has_any_blobs:
+        has_any_inline_stats = any(
+            _has_inline_stats(args_a[name]) and _has_inline_stats(args_b[name])
+            for name in common_tensors
+        )
+
+        if not has_any_blobs and not has_any_inline_stats:
             return TensorValueDiff(
                 status="skipped",
                 warning=(
-                    "No tensor blobs found. "
-                    "Re-run tracing with TRITONPARSE_SAVE_TENSOR_BLOBS=1"
+                    "No tensor data found for comparison. "
+                    "Re-run tracing with TRITONPARSE_SAVE_TENSOR_BLOBS=1 "
+                    "or TRITONPARSE_MORE_TENSOR_INFORMATION=1"
                 ),
             )
 
@@ -146,6 +181,9 @@ class TensorValueAnalyzer:
     ) -> TensorArgDiff:
         """Compare a single tensor argument between two launches.
 
+        Routes to blob-based or stats-based comparison depending on
+        what data is available. Blob comparison is preferred.
+
         Args:
             name: Argument name.
             info_a: Tensor metadata from launch A's extracted_args.
@@ -172,18 +210,43 @@ class TensorValueAnalyzer:
             metadata_b=info_b,
         )
 
-        # Skip if either side lacks blob_path
-        if not blob_path_a or not blob_path_b:
+        # Route to the appropriate comparison method
+        if blob_path_a and blob_path_b:
+            return self._compare_arg_blob(name, info_a, info_b, base_diff)
+        elif _has_inline_stats(info_a) and _has_inline_stats(info_b):
+            return self._compare_arg_stats(info_a, info_b, base_diff)
+        else:
             base_diff.status = "skipped"
             return base_diff
 
+    def _compare_arg_blob(
+        self,
+        name: str,
+        info_a: dict[str, Any],
+        info_b: dict[str, Any],
+        base_diff: TensorArgDiff,
+    ) -> TensorArgDiff:
+        """Compare a single tensor argument using full blob data.
+
+        Loads saved tensor blobs from disk and computes comprehensive
+        element-wise error metrics.
+
+        Args:
+            name: Argument name (for logging).
+            info_a: Tensor metadata from launch A's extracted_args.
+            info_b: Tensor metadata from launch B's extracted_args.
+            base_diff: Pre-populated TensorArgDiff with shape/dtype info.
+
+        Returns:
+            TensorArgDiff with blob-based comparison results.
+        """
         # Check shape compatibility
-        if shape_a != shape_b:
+        if base_diff.shape_a != base_diff.shape_b:
             base_diff.status = "shape_mismatch"
             return base_diff
 
         # Check dtype compatibility
-        if dtype_a != dtype_b:
+        if base_diff.dtype_a != base_diff.dtype_b:
             base_diff.status = "dtype_mismatch"
             return base_diff
 
@@ -191,8 +254,8 @@ class TensorValueAnalyzer:
         try:
             from tritonparse.tools.load_tensor import load_tensor
 
-            tensor_a = load_tensor(blob_path_a, device="cpu")
-            tensor_b = load_tensor(blob_path_b, device="cpu")
+            tensor_a = load_tensor(info_a["blob_path"], device="cpu")
+            tensor_b = load_tensor(info_b["blob_path"], device="cpu")
         except Exception as e:
             logger.warning("Failed to load tensors for arg '%s': %s", name, e)
             base_diff.status = "load_error"
@@ -200,6 +263,7 @@ class TensorValueAnalyzer:
 
         # Compute metrics
         metrics = self._compute_metrics(tensor_a, tensor_b)
+        metrics["comparison_mode"] = "blob"
         base_diff.metrics = metrics
 
         # Determine per-arg status
@@ -215,9 +279,91 @@ class TensorValueAnalyzer:
 
         return base_diff
 
+    def _compare_arg_stats(
+        self,
+        info_a: dict[str, Any],
+        info_b: dict[str, Any],
+        base_diff: TensorArgDiff,
+    ) -> TensorArgDiff:
+        """Compare a single tensor argument using inline statistics.
+
+        Uses min/max/mean/std from TRITONPARSE_MORE_TENSOR_INFORMATION=1
+        when full tensor blobs are not available. This is a lower-fidelity
+        comparison that detects large-scale divergences but cannot compute
+        element-wise metrics like allclose or cosine similarity.
+
+        Args:
+            info_a: Tensor metadata from launch A's extracted_args.
+            info_b: Tensor metadata from launch B's extracted_args.
+            base_diff: Pre-populated TensorArgDiff with shape/dtype info.
+
+        Returns:
+            TensorArgDiff with stats-based comparison results.
+        """
+        metrics = self._compute_stats_metrics(info_a, info_b)
+        metrics["comparison_mode"] = "stats"
+        base_diff.metrics = metrics
+
+        # Determine per-arg status based on stat differences
+        min_diff = metrics["min_diff"]
+        max_diff = metrics["max_diff"]
+        mean_diff = metrics["mean_diff"]
+        std_diff = metrics["std_diff"]
+
+        if min_diff == 0.0 and max_diff == 0.0 and mean_diff == 0.0 and std_diff == 0.0:
+            base_diff.status = "identical"
+        elif (
+            min_diff <= self.atol
+            and max_diff <= self.atol
+            and mean_diff <= self.atol
+            and std_diff <= self.atol
+        ):
+            base_diff.status = "close"
+        else:
+            base_diff.status = "divergent"
+
+        return base_diff
+
+    def _compute_stats_metrics(
+        self, info_a: dict[str, Any], info_b: dict[str, Any]
+    ) -> dict[str, float | int | bool | str | None]:
+        """Compute comparison metrics from inline tensor statistics.
+
+        Args:
+            info_a: Tensor metadata with min/max/mean/std from launch A.
+            info_b: Tensor metadata with min/max/mean/std from launch B.
+
+        Returns:
+            Dictionary of computed metrics.
+        """
+        min_a = info_a["min"]
+        min_b = info_b["min"]
+        max_a = info_a["max"]
+        max_b = info_b["max"]
+        mean_a = info_a["mean"]
+        mean_b = info_b["mean"]
+        std_a = info_a["std"]
+        std_b = info_b["std"]
+
+        return {
+            "min_a": min_a,
+            "min_b": min_b,
+            "min_diff": abs(min_a - min_b),
+            "max_a": max_a,
+            "max_b": max_b,
+            "max_diff": abs(max_a - max_b),
+            "mean_a": mean_a,
+            "mean_b": mean_b,
+            "mean_diff": abs(mean_a - mean_b),
+            "std_a": std_a,
+            "std_b": std_b,
+            "std_diff": abs(std_a - std_b),
+            "atol": self.atol,
+        }
+
     def _compute_metrics(
         self, tensor_a: Any, tensor_b: Any
-    ) -> dict[str, float | int | bool | None]:
+    ) -> dict[str, float | int | bool | str | None]:
         """Compute comprehensive numeric comparison metrics.
 
         Args:

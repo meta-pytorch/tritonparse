@@ -194,11 +194,20 @@ class DiffEngine:
         if tv.status == "divergent":
             for arg_name, arg_diff in tv.per_arg.items():
                 if arg_diff.status == "divergent":
-                    max_err = arg_diff.metrics.get("max_abs_error")
-                    if max_err is not None:
-                        highlights.append(
-                            f"Tensor '{arg_name}': max_abs_error={max_err:.2e}"
-                        )
+                    mode = arg_diff.metrics.get("comparison_mode", "blob")
+                    if mode == "stats":
+                        mean_diff = arg_diff.metrics.get("mean_diff")
+                        if mean_diff is not None:
+                            highlights.append(
+                                f"Tensor '{arg_name}': "
+                                f"mean_diff={mean_diff:.2e} (stats-based)"
+                            )
+                    else:
+                        max_err = arg_diff.metrics.get("max_abs_error")
+                        if max_err is not None:
+                            highlights.append(
+                                f"Tensor '{arg_name}': max_abs_error={max_err:.2e}"
+                            )
         return highlights
 
     def _generate_summary(self) -> None:

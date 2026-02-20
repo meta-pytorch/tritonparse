@@ -203,27 +203,48 @@ def _format_tensor_value_diff(tensor_diff: TensorValueDiff) -> str:
 
     for arg_name, arg_diff in tensor_diff.per_arg.items():
         icon = status_icon.get(arg_diff.status, "?")
-        lines.append(f"  [{icon}] {arg_name}: {arg_diff.status}")
+        mode = arg_diff.metrics.get("comparison_mode", "")
+        mode_suffix = " (stats)" if mode == "stats" else ""
+        lines.append(f"  [{icon}] {arg_name}: {arg_diff.status}{mode_suffix}")
 
         # Show expanded metrics for divergent args
         if arg_diff.status == "divergent":
             metrics = arg_diff.metrics
-            metric_lines = [
-                ("Max Abs Error", "max_abs_error"),
-                ("Mean Abs Error", "mean_abs_error"),
-                ("Max Rel Error", "max_rel_error"),
-                ("RMSE", "rmse"),
-                ("Cosine Similarity", "cosine_similarity"),
-                ("Mismatched Elements", "num_mismatched_elements"),
-                ("Mismatch Ratio", "mismatch_ratio"),
-            ]
-            for label, key in metric_lines:
-                val = metrics.get(key)
-                if val is not None:
-                    if isinstance(val, float):
-                        lines.append(f"      {label:20s}: {val:.6e}")
-                    else:
-                        lines.append(f"      {label:20s}: {val}")
+            mode = metrics.get("comparison_mode", "blob")
+            if mode == "stats":
+                stat_lines = [
+                    ("Min", "min_a", "min_b", "min_diff"),
+                    ("Max", "max_a", "max_b", "max_diff"),
+                    ("Mean", "mean_a", "mean_b", "mean_diff"),
+                    ("Std", "std_a", "std_b", "std_diff"),
+                ]
+                for label, key_a, key_b, key_diff in stat_lines:
+                    val_a = metrics.get(key_a)
+                    val_b = metrics.get(key_b)
+                    val_diff = metrics.get(key_diff)
+                    if val_diff is not None:
+                        lines.append(
+                            f"      {label:20s}: "
+                            f"A={val_a:.6e} B={val_b:.6e} "
+                            f"diff={val_diff:.6e}"
+                        )
+            else:
+                metric_lines = [
+                    ("Max Abs Error", "max_abs_error"),
+                    ("Mean Abs Error", "mean_abs_error"),
+                    ("Max Rel Error", "max_rel_error"),
+                    ("RMSE", "rmse"),
+                    ("Cosine Similarity", "cosine_similarity"),
+                    ("Mismatched Elements", "num_mismatched_elements"),
+                    ("Mismatch Ratio", "mismatch_ratio"),
+                ]
+                for label, key in metric_lines:
+                    val = metrics.get(key)
+                    if val is not None:
+                        if isinstance(val, float):
+                            lines.append(f"      {label:20s}: {val:.6e}")
+                        else:
+                            lines.append(f"      {label:20s}: {val}")
 
     return "\n".join(lines)
 

@@ -81,8 +81,9 @@ def _add_diff_args(parser: argparse.ArgumentParser) -> None:
         "--tensor-values",
         action="store_true",
         help=(
-            "Compare tensor values between launch events "
-            "(requires TRITONPARSE_SAVE_TENSOR_BLOBS=1)"
+            "Compare tensor values between launch events. "
+            "Best with TRITONPARSE_SAVE_TENSOR_BLOBS=1 (full comparison); "
+            "also supports TRITONPARSE_MORE_TENSOR_INFORMATION=1 (stats comparison)"
         ),
     )
     parser.add_argument(

@@ -439,12 +439,12 @@ class TestTensorValueDiff(unittest.TestCase):
         self.assertEqual(len(launches), 0)
 
     def test_analyzer_no_blobs(self) -> None:
-        """Test analyzer skips when no blob_path present."""
+        """Test analyzer skips when no blob_path and no inline stats present."""
         launch_a = create_launch_event(kernel_hash="abc")
         launch_b = create_launch_event(kernel_hash="xyz")
         result = TensorValueAnalyzer(launch_a, launch_b).analyze()
         self.assertEqual(result.status, "skipped")
-        self.assertIn("TRITONPARSE_SAVE_TENSOR_BLOBS", result.warning)
+        self.assertIn("TRITONPARSE_MORE_TENSOR_INFORMATION", result.warning)
 
     def test_analyzer_no_extracted_args(self) -> None:
         """Test analyzer skips when no extracted_args."""
@@ -668,10 +668,10 @@ class TestTensorValueDiff(unittest.TestCase):
             tensor_values=True,
         )
         result = engine.run()
-        # No blobs -> skipped
+        # No blobs and no inline stats -> skipped
         self.assertEqual(result.tensor_value_diff.status, "skipped")
         self.assertIn(
-            "TRITONPARSE_SAVE_TENSOR_BLOBS",
+            "TRITONPARSE_MORE_TENSOR_INFORMATION",
             result.tensor_value_diff.warning,
         )
 
@@ -721,6 +721,243 @@ class TestTensorValueDiff(unittest.TestCase):
         self.assertIn("[=] x_ptr", output)
         self.assertIn("[!] y_ptr", output)
         self.assertIn("Max Abs Error", output)
+
+
+class TestTensorValueDiffInlineStats(unittest.TestCase):
+    """Tests for tensor value comparison using inline statistics fallback."""
+
+    def test_analyzer_inline_stats_identical(self) -> None:
+        """Test analyzer with identical inline stats."""
+        args = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=dict(args))
+        launch_b = create_launch_event(extracted_args=dict(args))
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "identical")
+        self.assertEqual(result.args_compared, 1)
+        self.assertEqual(result.per_arg["x_ptr"].status, "identical")
+        self.assertEqual(result.per_arg["x_ptr"].metrics["comparison_mode"], "stats")
+
+    def test_analyzer_inline_stats_close(self) -> None:
+        """Test analyzer with close inline stats (within atol)."""
+        args_a = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        args_b = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 1e-7,
+                "max": 1.0 + 1e-7,
+                "mean": 0.5 + 1e-7,
+                "std": 0.29 + 1e-7,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=args_a)
+        launch_b = create_launch_event(extracted_args=args_b)
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "close")
+        self.assertEqual(result.per_arg["x_ptr"].metrics["comparison_mode"], "stats")
+
+    def test_analyzer_inline_stats_divergent(self) -> None:
+        """Test analyzer with divergent inline stats."""
+        args_a = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        args_b = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 10.0,
+                "max": 20.0,
+                "mean": 15.0,
+                "std": 2.9,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=args_a)
+        launch_b = create_launch_event(extracted_args=args_b)
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "divergent")
+        self.assertEqual(result.per_arg["x_ptr"].status, "divergent")
+        self.assertEqual(result.per_arg["x_ptr"].metrics["comparison_mode"], "stats")
+        self.assertAlmostEqual(result.per_arg["x_ptr"].metrics["mean_diff"], 14.5)
+
+    def test_analyzer_mixed_blob_and_stats(self) -> None:
+        """Test analyzer with some args having blobs and some only stats."""
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch not available")
+
+        tensor = torch.ones(1024)
+        args_a = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "blob_path": "/tmp/a.bin",
+            },
+            "y_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        args_b = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "blob_path": "/tmp/b.bin",
+            },
+            "y_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=args_a)
+        launch_b = create_launch_event(extracted_args=args_b)
+
+        with patch(
+            "tritonparse.tools.load_tensor.load_tensor",
+            return_value=tensor,
+        ):
+            result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+
+        self.assertEqual(result.args_compared, 2)
+        self.assertEqual(result.per_arg["x_ptr"].metrics["comparison_mode"], "blob")
+        self.assertEqual(result.per_arg["y_ptr"].metrics["comparison_mode"], "stats")
+
+    def test_analyzer_no_blobs_no_stats(self) -> None:
+        """Test analyzer skips when neither blobs nor stats are present."""
+        launch_a = create_launch_event()
+        launch_b = create_launch_event()
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("TRITONPARSE_MORE_TENSOR_INFORMATION", result.warning)
+        self.assertIn("TRITONPARSE_SAVE_TENSOR_BLOBS", result.warning)
+
+    def test_analyzer_partial_stats_skips(self) -> None:
+        """Test that tensors with only some stats fields are skipped."""
+        args_a = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                # missing mean and std
+            },
+        }
+        args_b = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=args_a)
+        launch_b = create_launch_event(extracted_args=args_b)
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        # No tensor has full stats on both sides and no blobs -> skipped
+        self.assertEqual(result.status, "skipped")
+
+    def test_analyzer_inline_stats_zero_values(self) -> None:
+        """Test that zero stat values (which are falsy) are handled correctly."""
+        args = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 0.0,
+                "mean": 0.0,
+                "std": 0.0,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=dict(args))
+        launch_b = create_launch_event(extracted_args=dict(args))
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        # Should not skip — 0.0 is a valid stat value
+        self.assertEqual(result.status, "identical")
+        self.assertEqual(result.per_arg["x_ptr"].metrics["comparison_mode"], "stats")
+
+    def test_format_summary_with_stats_comparison(self) -> None:
+        """Test format_summary formats stats-based tensor comparison."""
+        from tritonparse.diff.core.diff_types import CompilationDiffResult
+
+        result = CompilationDiffResult()
+        result.tensor_value_diff = TensorValueDiff(
+            status="divergent",
+            args_compared=1,
+            args_divergent=1,
+            per_arg={
+                "x_ptr": TensorArgDiff(
+                    arg_name="x_ptr",
+                    status="divergent",
+                    metrics={
+                        "comparison_mode": "stats",
+                        "min_a": 0.0,
+                        "min_b": 10.0,
+                        "min_diff": 10.0,
+                        "max_a": 1.0,
+                        "max_b": 20.0,
+                        "max_diff": 19.0,
+                        "mean_a": 0.5,
+                        "mean_b": 15.0,
+                        "mean_diff": 14.5,
+                        "std_a": 0.29,
+                        "std_b": 2.9,
+                        "std_diff": 2.61,
+                        "atol": 1e-5,
+                    },
+                ),
+            },
+        )
+        output = format_summary(result)
+        self.assertIn("(stats)", output)
+        self.assertIn("Min", output)
+        self.assertIn("Mean", output)
 
 
 if __name__ == "__main__":
