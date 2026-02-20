@@ -27,6 +27,10 @@ from tritonparse.diff.core.ir_stats_analyzer import (
     IRStatsAnalyzer,
     OP_PATTERNS,
 )
+from tritonparse.diff.core.tensor_value_analyzer import (
+    analyze_tensor_values,
+    TensorValueAnalyzer,
+)
 
 __all__ = [
     # Types
@@ -43,6 +47,9 @@ __all__ = [
     "TensorValueDiff",
     # Event matcher
     "find_launches_for_compilation",
+    # Tensor Value Analyzer
+    "analyze_tensor_values",
+    "TensorValueAnalyzer",
     # IR Stats Analyzer
     "analyze_ir_stats",
     "analyze_operation_diff",
