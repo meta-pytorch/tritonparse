@@ -124,6 +124,68 @@ class PythonLineDiff:
 
 
 @dataclass
+class TensorArgDiff:
+    """Numeric comparison result for a single tensor argument.
+
+    Uses a dict-based metrics field for extensibility — new metrics
+    can be added without requiring schema changes.
+
+    Attributes:
+        arg_name: Name of the tensor argument (e.g., "x_ptr").
+        status: Per-arg comparison status.
+        shape_a: Shape of tensor A.
+        shape_b: Shape of tensor B.
+        dtype_a: Dtype string of tensor A (e.g., "torch.float32").
+        dtype_b: Dtype string of tensor B.
+        metrics: Dict of computed numeric metrics. Standard keys include:
+            max_abs_error, mean_abs_error, max_rel_error, rmse,
+            cosine_similarity, allclose, atol, rtol,
+            nan_count_a, nan_count_b, inf_count_a, inf_count_b,
+            num_mismatched_elements, mismatch_ratio.
+            New metrics can be added here without schema changes.
+        metadata_a: Full tensor metadata from extracted_args for inspection.
+        metadata_b: Full tensor metadata from extracted_args for inspection.
+    """
+
+    arg_name: str = ""
+    status: str = "skipped"
+    shape_a: list[int] = field(default_factory=list)
+    shape_b: list[int] = field(default_factory=list)
+    dtype_a: str = ""
+    dtype_b: str = ""
+    metrics: dict[str, float | int | bool | None] = field(default_factory=dict)
+    metadata_a: dict[str, Any] = field(default_factory=dict)
+    metadata_b: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TensorValueDiff:
+    """Level 5: Tensor value comparison result.
+
+    Attributes:
+        status: Overall status: "identical", "close", "divergent", "skipped".
+        args_compared: Number of tensor args compared.
+        args_identical: Number of args with status="identical".
+        args_close: Number of args with status="close" (allclose=True).
+        args_divergent: Number of args that diverge.
+        atol: Absolute tolerance used.
+        rtol: Relative tolerance used.
+        warning: Warning message (e.g., "No tensor blobs found").
+        per_arg: Per-argument comparison results keyed by arg name.
+    """
+
+    status: str = "skipped"
+    args_compared: int = 0
+    args_identical: int = 0
+    args_close: int = 0
+    args_divergent: int = 0
+    atol: float = 1e-5
+    rtol: float = 1e-3
+    warning: str | None = None
+    per_arg: dict[str, TensorArgDiff] = field(default_factory=dict)
+
+
+@dataclass
 class DiffNote:
     """A note in the summary from rule-based or AI analysis.
 
@@ -185,6 +247,7 @@ class CompilationDiffResult:
         ir_stats: Level 3a IR statistics by type.
         operation_diff: Level 3b operation-level diff by IR type.
         by_python_line: Level 4 source mapping-based comparison.
+        tensor_value_diff: Level 5 tensor value comparison.
     """
 
     # Identifiers
@@ -206,3 +269,4 @@ class CompilationDiffResult:
     ir_stats: dict[str, IRStatsDiff] = field(default_factory=dict)
     operation_diff: dict[str, OperationDiff] = field(default_factory=dict)
     by_python_line: dict[int, PythonLineDiff] = field(default_factory=dict)
+    tensor_value_diff: TensorValueDiff = field(default_factory=TensorValueDiff)

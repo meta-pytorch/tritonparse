@@ -19,6 +19,8 @@ from tritonparse.diff.core.diff_types import (
     OperationDiff,
     PythonLineDiff,
     PythonSourceDiff,
+    TensorArgDiff,
+    TensorValueDiff,
 )
 from tritonparse.diff.output import (
     append_diff_to_file,
@@ -42,6 +44,8 @@ __all__ = [
     "OperationDiff",
     "PythonLineDiff",
     "PythonSourceDiff",
+    "TensorArgDiff",
+    "TensorValueDiff",
     # Output functions
     "append_diff_to_file",
     "ConsolidatedDiffWriter",

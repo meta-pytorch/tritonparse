@@ -14,7 +14,10 @@ from tritonparse.diff.core.diff_types import (
     OperationDiff,
     PythonLineDiff,
     PythonSourceDiff,
+    TensorArgDiff,
+    TensorValueDiff,
 )
+from tritonparse.diff.core.event_matcher import find_launches_for_compilation
 from tritonparse.diff.core.ir_stats_analyzer import (
     analyze_ir_stats,
     analyze_operation_diff,
@@ -36,6 +39,10 @@ __all__ = [
     "OperationDiff",
     "PythonLineDiff",
     "PythonSourceDiff",
+    "TensorArgDiff",
+    "TensorValueDiff",
+    # Event matcher
+    "find_launches_for_compilation",
     # IR Stats Analyzer
     "analyze_ir_stats",
     "analyze_operation_diff",

@@ -195,3 +195,31 @@ def get_kernel_hash(event: dict[str, Any]) -> str:
     compilation_metadata = event.get("compilation_metadata", {})
 
     return metadata.get("hash") or compilation_metadata.get("hash") or ""
+
+
+def find_launches_for_compilation(
+    events: list[dict[str, Any]], compilation_hash: str
+) -> list[dict[str, Any]]:
+    """Find launch events associated with a compilation hash.
+
+    Launch events are linked to compilations via the
+    compilation_metadata.hash field.
+
+    Args:
+        events: List of all events.
+        compilation_hash: Hash of the compilation to find launches for.
+
+    Returns:
+        List of launch event dictionaries matching the hash.
+    """
+    if not compilation_hash:
+        return []
+
+    launches = []
+    for event in events:
+        if event.get("event_type") != "launch":
+            continue
+        event_hash = event.get("compilation_metadata", {}).get("hash", "")
+        if event_hash == compilation_hash:
+            launches.append(event)
+    return launches
