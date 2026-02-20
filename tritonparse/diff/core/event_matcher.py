@@ -223,3 +223,61 @@ def find_launches_for_compilation(
         if event_hash == compilation_hash:
             launches.append(event)
     return launches
+
+
+def find_launch_for_compilation(
+    events: list[dict[str, Any]],
+    compilation_event: dict[str, Any],
+    compilation_hash: str,
+) -> dict[str, Any] | None:
+    """Find the launch event positionally associated with a compilation.
+
+    When multiple compilations share the same hash (e.g., the same kernel
+    compiled twice), this function pairs each compilation with the launch
+    at the same ordinal position among all launches with that hash.
+    For example, the 2nd compilation with hash X gets the 2nd launch
+    with hash X.
+
+    Args:
+        events: List of all events.
+        compilation_event: The specific compilation event to find a launch for.
+        compilation_hash: Hash of the compilation.
+
+    Returns:
+        The matching launch event, or None if not found.
+    """
+    if not compilation_hash:
+        return None
+
+    # Find the ordinal position of this compilation among all
+    # compilations with the same hash
+    comp_position = 0
+    found = False
+    for event in events:
+        if not is_compilation_event(event):
+            continue
+        event_hash = get_kernel_hash(event)
+        if event_hash != compilation_hash:
+            continue
+        if event is compilation_event:
+            found = True
+            break
+        comp_position += 1
+
+    if not found:
+        # Compilation not found by identity; fall back to first launch
+        comp_position = 0
+
+    # Find the launch at the same ordinal position
+    launch_position = 0
+    for event in events:
+        if event.get("event_type") != "launch":
+            continue
+        event_hash = event.get("compilation_metadata", {}).get("hash", "")
+        if event_hash != compilation_hash:
+            continue
+        if launch_position == comp_position:
+            return event
+        launch_position += 1
+
+    return None

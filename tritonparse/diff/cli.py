@@ -13,7 +13,7 @@ from typing import Optional
 
 from tritonparse.diff.core.diff_engine import DiffEngine
 from tritonparse.diff.core.event_matcher import (
-    find_launches_for_compilation,
+    find_launch_for_compilation,
     get_compilation_events,
     get_kernel_hash,
     load_events,
@@ -297,10 +297,8 @@ def diff_command(
     if tensor_values:
         hash_a = get_kernel_hash(comp_a)
         hash_b = get_kernel_hash(comp_b)
-        launches_a = find_launches_for_compilation(all_events_a, hash_a)
-        launches_b = find_launches_for_compilation(all_events_b, hash_b)
-        launch_a = launches_a[0] if launches_a else None
-        launch_b = launches_b[0] if launches_b else None
+        launch_a = find_launch_for_compilation(all_events_a, comp_a, hash_a)
+        launch_b = find_launch_for_compilation(all_events_b, comp_b, hash_b)
 
     # Run the diff engine
     engine = DiffEngine(
