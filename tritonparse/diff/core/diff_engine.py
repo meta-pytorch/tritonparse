@@ -4,21 +4,26 @@
 Main diff engine that coordinates all analyzers.
 
 The DiffEngine is the central orchestrator for comparing two compilation events.
-It coordinates multiple analyzers (metadata, source, IR stats, source mapping)
-and generates a comprehensive diff result.
+It coordinates multiple analyzers (metadata, source, IR stats, source mapping,
+tensor values) and generates a comprehensive diff result.
 
 Per the design document, this module delegates to specialized analyzer modules:
 - Level 1: MetadataAnalyzer (metadata_analyzer.py)
 - Level 2: SourceAnalyzer (source_analyzer.py)
 - Level 3: IRStatsAnalyzer (ir_stats_analyzer.py)
 - Level 4: SourcemapAnalyzer (sourcemap_analyzer.py)
+- Level 5: TensorValueAnalyzer (tensor_value_analyzer.py)
 - Summary: Summary generation (inline, to be extracted in D7)
 """
 
 import uuid
 from typing import Any
 
-from tritonparse.diff.core.diff_types import CompilationDiffResult, DiffSummary
+from tritonparse.diff.core.diff_types import (
+    CompilationDiffResult,
+    DiffSummary,
+    TensorValueDiff,
+)
 from tritonparse.diff.core.event_matcher import (
     ensure_source_mappings,
     get_kernel_hash,
@@ -28,6 +33,7 @@ from tritonparse.diff.core.ir_stats_analyzer import IRStatsAnalyzer
 from tritonparse.diff.core.metadata_analyzer import MetadataAnalyzer
 from tritonparse.diff.core.source_analyzer import SourceAnalyzer
 from tritonparse.diff.core.sourcemap_analyzer import SourcemapAnalyzer
+from tritonparse.diff.core.tensor_value_analyzer import TensorValueAnalyzer
 
 
 class DiffEngine:
@@ -38,6 +44,7 @@ class DiffEngine:
     - Level 2: Python source comparison
     - Level 3: IR statistics and operation comparison
     - Level 4: Source mapping-based line-level comparison
+    - Level 5: Tensor value comparison (optional, requires launch events)
 
     Attributes:
         comp_a: First compilation event (with source_mappings ensured).
@@ -46,6 +53,11 @@ class DiffEngine:
         source_trace_b: Path to source trace file for event B.
         event_index_a: Index of event A in its source trace.
         event_index_b: Index of event B in its source trace.
+        launch_a: Launch event for compilation A (optional).
+        launch_b: Launch event for compilation B (optional).
+        tensor_values: Whether to perform tensor value comparison.
+        atol: Absolute tolerance for tensor comparison.
+        rtol: Relative tolerance for tensor comparison.
         result: The CompilationDiffResult being built.
     """
 
@@ -57,6 +69,11 @@ class DiffEngine:
         source_trace_b: str = "",
         event_index_a: int = 0,
         event_index_b: int = 0,
+        launch_a: dict[str, Any] | None = None,
+        launch_b: dict[str, Any] | None = None,
+        tensor_values: bool = False,
+        atol: float = 1e-5,
+        rtol: float = 1e-3,
     ):
         """Initialize the diff engine with two compilation events.
 
@@ -67,6 +84,11 @@ class DiffEngine:
             source_trace_b: Path to source trace file for event B.
             event_index_a: Index of event A in its source trace.
             event_index_b: Index of event B in its source trace.
+            launch_a: Launch event for compilation A (optional).
+            launch_b: Launch event for compilation B (optional).
+            tensor_values: Whether to perform tensor value comparison.
+            atol: Absolute tolerance for tensor comparison.
+            rtol: Relative tolerance for tensor comparison.
         """
         self.comp_a = ensure_source_mappings(comp_a)
         self.comp_b = ensure_source_mappings(comp_b)
@@ -74,6 +96,11 @@ class DiffEngine:
         self.source_trace_b = source_trace_b
         self.event_index_a = event_index_a
         self.event_index_b = event_index_b
+        self.launch_a = launch_a
+        self.launch_b = launch_b
+        self.tensor_values = tensor_values
+        self.atol = atol
+        self.rtol = rtol
         self.result = CompilationDiffResult()
 
     def run(self) -> CompilationDiffResult:
@@ -89,6 +116,7 @@ class DiffEngine:
         self._diff_python_source()
         self._diff_ir_stats()
         self._diff_by_python_line()
+        self._diff_tensor_values()
         self._generate_summary()
         return self.result
 
@@ -138,6 +166,41 @@ class DiffEngine:
         analyzer = SourcemapAnalyzer(self.comp_a, self.comp_b)
         self.result.by_python_line = analyzer.analyze()
 
+    def _diff_tensor_values(self) -> None:
+        """Level 5: Compare tensor values between launch events.
+
+        Only runs when tensor_values=True. Requires launch events
+        to be provided; skips with a warning if they are missing.
+        """
+        if not self.tensor_values:
+            return
+
+        if self.launch_a is None or self.launch_b is None:
+            self.result.tensor_value_diff = TensorValueDiff(
+                status="skipped",
+                warning="No launch events found for tensor value comparison",
+            )
+            return
+
+        analyzer = TensorValueAnalyzer(
+            self.launch_a, self.launch_b, atol=self.atol, rtol=self.rtol
+        )
+        self.result.tensor_value_diff = analyzer.analyze()
+
+    def _get_tensor_value_highlights(self) -> list[str]:
+        """Get highlight strings for tensor value divergences."""
+        highlights: list[str] = []
+        tv = self.result.tensor_value_diff
+        if tv.status == "divergent":
+            for arg_name, arg_diff in tv.per_arg.items():
+                if arg_diff.status == "divergent":
+                    max_err = arg_diff.metrics.get("max_abs_error")
+                    if max_err is not None:
+                        highlights.append(
+                            f"Tensor '{arg_name}': max_abs_error={max_err:.2e}"
+                        )
+        return highlights
+
     def _generate_summary(self) -> None:
         """Generate summary from all diff results."""
         highlights: list[str] = []
@@ -162,6 +225,9 @@ class DiffEngine:
                 if len(op_diff.added) > 3:
                     ops_str += f" (+{len(op_diff.added) - 3} more)"
                 highlights.append(f"New in {ir_type.upper()}: {ops_str}")
+
+        # Add tensor value divergence highlights
+        highlights.extend(self._get_tensor_value_highlights())
 
         # Compute stats
         stats["python_lines_compared"] = len(self.result.by_python_line)
