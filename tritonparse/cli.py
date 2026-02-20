@@ -172,6 +172,9 @@ def main():
             list_compilations_flag=args.list_compilations,
             quiet=args.quiet,
             skip_logger=True,  # Already logged above
+            tensor_values=args.tensor_values,
+            atol=args.atol,
+            rtol=args.rtol,
         )
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)

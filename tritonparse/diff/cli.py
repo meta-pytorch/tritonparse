@@ -13,7 +13,9 @@ from typing import Optional
 
 from tritonparse.diff.core.diff_engine import DiffEngine
 from tritonparse.diff.core.event_matcher import (
+    find_launches_for_compilation,
     get_compilation_events,
+    get_kernel_hash,
     load_events,
     match_events_by_index,
     match_events_by_kernel,
@@ -75,6 +77,26 @@ def _add_diff_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Suppress CLI summary output (only write to file)",
     )
+    parser.add_argument(
+        "--tensor-values",
+        action="store_true",
+        help=(
+            "Compare tensor values between launch events "
+            "(requires TRITONPARSE_SAVE_TENSOR_BLOBS=1)"
+        ),
+    )
+    parser.add_argument(
+        "--atol",
+        type=float,
+        default=1e-5,
+        help="Absolute tolerance for tensor comparison (default: 1e-5)",
+    )
+    parser.add_argument(
+        "--rtol",
+        type=float,
+        default=1e-3,
+        help="Relative tolerance for tensor comparison (default: 1e-3)",
+    )
 
 
 def _parse_event_indices(events_str: str) -> tuple[int, int]:
@@ -128,6 +150,9 @@ def diff_command(
     list_compilations_flag: bool = False,
     quiet: bool = False,
     skip_logger: bool = False,
+    tensor_values: bool = False,
+    atol: float = 1e-5,
+    rtol: float = 1e-3,
 ) -> None:
     """
     Main function for the diff command.
@@ -141,6 +166,9 @@ def diff_command(
         list_compilations_flag: If True, list compilations and exit
         quiet: If True, suppress CLI output
         skip_logger: Whether to skip usage logging
+        tensor_values: If True, compare tensor values between launch events
+        atol: Absolute tolerance for tensor comparison
+        rtol: Relative tolerance for tensor comparison
     """
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
@@ -254,6 +282,16 @@ def diff_command(
         # Single-file mode: both indices from same file
         comp_a, comp_b = match_events_by_index(all_events_a, index_a, index_b)
 
+    # Find launch events if tensor value comparison requested
+    launch_a, launch_b = None, None
+    if tensor_values:
+        hash_a = get_kernel_hash(comp_a)
+        hash_b = get_kernel_hash(comp_b)
+        launches_a = find_launches_for_compilation(all_events_a, hash_a)
+        launches_b = find_launches_for_compilation(all_events_b, hash_b)
+        launch_a = launches_a[0] if launches_a else None
+        launch_b = launches_b[0] if launches_b else None
+
     # Run the diff engine
     engine = DiffEngine(
         comp_a,
@@ -262,6 +300,11 @@ def diff_command(
         source_trace_b=input_path_b,
         event_index_a=index_a,
         event_index_b=index_b,
+        launch_a=launch_a,
+        launch_b=launch_b,
+        tensor_values=tensor_values,
+        atol=atol,
+        rtol=rtol,
     )
     result = engine.run()
 

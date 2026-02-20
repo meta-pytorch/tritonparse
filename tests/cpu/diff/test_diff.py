@@ -19,7 +19,11 @@ from unittest.mock import patch
 
 from tritonparse.diff.cli import _parse_event_indices, diff_command
 from tritonparse.diff.core.diff_engine import DiffEngine
+from tritonparse.diff.core.diff_types import TensorArgDiff, TensorValueDiff
+from tritonparse.diff.core.event_matcher import find_launches_for_compilation
+from tritonparse.diff.core.tensor_value_analyzer import TensorValueAnalyzer
 from tritonparse.diff.output.event_writer import create_diff_event
+from tritonparse.diff.output.summary_formatter import format_summary
 
 
 # --- Test Fixtures ---
@@ -338,6 +342,385 @@ class TestDiffCLIDualFile(unittest.TestCase):
         diff_event = json.loads(lines[2])
         self.assertEqual(diff_event["hash_a"], COMP_EVENT_A["kernel_hash"])
         self.assertEqual(diff_event["hash_b"], COMP_EVENT_B["kernel_hash"])
+
+
+# --- Tensor Value Diff Tests ---
+
+
+def create_launch_event(
+    kernel_hash: str = "abc123def456",
+    extracted_args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a sample launch event for testing."""
+    return {
+        "event_type": "launch",
+        "compilation_metadata": {"hash": kernel_hash},
+        "extracted_args": extracted_args
+        or {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+            },
+            "y_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+            },
+            "n_elements": {"type": "int", "value": 1024},
+        },
+    }
+
+
+class TestTensorValueDiff(unittest.TestCase):
+    """Tests for tensor value comparison (Level 5)."""
+
+    def test_types_default_construction(self) -> None:
+        """Test default construction of tensor value types."""
+        arg_diff = TensorArgDiff()
+        self.assertEqual(arg_diff.status, "skipped")
+        self.assertEqual(arg_diff.metrics, {})
+
+        val_diff = TensorValueDiff()
+        self.assertEqual(val_diff.status, "skipped")
+        self.assertEqual(val_diff.args_compared, 0)
+        self.assertEqual(val_diff.per_arg, {})
+
+    def test_types_serialization(self) -> None:
+        """Test tensor value types can be serialized to JSON."""
+        from dataclasses import asdict
+
+        val_diff = TensorValueDiff(
+            status="divergent",
+            args_compared=1,
+            args_divergent=1,
+            per_arg={
+                "x_ptr": TensorArgDiff(
+                    arg_name="x_ptr",
+                    status="divergent",
+                    shape_a=[1024],
+                    shape_b=[1024],
+                    dtype_a="torch.float32",
+                    dtype_b="torch.float32",
+                    metrics={"max_abs_error": 0.001, "allclose": False},
+                )
+            },
+        )
+        json_str = json.dumps(asdict(val_diff))
+        parsed = json.loads(json_str)
+        self.assertEqual(parsed["status"], "divergent")
+        self.assertIn("x_ptr", parsed["per_arg"])
+
+    def test_compilation_diff_result_has_tensor_value_diff(self) -> None:
+        """Test CompilationDiffResult includes tensor_value_diff field."""
+        from tritonparse.diff.core.diff_types import CompilationDiffResult
+
+        result = CompilationDiffResult()
+        self.assertEqual(result.tensor_value_diff.status, "skipped")
+
+    def test_find_launches_for_compilation(self) -> None:
+        """Test finding launch events by compilation hash."""
+        events = [
+            {"event_type": "compilation", "kernel_hash": "abc"},
+            create_launch_event(kernel_hash="abc"),
+            create_launch_event(kernel_hash="xyz"),
+            create_launch_event(kernel_hash="abc"),
+        ]
+        launches = find_launches_for_compilation(events, "abc")
+        self.assertEqual(len(launches), 2)
+
+        launches = find_launches_for_compilation(events, "xyz")
+        self.assertEqual(len(launches), 1)
+
+        launches = find_launches_for_compilation(events, "nonexistent")
+        self.assertEqual(len(launches), 0)
+
+        launches = find_launches_for_compilation(events, "")
+        self.assertEqual(len(launches), 0)
+
+    def test_analyzer_no_blobs(self) -> None:
+        """Test analyzer skips when no blob_path present."""
+        launch_a = create_launch_event(kernel_hash="abc")
+        launch_b = create_launch_event(kernel_hash="xyz")
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("TRITONPARSE_SAVE_TENSOR_BLOBS", result.warning)
+
+    def test_analyzer_no_extracted_args(self) -> None:
+        """Test analyzer skips when no extracted_args."""
+        launch_a = {"event_type": "launch"}
+        launch_b = {"event_type": "launch"}
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("extracted_args", result.warning)
+
+    def test_analyzer_no_common_tensors(self) -> None:
+        """Test analyzer skips when no common tensor args."""
+        launch_a = create_launch_event(
+            extracted_args={"a": {"type": "tensor", "shape": [1]}}
+        )
+        launch_b = create_launch_event(
+            extracted_args={"b": {"type": "tensor", "shape": [1]}}
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "skipped")
+        self.assertIn("common tensor", result.warning)
+
+    def test_analyzer_shape_mismatch(self) -> None:
+        """Test analyzer detects shape mismatch."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                }
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [2048],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/b.bin",
+                }
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.per_arg["x_ptr"].status, "shape_mismatch")
+
+    def test_analyzer_dtype_mismatch(self) -> None:
+        """Test analyzer detects dtype mismatch."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                }
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float16",
+                    "blob_path": "/tmp/b.bin",
+                }
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.per_arg["x_ptr"].status, "dtype_mismatch")
+
+    def test_analyzer_with_mocked_blobs_identical(self) -> None:
+        """Test analyzer with identical tensors (mocked load_tensor)."""
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch not available")
+
+        tensor = torch.ones(1024)
+
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                }
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/b.bin",
+                }
+            }
+        )
+
+        with patch(
+            "tritonparse.tools.load_tensor.load_tensor",
+            return_value=tensor,
+        ):
+            result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+
+        self.assertEqual(result.status, "identical")
+        self.assertEqual(result.args_compared, 1)
+        self.assertEqual(result.args_identical, 1)
+        self.assertEqual(result.per_arg["x_ptr"].status, "identical")
+        self.assertEqual(result.per_arg["x_ptr"].metrics["max_abs_error"], 0.0)
+
+    def test_analyzer_with_mocked_blobs_divergent(self) -> None:
+        """Test analyzer with divergent tensors (mocked load_tensor)."""
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch not available")
+
+        tensor_a = torch.zeros(1024)
+        tensor_b = torch.ones(1024)
+
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                }
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/b.bin",
+                }
+            }
+        )
+
+        with patch(
+            "tritonparse.tools.load_tensor.load_tensor",
+            side_effect=[tensor_a, tensor_b],
+        ):
+            result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+
+        self.assertEqual(result.status, "divergent")
+        self.assertEqual(result.args_divergent, 1)
+        self.assertEqual(result.per_arg["x_ptr"].status, "divergent")
+        self.assertEqual(result.per_arg["x_ptr"].metrics["max_abs_error"], 1.0)
+        self.assertFalse(result.per_arg["x_ptr"].metrics["allclose"])
+
+    def test_analyzer_with_mocked_blobs_close(self) -> None:
+        """Test analyzer with close tensors (within tolerance)."""
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch not available")
+
+        tensor_a = torch.ones(1024)
+        tensor_b = torch.ones(1024) + 1e-7  # Within default atol=1e-5
+
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                }
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/b.bin",
+                }
+            }
+        )
+
+        with patch(
+            "tritonparse.tools.load_tensor.load_tensor",
+            side_effect=[tensor_a, tensor_b],
+        ):
+            result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+
+        self.assertEqual(result.status, "close")
+        self.assertEqual(result.args_close, 1)
+        self.assertTrue(result.per_arg["x_ptr"].metrics["allclose"])
+
+    def test_diff_engine_tensor_values_disabled(self) -> None:
+        """Test DiffEngine with tensor_values=False (default)."""
+        engine = DiffEngine(COMP_EVENT_A, COMP_EVENT_B)
+        result = engine.run()
+        self.assertEqual(result.tensor_value_diff.status, "skipped")
+
+    def test_diff_engine_no_launches(self) -> None:
+        """Test DiffEngine with tensor_values=True but no launch events."""
+        engine = DiffEngine(COMP_EVENT_A, COMP_EVENT_B, tensor_values=True)
+        result = engine.run()
+        self.assertEqual(result.tensor_value_diff.status, "skipped")
+        self.assertIn("No launch events", result.tensor_value_diff.warning)
+
+    def test_diff_engine_with_launches(self) -> None:
+        """Test DiffEngine with tensor_values=True and launch events."""
+        launch_a = create_launch_event(kernel_hash="abc123def456789")
+        launch_b = create_launch_event(kernel_hash="xyz789ghi012345")
+
+        engine = DiffEngine(
+            COMP_EVENT_A,
+            COMP_EVENT_B,
+            launch_a=launch_a,
+            launch_b=launch_b,
+            tensor_values=True,
+        )
+        result = engine.run()
+        # No blobs -> skipped
+        self.assertEqual(result.tensor_value_diff.status, "skipped")
+        self.assertIn(
+            "TRITONPARSE_SAVE_TENSOR_BLOBS",
+            result.tensor_value_diff.warning,
+        )
+
+    def test_serialization_includes_tensor_value_diff(self) -> None:
+        """Test that create_diff_event includes tensor_value_diff."""
+        engine = DiffEngine(COMP_EVENT_A, COMP_EVENT_B)
+        result = engine.run()
+        diff_event = create_diff_event(result)
+        json_str = json.dumps(diff_event)
+        self.assertIn("tensor_value_diff", json_str)
+        self.assertIn("skipped", diff_event["tensor_value_diff"]["status"])
+
+    def test_format_summary_with_tensor_warning(self) -> None:
+        """Test format_summary includes tensor warning when present."""
+        engine = DiffEngine(COMP_EVENT_A, COMP_EVENT_B, tensor_values=True)
+        result = engine.run()
+        output = format_summary(result)
+        self.assertIn("Tensor Values:", output)
+
+    def test_format_summary_with_active_tensor_comparison(self) -> None:
+        """Test format_summary formats active tensor comparison."""
+        from tritonparse.diff.core.diff_types import CompilationDiffResult
+
+        result = CompilationDiffResult()
+        result.tensor_value_diff = TensorValueDiff(
+            status="divergent",
+            args_compared=2,
+            args_identical=1,
+            args_divergent=1,
+            per_arg={
+                "x_ptr": TensorArgDiff(arg_name="x_ptr", status="identical"),
+                "y_ptr": TensorArgDiff(
+                    arg_name="y_ptr",
+                    status="divergent",
+                    metrics={
+                        "max_abs_error": 0.001,
+                        "mean_abs_error": 0.0005,
+                        "mismatch_ratio": 0.1,
+                    },
+                ),
+            },
+        )
+        output = format_summary(result)
+        self.assertIn("Tensor Value Comparison", output)
+        self.assertIn("1 identical", output)
+        self.assertIn("1 divergent", output)
+        self.assertIn("[=] x_ptr", output)
+        self.assertIn("[!] y_ptr", output)
+        self.assertIn("Max Abs Error", output)
 
 
 if __name__ == "__main__":
