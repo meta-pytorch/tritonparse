@@ -13,6 +13,7 @@ from tritonparse.diff.core.diff_types import (
     DiffSummary,
     IRStatsDiff,
     PythonLineDiff,
+    TensorValueDiff,
 )
 
 
@@ -36,6 +37,11 @@ def format_summary(result: CompilationDiffResult) -> str:
     sections.append(_format_highlights(result.summary))
     sections.append(_format_ir_stats(result.ir_stats))
     sections.append(_format_python_line_summary(result.by_python_line))
+
+    if result.tensor_value_diff.status != "skipped":
+        sections.append(_format_tensor_value_diff(result.tensor_value_diff))
+    elif result.tensor_value_diff.warning:
+        sections.append(f"\nTensor Values: {result.tensor_value_diff.warning}")
 
     if result.summary.notes:
         sections.append(_format_notes(result.summary.notes))
@@ -159,6 +165,65 @@ def _format_python_line_summary(by_python_line: dict[int, PythonLineDiff]) -> st
                 exp_parts.append(f"{sign}{change} {ir_type}")
         pattern_str = f" ({diff.pattern})" if diff.pattern else ""
         lines.append(f"  Line {py_line}: {', '.join(exp_parts)}{pattern_str}")
+
+    return "\n".join(lines)
+
+
+def _format_tensor_value_diff(tensor_diff: TensorValueDiff) -> str:
+    """Format tensor value comparison results for CLI display.
+
+    Shows overall summary, tolerance settings, and per-argument status.
+    For divergent arguments, shows expanded metrics.
+
+    Args:
+        tensor_diff: TensorValueDiff result.
+
+    Returns:
+        Formatted tensor value comparison string.
+    """
+    status_icon = {
+        "identical": "=",
+        "close": "~",
+        "divergent": "!",
+        "shape_mismatch": "S",
+        "dtype_mismatch": "D",
+        "load_error": "E",
+        "skipped": "-",
+    }
+
+    lines = [
+        f"\nTensor Value Comparison ({tensor_diff.args_compared} args): "
+        f"{tensor_diff.args_identical} identical, "
+        f"{tensor_diff.args_close} close, "
+        f"{tensor_diff.args_divergent} divergent"
+    ]
+    lines.append(
+        f"  Tolerance: atol={tensor_diff.atol:.0e}, rtol={tensor_diff.rtol:.0e}"
+    )
+
+    for arg_name, arg_diff in tensor_diff.per_arg.items():
+        icon = status_icon.get(arg_diff.status, "?")
+        lines.append(f"  [{icon}] {arg_name}: {arg_diff.status}")
+
+        # Show expanded metrics for divergent args
+        if arg_diff.status == "divergent":
+            metrics = arg_diff.metrics
+            metric_lines = [
+                ("Max Abs Error", "max_abs_error"),
+                ("Mean Abs Error", "mean_abs_error"),
+                ("Max Rel Error", "max_rel_error"),
+                ("RMSE", "rmse"),
+                ("Cosine Similarity", "cosine_similarity"),
+                ("Mismatched Elements", "num_mismatched_elements"),
+                ("Mismatch Ratio", "mismatch_ratio"),
+            ]
+            for label, key in metric_lines:
+                val = metrics.get(key)
+                if val is not None:
+                    if isinstance(val, float):
+                        lines.append(f"      {label:20s}: {val:.6e}")
+                    else:
+                        lines.append(f"      {label:20s}: {val}")
 
     return "\n".join(lines)
 

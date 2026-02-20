@@ -79,6 +79,7 @@ def create_diff_event(result: CompilationDiffResult) -> dict[str, Any]:
         "ir_stats": {k: asdict(v) for k, v in result.ir_stats.items()},
         "operation_diff": {k: asdict(v) for k, v in result.operation_diff.items()},
         "by_python_line": _convert_by_python_line(result.by_python_line),
+        "tensor_value_diff": asdict(result.tensor_value_diff),
     }
 
 
