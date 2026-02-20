@@ -226,19 +226,28 @@ def diff_command(
         print(f"\nCompilations in {input_path_a}:")
         if kernel:
             print(f"(Filtered by kernel: {kernel})")
-        print("-" * 70)
+        print("-" * 80)
+        any_tensor_data = False
         for comp in compilations:
             stages = comp.num_stages if comp.num_stages is not None else "?"
             warps = comp.num_warps if comp.num_warps is not None else "?"
             has_map = "✓" if comp.has_source_mappings else "✗"
+            launches_str = f"launches={comp.num_launches}"
+            tensor_str = ""
+            if comp.tensor_data:
+                tensor_str = f" tensor={comp.tensor_data}"
+                any_tensor_data = True
             print(
                 f"  [{comp.index:2d}] {comp.kernel_name[:30]:30s} "
                 f"hash={comp.kernel_hash} "
-                f"stages={stages} warps={warps} mapped={has_map}"
+                f"stages={stages} warps={warps} mapped={has_map} "
+                f"{launches_str}{tensor_str}"
             )
-        print("-" * 70)
+        print("-" * 80)
         print(f"Total: {len(compilations)} compilation(s)")
         print("\nUse --events N,M to compare two compilations (e.g., --events 0,1)")
+        if any_tensor_data:
+            print("Add --tensor-values to compare tensor data between launch events")
         return
 
     # Parse event indices

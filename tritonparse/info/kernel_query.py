@@ -38,6 +38,8 @@ class CompilationSummary:
     num_stages: int | None
     num_warps: int | None
     has_source_mappings: bool
+    num_launches: int = 0  # Number of launch events matching this compilation hash
+    tensor_data: str = ""  # "blob", "stats", or "" indicating tensor data availability
 
 
 @dataclass
@@ -93,6 +95,8 @@ def list_compilations(events: List[Dict[str, Any]]) -> List[CompilationSummary]:
     List all compilation events with summary info.
 
     Used by the diff CLI to show available compilations for comparison.
+    Also scans launch events to report launch counts and tensor data
+    availability per compilation hash.
 
     Args:
         events: List of parsed event dictionaries from NDJSON file
@@ -100,6 +104,35 @@ def list_compilations(events: List[Dict[str, Any]]) -> List[CompilationSummary]:
     Returns:
         List of CompilationSummary objects
     """
+    # First pass: build launch info per compilation hash
+    # Maps hash -> {"count": int, "tensor_data": "blob"|"stats"|""}
+    launch_info: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "tensor_data": ""}
+    )
+    for event in events:
+        if event.get("event_type") != "launch":
+            continue
+        comp_hash = event.get("compilation_metadata", {}).get("hash", "")
+        if not comp_hash:
+            continue
+        info = launch_info[comp_hash]
+        info["count"] += 1
+        # Only check tensor data on the first launch per hash
+        if info["count"] == 1:
+            extracted_args = event.get("extracted_args", {})
+            for arg_info in extracted_args.values():
+                if arg_info.get("type") != "tensor":
+                    continue
+                if arg_info.get("blob_path"):
+                    info["tensor_data"] = "blob"
+                    break
+                if all(
+                    arg_info.get(k) is not None for k in ("min", "max", "mean", "std")
+                ):
+                    info["tensor_data"] = "stats"
+                    # Don't break — a later arg might have blob_path
+
+    # Second pass: collect compilation events
     result = []
     comp_idx = 0
 
@@ -131,6 +164,9 @@ def list_compilations(events: List[Dict[str, Any]]) -> List[CompilationSummary]:
         # Check for source mappings
         has_source_mappings = bool(payload.get("source_mappings"))
 
+        # Get launch info for this hash
+        linfo = launch_info.get(kernel_hash, {"count": 0, "tensor_data": ""})
+
         result.append(
             CompilationSummary(
                 index=comp_idx,
@@ -140,6 +176,8 @@ def list_compilations(events: List[Dict[str, Any]]) -> List[CompilationSummary]:
                 num_stages=num_stages,
                 num_warps=num_warps,
                 has_source_mappings=has_source_mappings,
+                num_launches=linfo["count"],
+                tensor_data=linfo["tensor_data"],
             )
         )
         comp_idx += 1
