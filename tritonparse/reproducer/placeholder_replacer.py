@@ -181,6 +181,8 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
     CONTEXT_JSON_PLACEHOLDER = "# {{CONTEXT_JSON_PLACEHOLDER}}"
     COMPILATION_JSON_PLACEHOLDER = "# {{COMPILATION_JSON_PLACEHOLDER}}"
     LAUNCH_KERNEL_BODY_PLACEHOLDER = "# {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}"
+    # Placeholder for verbose args printing controlled by env var
+    VERBOSE_ARGS_PRINT_PLACEHOLDER = "# {{VERBOSE_ARGS_PRINT_PLACEHOLDER}}"
     # Placeholder for reproducer metadata in docstring
     REPRODUCER_METADATA_PLACEHOLDER = "{{REPRODUCER_METADATA_PLACEHOLDER}}"
 
@@ -206,6 +208,9 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         self.register(self.COMPILATION_JSON_PLACEHOLDER, self._replace_compilation_json)
         self.register(
             self.LAUNCH_KERNEL_BODY_PLACEHOLDER, self._replace_launch_kernel_body
+        )
+        self.register(
+            self.VERBOSE_ARGS_PRINT_PLACEHOLDER, self._replace_verbose_args_print
         )
         # Register handler for reproducer metadata in docstring
         self.register(
@@ -652,6 +657,27 @@ triton.autotune = _patched_autotune
 
         body = "\n    ".join(body_lines)
         return code.replace(self.LAUNCH_KERNEL_BODY_PLACEHOLDER, body)
+
+    def _replace_verbose_args_print(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace the verbose args print placeholder with env-var-controlled printing.
+
+        The generated code only prints kernel arguments and grid info when the
+        environment variable TRITONPARSE_REPRODUCE_VERBOSE=1 is set.
+        """
+        verbose_lines = [
+            'if os.environ.get("TRITONPARSE_REPRODUCE_VERBOSE", "0") == "1":',
+            '    print("Generated kernel arguments dictionary:")',
+            "    for name, arg in args_dict.items():",
+            "        if isinstance(arg, torch.Tensor):",
+            '            print(f"  {name}: Tensor: {arg.shape} {arg.dtype} stride: {arg.stride()}, is_contiguous: {arg.is_contiguous()}")',
+            "        else:",
+            '            print(f"  {name}: {arg}")',
+            '    print(f"Grid: {grid}")',
+        ]
+        verbose_code = "\n    ".join(verbose_lines)
+        return code.replace(self.VERBOSE_ARGS_PRINT_PLACEHOLDER, verbose_code)
 
     def _warn_if_blob_path_present(self, raw_launch_event: dict) -> None:
         """Warn if any tensor argument has blob_path (external dependency)."""

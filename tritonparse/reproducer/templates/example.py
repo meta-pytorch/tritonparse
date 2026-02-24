@@ -29,10 +29,7 @@ logger = logging.getLogger(__name__)
 def launch_kernel():
     # {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}
 
-    print("Generated kernel arguments dictionary:")
-    for name, arg in args_dict.items():  # noqa: F821
-        print(f"  {name}: {arg}")
-    print(f"Grid: {grid}")  # noqa: F821
+    # {{VERBOSE_ARGS_PRINT_PLACEHOLDER}}
 
     # {{KERNEL_INVOCATION_PLACEHOLDER}}
 
