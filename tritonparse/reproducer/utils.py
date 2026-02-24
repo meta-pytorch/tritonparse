@@ -663,7 +663,10 @@ def format_python_code(code: str) -> str:
         )
         logger.debug("Successfully organized imports")
     except ImportError:
-        logger.debug("isort library not available, import organization will be skipped")
+        logger.warning(
+            "isort library not available, import organization will be skipped. "
+            "Install with: pip install isort"
+        )
     except Exception as e:
         logger.warning(f"Failed to organize imports: {e}")
 
@@ -675,7 +678,10 @@ def format_python_code(code: str) -> str:
         logger.debug("Successfully formatted generated code")
         return formatted_code
     except ImportError:
-        logger.debug("black library not available, code formatting will be skipped")
+        logger.warning(
+            "black library not available, code formatting will be skipped. "
+            "Install with: pip install black"
+        )
         return code
     except black.InvalidInput as e:
         logger.warning(f"Failed to format generated code: {e}")
