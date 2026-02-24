@@ -530,6 +530,24 @@ class CallGraph(ast.NodeVisitor):
             callee = "<dynamic_call>"
 
         self._record_call(callee, node, maybe_triton=maybe_triton)
+
+        # Detect function references passed as positional arguments.
+        # This handles higher-order function patterns such as:
+        #   tl.map_elementwise(_mask_scalar, qk, ...)
+        # where _mask_scalar is a local function passed by reference.
+        for arg in node.args:
+            if isinstance(arg, ast.Name):
+                resolved = self._resolve_name(arg.id)
+                if resolved in self.local_functions:
+                    self._record_call(resolved, arg)
+
+        # Same for keyword arguments (e.g., fn=my_helper)
+        for kw in node.keywords:
+            if kw.value is not None and isinstance(kw.value, ast.Name):
+                resolved = self._resolve_name(kw.value.id)
+                if resolved in self.local_functions:
+                    self._record_call(resolved, kw.value)
+
         self.generic_visit(node)
 
 
