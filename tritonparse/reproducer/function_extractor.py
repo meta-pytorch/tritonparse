@@ -259,6 +259,7 @@ def _generate_imports() -> str:
         "import io",
         "import json",
         "import logging",
+        "import os",
         "import sys",
         "from functools import lru_cache",
         "from pathlib import Path",
