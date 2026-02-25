@@ -9,8 +9,10 @@ from typing import Any, Dict, List, Optional, Protocol
 from tritonparse.reproducer.function_extractor import (
     extract_autotune_config_params,
     extract_function_with_decorators,
+    extract_kernel_autotune_configs,
     extract_utility_functions,
     is_constexpr_param,
+    match_autotune_config,
 )
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
 from tritonparse.reproducer.templates.utils import (
@@ -23,6 +25,7 @@ from tritonparse.reproducer.utils import (
     _generate_invocation_snippet,
     _get_compile_params_for_invocation,
     _parse_kernel_signature,
+    TRITON_COMPILE_PARAMS,
 )
 from tritonparse.tp_logger import logger
 
@@ -513,8 +516,6 @@ triton.autotune = _patched_autotune
 
                 # Get compile params that are NOT provided by autotune configs
                 # (e.g., num_warps=8 when configs don't specify num_warps)
-                from tritonparse.reproducer.utils import TRITON_COMPILE_PARAMS
-
                 autotune_compile_params = set(autotune_config_params) & set(
                     TRITON_COMPILE_PARAMS
                 )
@@ -530,9 +531,49 @@ triton.autotune = _patched_autotune
                     filtered_pos_args, all_filtered_kw_args, remaining_compile_params
                 )
         else:
-            # Standard behavior: pass compile params
+            # Standard behavior: pass compile params.
+            # Override compile params with values from triton.Config if available,
+            # because the compiler may overwrite them (e.g., WS kernels overwrite
+            # num_warps with the total warp count across all async_task groups).
+            effective_compile = dict(context_bundle.compile)
+
+            file_path = context_bundle.kernel_info.file_path
+            func_name = context_bundle.kernel_info.function_name
+            source_path = Path(file_path)
+
+            if not source_path.exists() and context_bundle.source_repo_dir:
+                source_repo_path = Path(context_bundle.source_repo_dir)
+                if source_repo_path.exists():
+                    for i in range(1, len(source_path.parts)):
+                        new_path = source_repo_path / Path(
+                            "/".join(source_path.parts[i:])
+                        )
+                        if new_path.exists():
+                            source_path = new_path
+                            break
+
+            if source_path.exists():
+                try:
+                    file_source = source_path.read_text()
+                    configs = extract_kernel_autotune_configs(file_source, func_name)
+                    if configs:
+                        override = match_autotune_config(configs, context_bundle.args)
+                        if override:
+                            for param in TRITON_COMPILE_PARAMS:
+                                if param in override:
+                                    effective_compile[param] = override[param]
+                            logger.debug(
+                                "Overrode compile params from triton.Config: %s",
+                                override,
+                            )
+                except Exception:
+                    logger.debug(
+                        "Failed to extract autotune configs from source",
+                        exc_info=True,
+                    )
+
             compile_params = _get_compile_params_for_invocation(
-                context_bundle.compile, kw_args
+                effective_compile, kw_args
             )
             invocation_snippet = _generate_invocation_snippet(
                 pos_args, kw_args, compile_params

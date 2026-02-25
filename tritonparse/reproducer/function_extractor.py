@@ -459,6 +459,225 @@ def _extract_dict_keys(dict_node: ast.Dict) -> set[str]:
     return keys
 
 
+def _is_autotune_decorator(node: ast.expr) -> bool:
+    """Check if a decorator node is @triton.autotune(...) or @autotune(...)."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    # Handle: @triton.autotune(...)
+    if isinstance(func, ast.Attribute) and func.attr == "autotune":
+        if isinstance(func.value, ast.Name) and func.value.id == "triton":
+            return True
+    # Handle: @autotune(...) when imported directly
+    if isinstance(func, ast.Name) and func.id == "autotune":
+        return True
+    return False
+
+
+def _get_configs_kwarg(node: ast.Call) -> ast.expr | None:
+    """Extract the 'configs' argument AST node from a triton.autotune(...) call."""
+    for kw in node.keywords:
+        if kw.arg == "configs":
+            return kw.value
+    # Also check first positional argument
+    if node.args:
+        return node.args[0]
+    return None
+
+
+def _extract_config_values(
+    call_node: ast.Call,
+    var_bindings: dict[str, ast.Dict],
+) -> dict[str, object]:
+    """Extract all key-value pairs from a single triton.Config(...) call.
+
+    Extracts both:
+    - Dict params (first arg): {"BLOCK_M": 256, "BLOCK_N": 128, ...}
+    - Compile params (keyword args): num_warps=4, num_stages=0, ...
+
+    Non-constant values (e.g., pre_hook=func_ref) are skipped.
+    """
+    config: dict[str, object] = {}
+
+    # Extract from first positional argument (dict)
+    if call_node.args:
+        first_arg = call_node.args[0]
+        dict_node = None
+        if isinstance(first_arg, ast.Dict):
+            dict_node = first_arg
+        elif isinstance(first_arg, ast.Name) and first_arg.id in var_bindings:
+            dict_node = var_bindings[first_arg.id]
+
+        if dict_node is not None:
+            for key, val in zip(dict_node.keys, dict_node.values):
+                k = None
+                if key is not None:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        k = key.value
+                    elif isinstance(key, ast.Name):
+                        k = key.id
+                if k is not None and isinstance(val, ast.Constant):
+                    config[k] = val.value
+
+    # Extract from keyword args (num_warps=4, num_stages=0, etc.)
+    for kw in call_node.keywords:
+        if kw.arg is not None and isinstance(kw.value, ast.Constant):
+            config[kw.arg] = kw.value.value
+
+    return config
+
+
+def extract_kernel_autotune_configs(
+    source_code: str,
+    function_name: str,
+) -> list[dict[str, object]] | None:
+    """Extract compile param values from a kernel's @triton.autotune configs.
+
+    Traces from the kernel's decorator to the exact configs it references,
+    isolating from other kernels' configs in the same file.
+
+    Handles three patterns for the configs= argument:
+    - ast.Name (variable reference): configs=configs_var → traces to variable assignment
+    - ast.List (inline list): configs=[triton.Config(...), ...] → parses directly
+    - ast.Call (function call): configs=get_configs() → returns None (cannot resolve)
+
+    Args:
+        source_code: Full source file content.
+        function_name: Target kernel function name.
+
+    Returns:
+        List of config dicts (each containing dict params + compile params),
+        or None if extraction fails.
+    """
+    try:
+        tree, _ = _parse_source_code(source_code)
+    except SyntaxError:
+        return None
+
+    # Step 1: Locate the target function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            func_node = node
+            break
+    if func_node is None:
+        return None
+
+    # Step 2: Find @triton.autotune decorator, extract configs= argument
+    configs_ast_node = None
+    for dec in func_node.decorator_list:
+        if _is_autotune_decorator(dec):
+            configs_ast_node = _get_configs_kwarg(dec)
+            break
+    if configs_ast_node is None:
+        return None
+
+    # Step 3: Resolve configs AST node to a list of triton.Config calls
+    config_call_nodes: list[ast.Call] = []
+    if isinstance(configs_ast_node, ast.List):
+        # Inline: configs=[triton.Config(...), ...]
+        config_call_nodes = [
+            elt
+            for elt in configs_ast_node.elts
+            if isinstance(elt, ast.Call) and _is_triton_config_call(elt)
+        ]
+    elif isinstance(configs_ast_node, ast.Name):
+        # Variable reference: configs=configs_var
+        # Collect ALL triton.Config calls from ALL assignments to this variable.
+        # Multiple assignments may exist (e.g., different config sets for different
+        # kernels reusing the same variable name, or a cleanup `configs = []`).
+        # We collect broadly here and let match_autotune_config disambiguate
+        # using extracted_args.
+        var_name = configs_ast_node.id
+        for stmt in tree.body:
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == var_name:
+                        if isinstance(stmt.value, ast.List):
+                            config_call_nodes.extend(
+                                elt
+                                for elt in stmt.value.elts
+                                if isinstance(elt, ast.Call)
+                                and _is_triton_config_call(elt)
+                            )
+    elif isinstance(configs_ast_node, ast.Call):
+        # Dynamic: configs=get_fwd_configs() — cannot resolve statically
+        return None
+    else:
+        return None
+
+    if not config_call_nodes:
+        return None
+
+    # Step 4: Extract key-value pairs from each Config
+    var_bindings = _build_variable_bindings(tree)
+    configs = []
+    for call_node in config_call_nodes:
+        config = _extract_config_values(call_node, var_bindings)
+        if config:
+            configs.append(config)
+
+    return configs if configs else None
+
+
+def match_autotune_config(
+    configs: list[dict[str, object]],
+    extracted_args: dict[str, object],
+) -> dict[str, object] | None:
+    """Match the selected autotune config and return its compile params.
+
+    Strategy:
+    1. If all configs agree on every compile param value, use them directly.
+    2. Otherwise, match by comparing config dict params against extracted_args.
+
+    Args:
+        configs: List of config dicts from extract_kernel_autotune_configs.
+        extracted_args: Extracted argument info from launch event.
+            Format: {"BLOCK_M": {"type": "int", "value": 256}, ...}
+
+    Returns:
+        Dict of compile params (e.g., {"num_warps": 4, "num_stages": 0}),
+        or None if matching fails.
+    """
+    if not configs:
+        return None
+
+    # Strategy 1: Check if all configs agree on compile params
+    compile_params_result: dict[str, object] = {}
+    all_agree = True
+    for param in TRITON_COMPILE_PARAMS:
+        values = {c[param] for c in configs if param in c}
+        if len(values) == 1:
+            compile_params_result[param] = values.pop()
+        elif len(values) > 1:
+            all_agree = False
+            break
+
+    if all_agree and compile_params_result:
+        return compile_params_result
+
+    # Strategy 2: Match by config dict params against extracted_args
+    for config in configs:
+        dict_params = {
+            k: v
+            for k, v in config.items()
+            if k not in TRITON_COMPILE_PARAMS and k not in _TRITON_CONFIG_KWARGS
+        }
+        if not dict_params:
+            continue
+        match = all(
+            (
+                isinstance(extracted_args.get(k), dict)
+                and extracted_args[k].get("value") == v
+            )
+            for k, v in dict_params.items()
+        )
+        if match:
+            return {k: v for k, v in config.items() if k in TRITON_COMPILE_PARAMS}
+
+    return None
+
+
 def _is_constexpr_annotation(annotation: ast.expr) -> bool:
     """Check if an annotation is tl.constexpr or triton.language.constexpr."""
     if isinstance(annotation, ast.Attribute) and annotation.attr == "constexpr":
