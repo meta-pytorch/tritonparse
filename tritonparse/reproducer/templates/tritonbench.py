@@ -43,15 +43,7 @@ KERNEL_NAME = "{{KERNEL_NAME_PLACEHOLDER}}"
 def _get_launch_kernel_args() -> Tuple[Tuple[int], Dict[str, Any]]:
     # {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}
 
-    print("Recorded kernel arguments dictionary:")
-    for name, arg in args_dict.items():
-        if isinstance(arg, torch.Tensor):
-            print(
-                f"  {name}: Tensor:  {arg.shape} {arg.dtype} stride: {arg.stride()}, is_contiguous: {arg.is_contiguous()}"
-            )
-        else:
-            print(f"  {name}: {arg}")
-    print(f"Grid: {grid}")
+    # {{VERBOSE_ARGS_PRINT_PLACEHOLDER}}
 
     return tuple(grid), args_dict
 
