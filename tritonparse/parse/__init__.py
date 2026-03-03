@@ -28,6 +28,11 @@ from .mapper import (
     create_python_mapping,
 )
 from .source_type import Source, SourceType
+from .torch_trace_parser import (
+    CompileInfo,
+    discover_torch_trace_files,
+    parse_torch_trace_logs,
+)
 from .trace_processor import (
     generate_source_mappings,
     parse_single_file,
@@ -55,6 +60,10 @@ __all__ = [
     "_add_parse_args",
     "oss_run",
     "unified_parse",
+    # Torch trace parser
+    "CompileInfo",
+    "discover_torch_trace_files",
+    "parse_torch_trace_logs",
     # IR parsing
     "extract_code_locations",
     "extract_loc_definitions",

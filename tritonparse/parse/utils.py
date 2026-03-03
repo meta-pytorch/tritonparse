@@ -76,6 +76,16 @@ def _add_parse_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
     )
     parser.add_argument("-v", "--verbose", help="Verbose logging", action="store_true")
+    parser.add_argument(
+        "--torch-trace-dir",
+        type=str,
+        default=None,
+        help=(
+            "Path to directory containing inductor torch trace logs. "
+            "Used to recover kernel compilation attribution in multi-process scenarios. "
+            "If not specified, auto-discovers torch trace files alongside tritonparse logs."
+        ),
+    )
     if is_fbcode():
         from tritonparse.fb.utils import append_parser
 
@@ -91,6 +101,7 @@ def oss_run(
     verbose: bool = False,
     split_inductor_compilations: bool = True,
     skip_logger: bool = True,
+    torch_trace_dir: Optional[str] = None,
 ):
     """
     Main function for tritonparse. It is for OSS only.
@@ -103,6 +114,7 @@ def oss_run(
         all_ranks: Analyze all ranks
         verbose: Verbose logging
         skip_logger: Unused in OSS, kept for API compatibility.
+        torch_trace_dir: Path to directory containing inductor torch trace logs.
     """
     source = Source(source, verbose)
     rank_config = RankConfig.from_cli_args(rank, all_ranks, source.type)
@@ -137,6 +149,7 @@ def oss_run(
             rank_config,
             verbose,
             split_inductor_compilations=split_inductor_compilations,
+            torch_trace_dir=torch_trace_dir,
         )
     else:
         parsed_log_dir = source.value
@@ -161,6 +174,7 @@ def unified_parse(
     verbose: bool = False,
     split_inductor_compilations: bool = True,
     skip_logger: bool = False,
+    torch_trace_dir: Optional[str] = None,
     **kwargs,
 ):
     """
@@ -174,6 +188,7 @@ def unified_parse(
         all_ranks: Whether to analyze all ranks
         verbose: Whether to enable verbose logging
         skip_logger: Whether to skip usage logging (default: False).
+        torch_trace_dir: Path to directory containing inductor torch trace logs.
     """
     # Log usage for API invocations
     if not skip_logger and is_fbcode():
@@ -196,6 +211,7 @@ def unified_parse(
         verbose=verbose,
         split_inductor_compilations=split_inductor_compilations,
         skip_logger=skip_logger,
+        torch_trace_dir=torch_trace_dir,
         **kwargs,
     )
     return output
