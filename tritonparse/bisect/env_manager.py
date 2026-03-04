@@ -20,7 +20,7 @@ Usage:
 """
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.git_utils import ensure_git_repo, verify_git_repo
@@ -45,17 +45,24 @@ class EnvironmentManager:
     TRITON_REPO = "https://github.com/triton-lang/triton"
     LLVM_REPO = "https://github.com/llvm/llvm-project"
 
-    def __init__(self, triton_dir: Path, logger: BisectLogger) -> None:
+    def __init__(
+        self,
+        triton_dir: Path,
+        logger: BisectLogger,
+        triton_repo_url: Optional[str] = None,
+    ) -> None:
         """
         Initialize EnvironmentManager.
 
         Args:
             triton_dir: Directory where Triton will be cloned.
             logger: BisectLogger instance for logging.
+            triton_repo_url: Override URL for the Triton repo (default: upstream).
         """
         self.triton_dir = triton_dir
         self.llvm_dir = triton_dir / "llvm-project"
         self.logger = logger
+        self.triton_repo_url = triton_repo_url or self.TRITON_REPO
 
         # Create executor for running commands
         self.executor = ShellExecutor(self.logger)
@@ -108,7 +115,7 @@ class EnvironmentManager:
         self.logger.info("")
         ensure_git_repo(
             repo_dir=self.triton_dir,
-            repo_url=self.TRITON_REPO,
+            repo_url=self.triton_repo_url,
             repo_name="Triton",
             executor=self.executor,
             logger=self.logger,

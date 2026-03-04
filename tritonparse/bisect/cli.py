@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     from .state import BisectState
     from .ui import BisectUI
 
+# Mapping from --triton-repo flag to GitHub repo URLs
+TRITON_REPOS = {
+    "oai": "https://github.com/triton-lang/triton",
+    "meta": "https://github.com/facebookexperimental/triton",
+}
+
 
 def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
     """
@@ -157,6 +163,15 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         "Use with --llvm-only.",
     )
 
+    # Triton repo selection (controls commit URL prefix)
+    parser.add_argument(
+        "--triton-repo",
+        choices=["oai", "meta"],
+        default="oai",
+        help="Triton repo for commit URLs and cloning: "
+        "oai (triton-lang/triton, default) or meta (facebookexperimental/triton)",
+    )
+
     # TUI control
     parser.add_argument(
         "--tui",
@@ -241,6 +256,22 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
 
     if missing:
         parser.error(f"The following arguments are required: {', '.join(missing)}")
+
+
+def _apply_triton_repo(triton_repo: str) -> None:
+    """
+    Apply --triton-repo selection to the global commit URL mapping.
+
+    This updates the module-level GITHUB_COMMIT_URLS dict in ui.py so that
+    all summary output uses the correct Triton commit URL prefix.
+
+    Args:
+        triton_repo: One of "oai" or "meta".
+    """
+    from .ui import GITHUB_COMMIT_URLS
+
+    repo_url = TRITON_REPOS[triton_repo]
+    GITHUB_COMMIT_URLS["triton"] = repo_url + "/commit/"
 
 
 def _handle_status(args: argparse.Namespace) -> int:
@@ -342,6 +373,7 @@ def _handle_full_workflow(args: argparse.Namespace) -> int:
         log_dir=str(Path(args.log_dir).resolve()),
         build_command=args.build_command,
         session_name=logger.session_name,  # Links state file to log files
+        triton_repo=args.triton_repo,
     )
 
     # Run orchestration
@@ -660,6 +692,9 @@ def _handle_resume(args: argparse.Namespace) -> int:
         # Load existing state
         state = StateManager.load(state_path)
 
+        # Restore triton_repo selection from saved state
+        _apply_triton_repo(getattr(state, "triton_repo", "oai"))
+
         # Create logger using the log_dir from state
         logger = _create_logger(state.log_dir)
 
@@ -830,6 +865,9 @@ def bisect_command(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
+    # Apply --triton-repo selection to commit URL mapping
+    _apply_triton_repo(args.triton_repo)
+
     # Handle --status mode
     if args.status:
         return _handle_status(args)
@@ -1037,7 +1075,11 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
                 )
 
                 triton_dir = Path(args.triton_dir).expanduser()
-                env_manager = EnvironmentManager(triton_dir, logger)
+                env_manager = EnvironmentManager(
+                    triton_dir,
+                    logger,
+                    triton_repo_url=TRITON_REPOS[args.triton_repo],
+                )
                 env_manager.ensure_environment(args.conda_env)
 
             # Set progress for LLVM bisect phase

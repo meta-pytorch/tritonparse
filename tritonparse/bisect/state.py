@@ -54,6 +54,7 @@ class BisectState:
         conda_env: Conda environment name.
         log_dir: Directory for log files.
         build_command: Custom build command (optional).
+        triton_repo: Triton repo selection ("oai" or "meta") for commit URLs.
         phase: Current workflow phase.
         started_at: ISO timestamp when workflow started.
         updated_at: ISO timestamp of last state update.
@@ -79,6 +80,7 @@ class BisectState:
     log_dir: str = "./bisect_logs"
     build_command: Optional[str] = None
     session_name: Optional[str] = None  # Links state file to log files
+    triton_repo: str = "oai"  # "oai" or "meta" — controls commit URL prefix
 
     # Progress
     phase: BisectPhase = BisectPhase.TRITON_BISECT
