@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tritonparse.shared_vars import (
     DEFAULT_TRACE_FILE_PREFIX_WITHOUT_USER as LOG_PREFIX,
@@ -312,12 +312,66 @@ def copy_local_to_tmpdir(local_path: str, verbose: bool = False) -> str:
     return temp_dir
 
 
+def _build_kernel_compile_mapping(
+    raw_log_dir: str,
+    torch_trace_dir: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Build kernel compile mapping from inductor's torch trace logs.
+
+    Searches for torch trace log files and parses them to extract
+    kernel_source_path -> CompileInfo mappings. These mappings allow
+    attribution of Triton kernels to their originating compilation frame
+    when pt_info is missing (multi-process Triton JIT scenarios).
+
+    Args:
+        raw_log_dir: Directory containing tritonparse logs (used for auto-discovery).
+        torch_trace_dir: Explicit directory containing torch trace logs.
+            If None, auto-discovers in raw_log_dir.
+
+    Returns:
+        Dict mapping kernel source paths to CompileInfo, or None if no logs found.
+    """
+    from .torch_trace_parser import discover_torch_trace_files, parse_torch_trace_logs
+
+    # Determine where to look for torch trace logs
+    search_dirs = []
+    if torch_trace_dir:
+        search_dirs.append(torch_trace_dir)
+    # Also check the raw log directory (torch trace logs may coexist)
+    search_dirs.append(raw_log_dir)
+
+    all_log_paths: List[str] = []
+    seen_paths: set = set()
+    for search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        torch_files = discover_torch_trace_files(search_dir)
+        for rank_files in torch_files.values():
+            for path in rank_files:
+                if path not in seen_paths:
+                    all_log_paths.append(path)
+                    seen_paths.add(path)
+
+    if not all_log_paths:
+        return None
+
+    mapping = parse_torch_trace_logs(all_log_paths)
+    if mapping:
+        logger.info(
+            f"Built kernel compile mapping with {len(mapping)} entries "
+            f"from {len(all_log_paths)} torch trace log(s)"
+        )
+    return mapping if mapping else None
+
+
 def parse_logs(
     logs_to_parse: str,
     rank_config: RankConfig,
     verbose: bool = False,
     tritonparse_url_prefix: str = "",
     split_inductor_compilations: bool = True,
+    torch_trace_dir: Optional[str] = None,
 ) -> Tuple[str, dict]:
     """
     Parse logs.
@@ -330,6 +384,10 @@ def parse_logs(
         split_inductor_compilations: Whether to split
             output files by frame_id, compile_id, attempt_id, and compiled_autograd_id.
             Defaults to True. This rule follows tlparse's behavior.
+        torch_trace_dir: Optional path to directory containing inductor torch trace
+            logs. When provided, kernel compilation attribution will use these logs to
+            recover frame_id/compile_id for kernels compiled in multi-process scenarios.
+            If None, auto-discovers torch trace files in the same directory as tritonparse logs.
     Returns:
         Tuple of (parsed log directory, file mapping)
     """
@@ -372,6 +430,10 @@ def parse_logs(
                 ranks[Rank(Rank.NO_RANK)].append(path)
     if not ranks:
         raise RuntimeError(f"No eligible structured trace logs found in {raw_log_dir}")
+
+    # Build kernel compile mapping from torch trace logs (if available)
+    kernel_compile_mapping = _build_kernel_compile_mapping(raw_log_dir, torch_trace_dir)
+
     file_mapping = {"tritonparse_url_prefix": tritonparse_url_prefix}
     # Parse each eligible log
     for rank, files in ranks.items():
@@ -406,7 +468,12 @@ def parse_logs(
                 relative_path = "" if rank.is_no_rank else rank.to_string("")
             output_dir = os.path.join(parsed_log_dir, relative_path)
             # Parse the file
-            parse_single_file(input_file, output_dir, split_inductor_compilations)
+            parse_single_file(
+                input_file,
+                output_dir,
+                split_inductor_compilations,
+                kernel_compile_mapping=kernel_compile_mapping,
+            )
             # Collect generated files after parsing and gzip them immediately
             if os.path.exists(output_dir):
                 generated_files = []
