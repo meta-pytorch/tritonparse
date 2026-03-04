@@ -3,7 +3,7 @@
 import json
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
@@ -333,10 +333,102 @@ def parse_single_trace_content(trace_content: str) -> str:
     return json.dumps(entry, separators=(",", ":")) + "\n"
 
 
+def _resolve_compile_info(
+    event: Dict[str, Any],
+    kernel_compile_mapping: Dict[str, Any],
+) -> Optional[Any]:
+    """
+    Resolve CompileInfo for a compilation event using kernel_compile_mapping.
+
+    Attempts to find the kernel's source path from the event and look it up
+    in the mapping to recover frame_id/compile_id when pt_info is missing.
+
+    Resolution order:
+    1. python_source.file_path (most reliable, available even in multi-process)
+    2. Stack trace scanning for torchinductor paths (fallback for fake compilations)
+
+    Args:
+        event: A compilation event dict.
+        kernel_compile_mapping: Mapping from kernel_source_path to CompileInfo.
+
+    Returns:
+        CompileInfo if found, None otherwise.
+    """
+    # Try python_source.file_path first (direct and reliable)
+    payload = event.get("payload", {})
+    python_source = payload.get("python_source", {})
+    kernel_path = python_source.get("file_path")
+    if kernel_path and kernel_path in kernel_compile_mapping:
+        return kernel_compile_mapping[kernel_path]
+
+    # Fallback: scan stack trace for torchinductor-generated file paths
+    stack = event.get("stack", [])
+    for frame in stack:
+        filename = frame.get("filename", "")
+        if "torchinductor" in filename and filename.endswith(".py"):
+            if filename in kernel_compile_mapping:
+                return kernel_compile_mapping[filename]
+
+    return None
+
+
+def _determine_output_fname(
+    pt_info: Dict[str, Any],
+    file_name_without_extension: str,
+    split_inductor_compilations: bool,
+    event: Optional[Dict[str, Any]] = None,
+    kernel_compile_mapping: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Determine the output filename for a compilation event.
+
+    When pt_info contains frame_id/frame_compile_id, uses those directly.
+    When pt_info is missing but kernel_compile_mapping is available,
+    attempts to resolve via python_source or stack trace.
+
+    Args:
+        pt_info: The pt_info dict from the compilation payload.
+        file_name_without_extension: Base name for the default mapped file.
+        split_inductor_compilations: Whether splitting is enabled.
+        event: The full compilation event (used for mapping resolution).
+        kernel_compile_mapping: Optional mapping from kernel paths to CompileInfo.
+
+    Returns:
+        Output filename string (without directory).
+    """
+    if not split_inductor_compilations:
+        return f"{file_name_without_extension}_mapped.ndjson"
+
+    frame_id = pt_info.get("frame_id")
+    frame_compile_id = pt_info.get("frame_compile_id")
+    attempt_id = pt_info.get("attempt_id", 0)
+    cai = pt_info.get("compiled_autograd_id", "-")
+
+    # Try to resolve via mapping when pt_info is missing
+    if frame_id is None and frame_compile_id is None:
+        if event is not None and kernel_compile_mapping:
+            resolved = _resolve_compile_info(event, kernel_compile_mapping)
+            if resolved is not None:
+                frame_id = resolved.frame_id
+                frame_compile_id = resolved.frame_compile_id
+                attempt_id = resolved.attempt
+                cai = (
+                    resolved.compiled_autograd_id
+                    if resolved.compiled_autograd_id is not None
+                    else "-"
+                )
+
+    if frame_id is not None or frame_compile_id is not None:
+        return f"f{frame_id}_fc{frame_compile_id}_a{attempt_id}_cai{cai}.ndjson"
+    else:
+        return f"{file_name_without_extension}_mapped.ndjson"
+
+
 def parse_single_file(
     file_path: str,
     output_dir: str = None,
     split_inductor_compilations: bool = True,
+    kernel_compile_mapping: Optional[Dict[str, Any]] = None,
 ):
     """
     Process a single file, correctly group events by kernel, and extract mappings.
@@ -351,6 +443,9 @@ def parse_single_file(
         split_inductor_compilations (bool, optional): Whether to split
             output files by frame_id, compile_id, attempt_id, and compiled_autograd_id.
             Defaults to True. This rule follows tlparse's behavior.
+        kernel_compile_mapping (dict, optional): Mapping from kernel source paths
+            to CompileInfo objects. Used to recover frame_id/compile_id for kernels
+            whose pt_info is missing (e.g., multi-process Triton JIT compilation).
     """
     # =====================================================
     # Pass 1: Pre-scan to identify kernels needing fake compilations
@@ -408,8 +503,14 @@ def parse_single_file(
     for fake_comp in fake_compilations:
         kernel_hash = fake_comp["payload"]["metadata"]["hash"]
 
-        # Set output_file (use default file name since pt_info is not available)
-        fname = f"{file_name_without_extension}_mapped.ndjson"
+        # Determine output file — try mapping resolution for fake compilations too
+        fname = _determine_output_fname(
+            pt_info={},
+            file_name_without_extension=file_name_without_extension,
+            split_inductor_compilations=split_inductor_compilations,
+            event=fake_comp,
+            kernel_compile_mapping=kernel_compile_mapping,
+        )
         output_file = os.path.join(output_dir, fname)
 
         # Store in kernels_by_hash (without occurrence_id for now)
@@ -463,18 +564,13 @@ def parse_single_file(
 
                 # Split inductor compilations into separate files
                 # This rule follows tlparse's behavior.
-                if split_inductor_compilations:
-                    pt_info = payload.get("pt_info", {})
-                    frame_id = pt_info.get("frame_id")
-                    frame_compile_id = pt_info.get("frame_compile_id")
-                    attempt_id = pt_info.get("attempt_id", 0)
-                    cai = pt_info.get("compiled_autograd_id", "-")
-                    if frame_id is not None or frame_compile_id is not None:
-                        fname = f"f{frame_id}_fc{frame_compile_id}_a{attempt_id}_cai{cai}.ndjson"
-                    else:
-                        fname = f"{file_name_without_extension}_mapped.ndjson"
-                else:
-                    fname = f"{file_name_without_extension}_mapped.ndjson"
+                fname = _determine_output_fname(
+                    pt_info=payload.get("pt_info", {}),
+                    file_name_without_extension=file_name_without_extension,
+                    split_inductor_compilations=split_inductor_compilations,
+                    event=parsed_json,
+                    kernel_compile_mapping=kernel_compile_mapping,
+                )
 
                 output_file = os.path.join(output_dir, fname)
                 # The full processing is deferred until the final write.
