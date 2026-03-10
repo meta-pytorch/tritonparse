@@ -1,0 +1,216 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "compilation.schema.json",
+  "title": "TritonParse Compilation Event",
+  "description": "Event emitted when a Triton kernel is compiled. Contains kernel metadata, IR file contents, and source information.",
+  "type": "object",
+  "required": ["event_type", "pid", "timestamp", "payload"],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["compilation"],
+      "description": "Event type discriminator."
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Process ID that compiled the kernel."
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of the compilation event."
+    },
+    "stack": {
+      "type": "array",
+      "description": "Call stack trace at the time of compilation.",
+      "items": { "$ref": "#/definitions/StackFrame" }
+    },
+    "payload": {
+      "$ref": "#/definitions/Payload",
+      "description": "Compilation data including metadata, IR files, and source."
+    },
+    "occurrence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Global ordering index across all events (added during processing)."
+    },
+    "is_fake": {
+      "type": "boolean",
+      "description": "True if this is a synthetic compilation event inferred from launch data."
+    },
+    "fake_reason": {
+      "type": "string",
+      "description": "Explanation of why a fake compilation was created."
+    }
+  },
+  "definitions": {
+    "StackFrame": {
+      "type": "object",
+      "description": "A single frame in the call stack.",
+      "required": ["line", "name", "filename"],
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "type": "integer",
+          "description": "Line number in the source file."
+        },
+        "name": {
+          "type": "string",
+          "description": "Function name."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Source file path."
+        },
+        "loc": {
+          "type": "string",
+          "description": "Code snippet at that line."
+        }
+      }
+    },
+    "Payload": {
+      "type": "object",
+      "description": "Compilation payload containing metadata, IR content, and source.",
+      "required": ["metadata"],
+      "additionalProperties": true,
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "description": "Compilation configuration and metadata. Most fields are defined by Triton and may vary across versions.",
+          "additionalProperties": true,
+          "required": ["hash", "name"],
+          "properties": {
+            "hash": {
+              "type": "string",
+              "description": "Unique kernel hash identifying this compilation."
+            },
+            "name": {
+              "type": "string",
+              "description": "Kernel name."
+            },
+            "cache_hit": {
+              "type": "boolean",
+              "description": "Whether this compilation was a cache hit."
+            },
+            "num_warps": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of warps per CTA."
+            },
+            "num_stages": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of pipeline stages."
+            },
+            "num_ctas": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of CTAs in a cluster."
+            },
+            "shared": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Shared memory usage in bytes."
+            },
+            "arch": {
+              "type": "string",
+              "description": "GPU architecture target (e.g., 'sm75', 'gfx942')."
+            },
+            "backend_name": {
+              "type": "string",
+              "description": "Backend name (e.g., 'cuda', 'hip')."
+            },
+            "triton_version": {
+              "type": "string",
+              "description": "Triton version string."
+            }
+          }
+        },
+        "file_content": {
+          "type": "object",
+          "description": "IR file contents keyed by filename (e.g., 'add_kernel.ttir', 'add_kernel.ptx').",
+          "additionalProperties": { "type": "string" }
+        },
+        "file_path": {
+          "type": "object",
+          "description": "Paths to IR artifact files on disk.",
+          "additionalProperties": { "type": "string" }
+        },
+        "python_source": {
+          "$ref": "#/definitions/PythonSource",
+          "description": "Python source code of the Triton kernel function."
+        },
+        "pt_info": {
+          "$ref": "#/definitions/PtInfo",
+          "description": "PyTorch compilation context."
+        },
+        "times": {
+          "type": "object",
+          "description": "Per-phase compilation timing information. Values may be numbers (nanoseconds) or lists of per-stage timings.",
+          "additionalProperties": true
+        },
+        "source_mappings": {
+          "type": "object",
+          "description": "IR-to-source-code line mappings keyed by IR type (added during processing).",
+          "additionalProperties": true
+        }
+      }
+    },
+    "PythonSource": {
+      "type": "object",
+      "description": "Python source code of the Triton kernel.",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to the Python source file."
+        },
+        "start_line": {
+          "type": "integer",
+          "description": "Start line of the kernel function."
+        },
+        "end_line": {
+          "type": "integer",
+          "description": "End line of the kernel function."
+        },
+        "code": {
+          "type": "string",
+          "description": "Source code text."
+        },
+        "function_start_line": {
+          "type": "integer",
+          "description": "Function start line (with full-file mode)."
+        },
+        "function_end_line": {
+          "type": "integer",
+          "description": "Function end line (with full-file mode)."
+        }
+      }
+    },
+    "PtInfo": {
+      "type": "object",
+      "description": "PyTorch compilation context.",
+      "additionalProperties": true,
+      "properties": {
+        "frame_id": {
+          "type": "integer",
+          "description": "Frame ID from torch._guards."
+        },
+        "frame_compile_id": {
+          "type": "integer",
+          "description": "Compile ID within frame."
+        },
+        "attempt_id": {
+          "type": "integer",
+          "description": "Attempt number."
+        },
+        "compiled_autograd_id": {
+          "type": ["string", "null"],
+          "description": "Compiled autograd ID."
+        }
+      }
+    }
+  }
+}
