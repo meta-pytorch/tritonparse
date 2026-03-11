@@ -37,6 +37,16 @@ def get_test_ndjson_file():
     return gz_file
 
 
+def get_raw_trace_file():
+    """Get the raw (unprocessed) test NDJSON trace file path."""
+    raw_file = (
+        Path(__file__).parent
+        / "example_output/logs/dedicated_log_triton_trace_findhao_.ndjson"
+    )
+    assert raw_file.exists(), f"Test file not found: {raw_file}"
+    return raw_file
+
+
 def get_sass_test_file(filename: str) -> Path:
     """Get path to SASS test data file.
 

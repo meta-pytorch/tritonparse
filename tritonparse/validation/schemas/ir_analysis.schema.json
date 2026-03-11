@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ir_analysis.schema.json",
+  "title": "TritonParse IR Analysis Event",
+  "description": "Generated during processing for each compilation event. Contains analysis of the intermediate representation, including pattern detection such as BlockPingpong.",
+  "type": "object",
+  "required": ["event_type", "hash", "ir_analysis"],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["ir_analysis"],
+      "description": "Event type discriminator."
+    },
+    "hash": {
+      "type": "string",
+      "description": "Kernel hash identifying the compiled kernel."
+    },
+    "ir_analysis": {
+      "type": "object",
+      "description": "Analysis results keyed by analysis type. Currently supports blockpingpong, io_counts, and loop_schedules.",
+      "additionalProperties": true,
+      "properties": {
+        "blockpingpong": { "$ref": "#/definitions/BlockPingpongResult" },
+        "io_counts": { "$ref": "#/definitions/IOCounts" },
+        "loop_schedules": {
+          "type": "array",
+          "description": "Loop schedule analysis showing pipelined operation mapping to Python source lines.",
+          "items": { "$ref": "#/definitions/LoopSchedule" }
+        }
+      }
+    },
+    "occurrence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Global ordering index across all events."
+    }
+  },
+  "definitions": {
+    "BlockPingpongResult": {
+      "type": "object",
+      "description": "Result of BlockPingpong scheduling detection and categorization.",
+      "required": ["category", "detected"],
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["none", "pingpong_small", "pingpong_medium", "pingpong_large"],
+          "description": "BlockPingpong category: 'none' if not detected, 'pingpong_small' (4 warps, 1 PP cluster), 'pingpong_medium' (8 warps, 2 PP clusters), 'pingpong_large' (8 warps, 4 PP clusters)."
+        },
+        "detected": {
+          "type": "boolean",
+          "description": "Whether BlockPingpong scheduling was detected."
+        },
+        "num_warps": {
+          "type": ["integer", "null"],
+          "description": "Number of warps (4 or 8), or null if not detected."
+        },
+        "num_pp_clusters": {
+          "type": ["integer", "null"],
+          "description": "Number of pingpong clusters (1, 2, or 4), or null if not detected."
+        },
+        "cond_barrier_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of conditional barrier operations found."
+        },
+        "setprio_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of setprio operations found."
+        },
+        "dot_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tt.dot operations found in loops."
+        }
+      }
+    },
+    "BufferOpsCounts": {
+      "type": "object",
+      "description": "Counts of buffer load/store operations.",
+      "additionalProperties": true,
+      "properties": {}
+    },
+    "IOCounts": {
+      "type": "object",
+      "description": "AMD buffer operation counts from TTGIR and GCN IR.",
+      "additionalProperties": false,
+      "properties": {
+        "amd_ttgir_bufferops_count": { "$ref": "#/definitions/BufferOpsCounts" },
+        "amd_gcn_bufferops_count": { "$ref": "#/definitions/BufferOpsCounts" }
+      }
+    },
+    "LoopSchedule": {
+      "type": "object",
+      "description": "Pipelined loop schedule mapping IR operations to Python source lines.",
+      "additionalProperties": false,
+      "properties": {
+        "prologue": {
+          "type": "array",
+          "description": "Python source lines mapped to prologue operations.",
+          "items": { "type": "string" }
+        },
+        "loop_body": {
+          "type": "array",
+          "description": "Python source lines mapped to loop body operations.",
+          "items": { "type": "string" }
+        },
+        "epilogue": {
+          "type": "array",
+          "description": "Python source lines mapped to epilogue operations.",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

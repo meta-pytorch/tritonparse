@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "launch_diff.schema.json",
+  "title": "TritonParse Launch Diff Event",
+  "description": "Generated once per kernel during processing. Summarizes what is the same and what varies across all launches of a given kernel.",
+  "type": "object",
+  "required": ["event_type", "hash", "name", "total_launches"],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["launch_diff"],
+      "description": "Event type discriminator."
+    },
+    "hash": {
+      "type": "string",
+      "description": "Kernel hash identifying the compiled kernel."
+    },
+    "name": {
+      "type": "string",
+      "description": "Kernel name."
+    },
+    "total_launches": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of launches for this kernel."
+    },
+    "occurrence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Global ordering index across all events."
+    },
+    "launch_index_map": {
+      "type": "array",
+      "description": "Ranges mapping launches to file line indices.",
+      "items": { "$ref": "#/definitions/IndexRange" }
+    },
+    "sames": {
+      "type": "object",
+      "description": "Fields with identical values across all launches.",
+      "additionalProperties": true
+    },
+    "diffs": {
+      "type": "object",
+      "description": "Fields that vary across launches. Most values are DiffEntry objects ('summary' or 'distribution'). The 'extracted_args' key is special: it maps argument names to DiffEntry objects with diff_type 'argument_diff'.",
+      "properties": {
+        "extracted_args": {
+          "type": "object",
+          "description": "Per-argument diffs, keyed by argument name. Each value is a DiffEntry with diff_type 'argument_diff'.",
+          "additionalProperties": { "$ref": "#/definitions/DiffEntry" }
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/DiffEntry" }
+    }
+  },
+  "definitions": {
+    "IndexRange": {
+      "type": "object",
+      "description": "A range of line indices in the output file.",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start index (inclusive)."
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End index (inclusive)."
+        }
+      }
+    },
+    "DiffEntry": {
+      "type": "object",
+      "description": "A field that varies across launches.",
+      "required": ["diff_type"],
+      "additionalProperties": true,
+      "properties": {
+        "diff_type": {
+          "type": "string",
+          "enum": ["summary", "distribution", "argument_diff"],
+          "description": "Type of diff: 'summary' for volatile fields, 'distribution' for value distributions, 'argument_diff' for per-argument diffs."
+        },
+        "summary_text": {
+          "type": "string",
+          "description": "Human-readable summary (for 'summary' diff_type)."
+        },
+        "values": {
+          "type": "array",
+          "description": "Value distribution (for 'distribution' diff_type).",
+          "items": { "$ref": "#/definitions/ValueDistribution" }
+        },
+        "sames": {
+          "type": "object",
+          "description": "Fields with identical values across all launches (for 'argument_diff' diff_type).",
+          "additionalProperties": true
+        },
+        "diffs": {
+          "type": "object",
+          "description": "Fields that vary across launches (for 'argument_diff' diff_type).",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ValueDistribution": {
+      "type": "object",
+      "description": "A unique value and its occurrence count across launches.",
+      "required": ["value", "count", "launches"],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "description": "The value seen across launches."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of launches with this value."
+        },
+        "launches": {
+          "type": "array",
+          "description": "Ranges of launch indices that had this value.",
+          "items": { "$ref": "#/definitions/IndexRange" }
+        }
+      }
+    }
+  }
+}
