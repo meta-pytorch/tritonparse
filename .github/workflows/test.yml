@@ -37,12 +37,12 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 10
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
-            - name: Set up Python 3.11
-              uses: actions/setup-python@v4
+            - name: Set up Python 3.13
+              uses: actions/setup-python@v6
               with:
-                  python-version: "3.11"
+                  python-version: "3.13"
 
             - name: Install development dependencies
               run: |
@@ -58,12 +58,12 @@ jobs:
         runs-on: 4-core-ubuntu-gpu-t4
         timeout-minutes: 120
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
-            - name: Set up Python 3.11
-              uses: actions/setup-python@v4
+            - name: Set up Python 3.13
+              uses: actions/setup-python@v6
               with:
-                  python-version: "3.11"
+                  python-version: "3.13"
 
             - name: Get daily cache timestamp
               id: daily-cache
@@ -82,12 +82,12 @@ jobs:
                   echo "Using weekly cache stamp: $WEEK_STAMP"
 
             - name: Cache pip dependencies
-              uses: actions/cache@v3
+              uses: actions/cache@v5
               with:
                   path: ~/.cache/pip
-                  key: ${{ runner.os }}-pip-3.11-${{ steps.daily-cache.outputs.date }}
+                  key: ${{ runner.os }}-pip-3.13-${{ steps.daily-cache.outputs.date }}
                   restore-keys: |
-                      ${{ runner.os }}-pip-3.11-
+                      ${{ runner.os }}-pip-3.13-
 
             - name: Get Triton latest commit
               id: triton-commit
@@ -116,7 +116,7 @@ jobs:
                   fi
 
             - name: Cache Triton source and build
-              uses: actions/cache@v3
+              uses: actions/cache@v5
               with:
                   path: |
                       /tmp/triton
@@ -129,7 +129,7 @@ jobs:
             - name: Setup environment
               env:
                   CONDA_ENV: tritonparse
-                  PYTHON_VERSION: "3.11"
+                  PYTHON_VERSION: "3.13"
                   CUDA_VERSION: "12.8"
               run: |
                   bash .ci/setup.sh
@@ -159,12 +159,12 @@ jobs:
         runs-on: 4-core-ubuntu-gpu-t4
         timeout-minutes: 120
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
-            - name: Set up Python 3.11
-              uses: actions/setup-python@v4
+            - name: Set up Python 3.13
+              uses: actions/setup-python@v6
               with:
-                  python-version: "3.11"
+                  python-version: "3.13"
 
             - name: Get daily cache timestamp
               id: daily-cache
@@ -175,17 +175,17 @@ jobs:
                   echo "Using daily cache stamp: $DATE_STAMP"
 
             - name: Cache pip dependencies
-              uses: actions/cache@v3
+              uses: actions/cache@v5
               with:
                   path: ~/.cache/pip
-                  key: ${{ runner.os }}-pip-3.11-${{ steps.daily-cache.outputs.date }}
+                  key: ${{ runner.os }}-pip-3.13-${{ steps.daily-cache.outputs.date }}
                   restore-keys: |
-                      ${{ runner.os }}-pip-3.11-
+                      ${{ runner.os }}-pip-3.13-
 
             - name: Setup environment
               env:
                   CONDA_ENV: tritonparse-pip
-                  PYTHON_VERSION: "3.11"
+                  PYTHON_VERSION: "3.13"
                   CUDA_VERSION: "12.8"
               run: |
                   bash .ci/setup.sh

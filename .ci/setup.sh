@@ -8,7 +8,7 @@ set -e
 
 # Default values
 CONDA_ENV=${CONDA_ENV:-"tritonparse"}
-PYTHON_VERSION=${PYTHON_VERSION:-"3.11"}
+PYTHON_VERSION=${PYTHON_VERSION:-"3.13"}
 CUDA_VERSION=${CUDA_VERSION:-"12.8"}
 
 echo "Setting up tritonparse environment..."
