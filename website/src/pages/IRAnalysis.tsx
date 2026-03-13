@@ -1,5 +1,5 @@
-import React from "react";
-import { ProcessedKernel } from "../utils/dataLoader";
+import React, { useState } from "react";
+import { ProcessedKernel, ProcedureCheckResult } from "../utils/dataLoader";
 
 interface IRAnalysisProps {
   kernels: ProcessedKernel[];
@@ -16,6 +16,10 @@ interface LoopSchedule {
 }
 
 const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
+  const [expandedPatterns, setExpandedPatterns] = useState<Record<string, boolean>>({});
+  const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
+  const [expandedModuleAttrs, setExpandedModuleAttrs] = useState<Record<string, boolean>>({});
+
   if (kernels.length === 0) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -38,6 +42,7 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   const amdgcn_info = io_counts?.["amd_gcn_bufferops_count"];
   const loop_schedule = kernel.ir_analysis?.loop_schedules;
   const blockpingpong = kernel.ir_analysis?.blockpingpong;
+  const procedure_checks = kernel.ir_analysis?.procedure_checks;
   const getCount = (info: Record<string, number> | undefined, key: string): string => { return info?.[key]?.toString() ?? "N/A"; };
 
   // Helper function to get BlockPingpong category display info
@@ -67,6 +72,75 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
           color: "bg-gray-100 text-gray-600 border-gray-200",
           description: "No BlockPingpong scheduling detected"
         };
+    }
+  };
+
+  // Helper function to get procedure check status display
+  const getProcedureCheckDisplay = (result: ProcedureCheckResult): { color: string; icon: string } => {
+    if (result.detected) {
+      return {
+        color: "bg-green-100 text-green-800 border-green-200",
+        icon: "✓"
+      };
+    } else {
+      return {
+        color: "bg-red-100 text-red-800 border-red-200",
+        icon: "✗"
+      };
+    }
+  };
+
+  // Helper function to get not-detected message for each procedure type
+  const getNotDetectedMessage = (name: string): string => {
+    if (name === "BlockPingpong_Small") {
+      return `BlockPingpong Small (1 PP Cluster) - NOT DETECTED
+
+CONDITIONS FOR ACTIVATION:
+  • numWarps = 4 (1 pingpong cluster)
+  • numStages > 1 (software pipelining required)
+  • 262,144 ≤ tileSize ≤ 16,777,216 bits
+  • Exactly 2 global loads and 2 local loads in dot computation
+  • Single tt.dot operation per loop iteration
+
+PERFORMANCE IMPLICATIONS:
+  • Uses setprio interleaving (no cond_barrier)
+  • Warps from different blocks pingpong on same SIMD
+  • Ideal for small, compute-bound tiles`;
+    } else if (name === "BlockPingpong_Medium") {
+      return `BlockPingpong Medium (2 PP Clusters) - NOT DETECTED
+
+CONDITIONS FOR ACTIVATION:
+  • numWarps = 8 (2 pingpong clusters)
+  • numStages = 2 (exactly)
+  • tileSize == 33,554,432 bits (medium tile exactly)
+  • Exactly 2 local stores in dot computation
+  • Exactly 2 global loads and 2 local loads
+
+PERFORMANCE IMPLICATIONS:
+  • Uses amdgpu.cond_barrier for inter-cluster sync
+  • Warps from same block pingpong
+  • Two tt.dot operations per loop iteration
+  • Suitable for medium-sized compute-bound tiles`;
+    } else if (name === "BlockPingpong_Large") {
+      return `BlockPingpong Large (4 PP Clusters) - NOT DETECTED
+
+CONDITIONS FOR ACTIVATION:
+  • numWarps = 8 (4 pingpong clusters)
+  • numStages = 2 (exactly)
+  • tileSize ≥ 67,108,864 bits (large tile)
+  • Exactly 2 local stores in dot computation
+  • Exactly 2 global loads and 2 local loads
+  • NOT mfma16×16×16 with kWidth=8 (register spilling)
+
+PERFORMANCE IMPLICATIONS:
+  • Uses amdgpu.cond_barrier for inter-cluster sync
+  • Warps from same block pingpong
+  • Four tt.dot operations per loop iteration
+  • Dots split into 4 pieces to avoid register pressure`;
+    } else {
+      return `Procedure "${name}" - NOT DETECTED
+
+Check the specific conditions required for this procedure.`;
     }
   };
 
@@ -283,6 +357,166 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
             })}
           </>
         )}
+
+        {/* FileCheck-based Procedure Detection Section */}
+        {procedure_checks && Object.keys(procedure_checks).length > 0 && (
+          <>
+            <h3 className="text-lg font-medium mb-3 text-gray-800">
+              Procedure Detection (FileCheck)
+            </h3>
+
+            <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-6">
+              <div className="text-sm text-gray-600 mb-4">
+                FileCheck-based pattern matching for detecting specific procedures in IR content.
+                Uses <a href="https://pypi.org/project/filecheck/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Python filecheck</a> (LLVM FileCheck port).
+              </div>
+
+              <div className="space-y-3">
+                {Object.entries(procedure_checks).map(([name, result]) => {
+                  const display = getProcedureCheckDisplay(result as ProcedureCheckResult);
+                  const checkResult = result as ProcedureCheckResult;
+                  const isPatternExpanded = expandedPatterns[name] || false;
+                  const isMessageExpanded = expandedMessages[name] || false;
+                  const isModuleAttrsExpanded = expandedModuleAttrs[name] || false;
+                  return (
+                    <div key={name} className="bg-white p-3 rounded border border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-gray-800">{name}</span>
+                        <span className={`inline-flex items-center px-2 py-1 rounded text-sm font-medium border ${display.color}`}>
+                          {display.icon} {checkResult.detected ? "Detected" : "Not Detected"}
+                        </span>
+                      </div>
+
+                      {/* Key Parameters Grid (only shown when detected) */}
+                      {checkResult.detected && (
+                        <div className="grid grid-cols-[repeat(auto-fit,_minmax(120px,_1fr))] gap-3 mb-3 bg-gray-50 p-3 rounded border border-gray-100">
+                          {checkResult.num_warps !== null && checkResult.num_warps !== undefined && (
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500">Warps</span>
+                              <span className="font-mono text-sm">{checkResult.num_warps}</span>
+                            </div>
+                          )}
+                          {checkResult.num_stages !== null && checkResult.num_stages !== undefined && (
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500">Stages</span>
+                              <span className="font-mono text-sm">{checkResult.num_stages}</span>
+                            </div>
+                          )}
+                          {checkResult.num_pp_clusters !== null && checkResult.num_pp_clusters !== undefined && (
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500">PP Clusters</span>
+                              <span className="font-mono text-sm">{checkResult.num_pp_clusters}</span>
+                            </div>
+                          )}
+                          {checkResult.cond_barrier_count !== null && checkResult.cond_barrier_count !== undefined && (
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500">Cond Barriers</span>
+                              <span className="font-mono text-sm">{checkResult.cond_barrier_count}</span>
+                            </div>
+                          )}
+                          {checkResult.setprio_count !== null && checkResult.setprio_count !== undefined && (
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500">SetPrio Ops</span>
+                              <span className="font-mono text-sm">{checkResult.setprio_count}</span>
+                            </div>
+                          )}
+                          {checkResult.dot_count !== null && checkResult.dot_count !== undefined && (
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium text-gray-500">Dot Operations</span>
+                              <span className="font-mono text-sm">{checkResult.dot_count}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Collapsible Module Attributes */}
+                      {checkResult.module_attributes && (
+                        <div className="mt-2">
+                          <button
+                            onClick={() => setExpandedModuleAttrs(prev => ({ ...prev, [name]: !isModuleAttrsExpanded }))}
+                            className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+                          >
+                            <span className="mr-1">{isModuleAttrsExpanded ? "▼" : "▶"}</span>
+                            Module Attributes (TTGIR)
+                          </button>
+                          {isModuleAttrsExpanded && (
+                            <div className="mt-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono text-xs overflow-x-auto">
+                              <pre className="text-gray-600 whitespace-pre-wrap break-all">
+                                {checkResult.module_attributes}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Collapsible Check Patterns */}
+                      {checkResult.match_details && checkResult.match_details.length > 0 && (
+                        <div className="mt-2">
+                          <button
+                            onClick={() => setExpandedPatterns(prev => ({ ...prev, [name]: !isPatternExpanded }))}
+                            className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+                          >
+                            <span className="mr-1">{isPatternExpanded ? "▼" : "▶"}</span>
+                            Check Patterns ({checkResult.match_details.length})
+                          </button>
+                          {isPatternExpanded && (
+                            <div className="mt-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono text-xs">
+                              {checkResult.match_details.map((detail: string, idx: number) => (
+                                <div key={idx} className="text-gray-600">
+                                  {detail}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Collapsible Detailed Message (Criteria & Performance Implications) - when DETECTED */}
+                      {checkResult.detected && checkResult.message && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => setExpandedMessages(prev => ({ ...prev, [name]: !isMessageExpanded }))}
+                            className="flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
+                          >
+                            <span className="mr-1">{isMessageExpanded ? "▼" : "▶"}</span>
+                            Show Details (Criteria & Performance Implications)
+                          </button>
+                          {isMessageExpanded && (
+                            <div className="mt-2 bg-blue-50 p-4 rounded-md border border-blue-200">
+                              <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
+                                {checkResult.message.trim()}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Collapsible Conditions for Activation - when NOT DETECTED */}
+                      {!checkResult.detected && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => setExpandedMessages(prev => ({ ...prev, [name]: !isMessageExpanded }))}
+                            className="flex items-center text-sm font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+                          >
+                            <span className="mr-1">{isMessageExpanded ? "▼" : "▶"}</span>
+                            Show Details (Conditions for Activation)
+                          </button>
+                          {isMessageExpanded && (
+                            <div className="mt-2 bg-gray-50 p-4 rounded-md border border-gray-200">
+                              <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans leading-relaxed">
+                                {getNotDetectedMessage(name)}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+          )}
       </div>
     </div>
   );

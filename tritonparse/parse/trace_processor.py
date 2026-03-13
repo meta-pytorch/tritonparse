@@ -3,6 +3,7 @@
 import json
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse.tools.compression import open_compressed_file
@@ -25,6 +26,154 @@ from .sourcemap_utils import (
 )
 
 logger = get_logger("SourceMapping")
+
+
+# =============================================================================
+# DEFAULT PROCEDURE CHECKS
+# =============================================================================
+@dataclass
+class ProcedureCheckDefinition:
+    """Definition of a procedure check with heading, patterns, and messages."""
+
+    heading: str
+    pattern_checks: str
+    message: str = ""
+
+
+# BlockPingpong Small: 1 PP cluster (numWarps=4)
+PINGPONG_SMALL = ProcedureCheckDefinition(
+    heading="BlockPingpong_Small - 1 PP cluster with setprio interleaving (no cond_barrier)",
+    message="""BlockPingpong Small (1 PP Cluster) Detected
+
+CRITERIA:
+  • numWarps = 4
+  • numStages > 1
+  • No amdgpu.cond_barrier (uses setprio interleaving only)
+  • Single tt.dot operation per loop iteration
+  • 262,144 ≤ tileSize ≤ 16,777,216 bits
+""",
+    pattern_checks="""
+CHECK-NOT: amdgpu.cond_barrier
+CHECK: ttg.local_load
+CHECK: rocdl.s.setprio 1
+CHECK: tt.load
+CHECK: rocdl.sched.barrier
+CHECK: ttg.local_load
+CHECK: rocdl.s.setprio 0
+CHECK: tt.load
+CHECK: rocdl.sched.barrier
+CHECK: rocdl.s.setprio 1
+CHECK: tt.dot
+CHECK: rocdl.s.setprio 0
+""",
+)
+
+# BlockPingpong Medium: 2 PP clusters (numWarps=8)
+PINGPONG_MEDIUM = ProcedureCheckDefinition(
+    heading="BlockPingpong_Medium - 2 PP clusters with cond_barrier synchronization",
+    message="""BlockPingpong Medium (2 PP Clusters) Detected
+
+CRITERIA:
+  • numWarps = 8
+  • numStages = 2
+  • Uses amdgpu.cond_barrier for inter-cluster synchronization
+  • Two tt.dot operations per loop iteration
+  • tileSize == 33,554,432 bits (medium tile exactly)
+""",
+    pattern_checks="""
+CHECK: gpu.barrier
+CHECK: amdgpu.cond_barrier
+CHECK: scf.for
+CHECK: = ttg.local_load
+CHECK: = ttg.local_load
+CHECK: rocdl.sched.barrier 0
+CHECK: tt.load
+CHECK: rocdl.s.setprio 1
+CHECK: = tt.dot
+CHECK: rocdl.s.setprio 0
+CHECK: gpu.barrier
+CHECK: rocdl.s.setprio 1
+CHECK: = tt.dot
+CHECK: rocdl.s.setprio 0
+CHECK: gpu.barrier
+CHECK: scf.yield
+CHECK: amdgpu.cond_barrier
+""",
+)
+
+# BlockPingpong Large: 4 PP clusters (numWarps=8)
+PINGPONG_LARGE = ProcedureCheckDefinition(
+    heading="BlockPingpong_Large - 4 PP clusters with cond_barrier synchronization",
+    message="""BlockPingpong Large (4 PP Clusters) Detected
+
+CRITERIA:
+  • numWarps = 8
+  • numStages = 2
+  • Uses amdgpu.cond_barrier for inter-cluster synchronization
+  • Four tt.dot operations per loop iteration
+  • tileSize ≥ 67,108,864 bits
+""",
+    pattern_checks="""
+CHECK: gpu.barrier
+CHECK: amdgpu.cond_barrier
+CHECK: scf.for
+CHECK: tt.load
+CHECK: = ttg.local_load
+CHECK: rocdl.s.setprio 1
+CHECK: = tt.dot
+CHECK: rocdl.s.setprio 0
+CHECK: gpu.barrier
+CHECK: rocdl.s.setprio 1
+CHECK: = tt.dot
+CHECK: rocdl.s.setprio 0
+CHECK: gpu.barrier
+CHECK: rocdl.s.setprio 1
+CHECK: = tt.dot
+CHECK: rocdl.s.setprio 0
+CHECK: gpu.barrier
+CHECK: rocdl.s.setprio 1
+CHECK: tt.dot
+CHECK: rocdl.s.setprio 0
+CHECK: gpu.barrier
+CHECK: scf.yield
+CHECK: amdgpu.cond_barrier
+""",
+)
+
+
+def build_procedure_check_config(
+    definition: ProcedureCheckDefinition,
+) -> Dict[str, Any]:
+    """Convert a ProcedureCheckDefinition to the procedure check config format."""
+    name = definition.heading.split(" - ")[0].strip()
+    return {
+        "name": name,
+        "heading": definition.heading,
+        "patterns": definition.pattern_checks,  # Pass raw pattern string directly
+        "description": definition.heading,
+        "message": definition.message,
+    }
+
+
+# Build the DEFAULT_PROCEDURE_CHECKS list from the definitions
+DEFAULT_PROCEDURE_CHECKS: List[Dict[str, Any]] = [
+    build_procedure_check_config(PINGPONG_SMALL),
+    build_procedure_check_config(PINGPONG_MEDIUM),
+    build_procedure_check_config(PINGPONG_LARGE),
+]
+
+
+def get_message_for_pattern(pattern_name: str) -> str:
+    """Get the detailed message for a pingpong pattern category."""
+    name_lower = pattern_name.lower()
+    if "pingpong_large" in name_lower or "large" in name_lower:
+        return PINGPONG_LARGE.message
+    elif "pingpong_medium" in name_lower or "medium" in name_lower:
+        return PINGPONG_MEDIUM.message
+    elif "pingpong_small" in name_lower or "small" in name_lower:
+        return PINGPONG_SMALL.message
+    else:
+        return ""
 
 
 def generate_source_mappings(
@@ -429,6 +578,7 @@ def parse_single_file(
     output_dir: str = None,
     split_inductor_compilations: bool = True,
     kernel_compile_mapping: Optional[Dict[str, Any]] = None,
+    procedure_checks: List[Dict[str, Any]] = None,
 ):
     """
     Process a single file, correctly group events by kernel, and extract mappings.
@@ -446,7 +596,13 @@ def parse_single_file(
         kernel_compile_mapping (dict, optional): Mapping from kernel source paths
             to CompileInfo objects. Used to recover frame_id/compile_id for kernels
             whose pt_info is missing (e.g., multi-process Triton JIT compilation).
+        procedure_checks (List[Dict], optional): List of procedure check configurations
+            for FileCheck-based pattern detection. If None, uses DEFAULT_PROCEDURE_CHECKS.
     """
+    # Use default procedure checks if not specified
+    if procedure_checks is None:
+        procedure_checks = DEFAULT_PROCEDURE_CHECKS
+
     # =====================================================
     # Pass 1: Pre-scan to identify kernels needing fake compilations
     # =====================================================
@@ -680,7 +836,9 @@ def parse_single_file(
             )
 
         if compilation_event:
-            ir_analysis = _generate_ir_analysis(compilation_event)
+            ir_analysis = _generate_ir_analysis(
+                compilation_event, procedure_checks=procedure_checks
+            )
             if ir_analysis:
                 ir_analysis_event = {
                     "event_type": "ir_analysis",

@@ -202,6 +202,46 @@ export interface BlockPingpongData {
     cond_barrier_count: number;
     setprio_count: number;
     dot_count: number;
+    message?: string;  // Detailed message with criteria and performance implications
+}
+
+/**
+ * Result of a FileCheck-based procedure check
+ */
+export interface ProcedureCheckResult {
+    procedure_name: string;
+    detected: boolean;
+    check_pattern: string;
+    match_details: string[];
+    error_message: string | null;
+    // Additional metadata for BlockPingpong detection
+    message?: string;
+    num_warps?: number | null;
+    num_stages?: number | null;
+    num_pp_clusters?: number | null;
+    cond_barrier_count?: number | null;
+    setprio_count?: number | null;
+    dot_count?: number | null;
+    module_attributes?: string | null;
+}
+
+/**
+ * Configuration for a procedure check pattern
+ */
+export interface ProcedureCheckPattern {
+    type: 'check' | 'check_not' | 'check_same' | 'check_next' | 'check_count' | 'check_dag' | 'check_regex';
+    pattern: string;
+    count?: number;
+    exactly?: boolean;
+}
+
+/**
+ * Configuration for a procedure check
+ */
+export interface ProcedureCheckConfig {
+    name: string;
+    patterns: ProcedureCheckPattern[];
+    description?: string;
 }
 
 export interface IRAnalysisData {
@@ -209,6 +249,8 @@ export interface IRAnalysisData {
     io_counts?: Record<string, Record<string, number>>;
     loop_schedules?: [Record<string, [string]>];
     blockpingpong?: BlockPingpongData;
+    // FileCheck-based procedure detection results
+    procedure_checks?: Record<string, ProcedureCheckResult>;
 }
 
 /**

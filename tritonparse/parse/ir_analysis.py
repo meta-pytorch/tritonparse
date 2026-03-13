@@ -1,14 +1,288 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
+import os
 import re
-from dataclasses import asdict, dataclass
+import shutil
+import subprocess
+import tempfile
+from dataclasses import asdict, dataclass, field
 from enum import Enum
+from typing import Any
 
 from tritonparse.tp_logger import get_logger
 
 from .sourcemap_utils import load_ir_contents
 
 logger = get_logger("IRAnalysis")
+
+# Default timeout (in seconds) for FileCheck subprocess calls
+FILECHECK_TIMEOUT_SECONDS = 30
+
+
+# =============================================================================
+# FILECHECK BINARY DETECTION
+# =============================================================================
+def _find_filecheck_binary() -> str | None:
+    """Find the FileCheck binary, preferring Triton's bundled version."""
+    # Try Triton's bundled FileCheck first
+    try:
+        import triton
+
+        triton_dir = os.path.dirname(triton.__file__)
+        bundled_path = os.path.join(triton_dir, "backends", "amd", "bin", "FileCheck")
+        if os.path.isfile(bundled_path) and os.access(bundled_path, os.X_OK):
+            return bundled_path
+    except ImportError as e:
+        logger.debug(f"Triton import failed: {e}")
+
+    # Check environment variable
+    env_path = os.environ.get("FILECHECK_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+
+    # Try system PATH
+    system_path = shutil.which("FileCheck")
+    if system_path:
+        return system_path
+
+    return None
+
+
+FILECHECK_BINARY_PATH = _find_filecheck_binary()
+logger.debug(f"FILECHECK_BINARY_PATH is {FILECHECK_BINARY_PATH}")
+FILECHECK_AVAILABLE = FILECHECK_BINARY_PATH is not None
+
+if not FILECHECK_AVAILABLE:
+    logger.warning(
+        "FileCheck binary not found. Procedure detection will not work. "
+        "Set FILECHECK_PATH env var or install Triton (includes FileCheck)."
+    )
+
+
+# =============================================================================
+# PROCEDURE CHECK DATACLASSES
+# =============================================================================
+@dataclass
+class ProcedureCheckResult:
+    """Result of a single procedure check using FileCheck patterns."""
+
+    procedure_name: str
+    detected: bool = False
+    check_pattern: str = ""
+    match_details: list[str] = field(default_factory=list)
+    error_message: str | None = None
+    message: str = ""
+    num_warps: int | None = None
+    num_stages: int | None = None
+    num_pp_clusters: int | None = None
+    cond_barrier_count: int | None = None
+    setprio_count: int | None = None
+    dot_count: int | None = None
+    module_attributes: str | None = None
+
+
+@dataclass
+class ProcedureCheckConfig:
+    """Configuration for a procedure check."""
+
+    name: str
+    patterns: str  # Raw FileCheck pattern string (e.g., "CHECK: foo\nCHECK-NOT: bar")
+    description: str = ""
+
+
+# =============================================================================
+# FILECHECK PATTERN MATCHING
+# =============================================================================
+def run_filecheck(
+    content: str,
+    config: ProcedureCheckConfig,
+) -> ProcedureCheckResult:
+    """
+    Run FileCheck patterns on the given content to detect a procedure.
+
+    Uses LLVM FileCheck binary directly with the raw pattern string.
+    """
+    if not content:
+        return ProcedureCheckResult(
+            procedure_name=config.name,
+            detected=False,
+            check_pattern=config.patterns,
+            error_message="No content provided",
+        )
+
+    # Build match_details from raw pattern string for UI display
+    match_details: list[str] = []
+    for line in config.patterns.strip().split("\n"):
+        line = line.strip()
+        if line and line.startswith("CHECK"):
+            match_details.append(line)
+
+    if FILECHECK_AVAILABLE:
+        try:
+            # Add semicolon prefix to each CHECK line for FileCheck format
+            check_lines = []
+            for line in config.patterns.strip().split("\n"):
+                line = line.strip()
+                if line and line.startswith("CHECK"):
+                    check_lines.append(f"; {line}")
+            check_text = "\n".join(check_lines)
+
+            with tempfile.TemporaryDirectory() as tempdir:
+                input_file = os.path.join(tempdir, "input.mlir")
+                with open(input_file, "w") as f:
+                    f.write(content)
+
+                check_file = os.path.join(tempdir, "checks.txt")
+                with open(check_file, "w") as f:
+                    f.write(check_text)
+
+                result = subprocess.run(
+                    [
+                        FILECHECK_BINARY_PATH,
+                        check_file,
+                        "--input-file",
+                        input_file,
+                        "--dump-input-context=50",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=FILECHECK_TIMEOUT_SECONDS,
+                )
+
+                if result.returncode == 0:
+                    metadata = extract_ir_metadata(content)
+                    from .trace_processor import get_message_for_pattern
+
+                    message = get_message_for_pattern(config.name)
+                    return ProcedureCheckResult(
+                        procedure_name=config.name,
+                        detected=True,
+                        check_pattern=check_text,
+                        match_details=match_details,
+                        message=message,
+                        num_warps=metadata.get("num_warps"),
+                        num_stages=metadata.get("num_stages"),
+                        num_pp_clusters=metadata.get("num_pp_clusters"),
+                        cond_barrier_count=metadata.get("cond_barrier_count"),
+                        setprio_count=metadata.get("setprio_count"),
+                        dot_count=metadata.get("dot_count"),
+                        module_attributes=metadata.get("module_attributes"),
+                    )
+                else:
+                    error_output = result.stdout + result.stderr
+                    return ProcedureCheckResult(
+                        procedure_name=config.name,
+                        detected=False,
+                        check_pattern=check_text,
+                        match_details=match_details,
+                        error_message=f"{error_output[:500]}... [truncated]"
+                        if error_output
+                        else None,
+                    )
+
+        except subprocess.TimeoutExpired:
+            return ProcedureCheckResult(
+                procedure_name=config.name,
+                detected=False,
+                check_pattern=config.patterns,
+                match_details=match_details,
+                error_message="FileCheck timed out",
+            )
+        except Exception as e:
+            logger.warning(f"FileCheck error for {config.name}: {e}")
+            return ProcedureCheckResult(
+                procedure_name=config.name,
+                detected=False,
+                check_pattern=config.patterns,
+                match_details=match_details,
+                error_message=f"FileCheck error: {e}",
+            )
+    else:
+        return ProcedureCheckResult(
+            procedure_name=config.name,
+            detected=False,
+            check_pattern=config.patterns,
+            error_message="FileCheck binary not available. Set FILECHECK_PATH env var or install Triton.",
+        )
+
+
+def extract_ir_metadata(ir_content: str) -> dict[str, Any]:
+    """Extract metadata from IR content for BlockPingpong detection."""
+    if not ir_content:
+        return {}
+
+    metadata: dict[str, Any] = {}
+
+    # Extract module attributes
+    module_attrs_match = re.search(
+        r"module\s+attributes\s*\{([^}]+)\}", ir_content, re.MULTILINE
+    )
+    if module_attrs_match:
+        metadata["module_attributes"] = module_attrs_match.group(1).strip()
+
+    # Extract num_warps
+    warps_match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', ir_content)
+    if warps_match:
+        metadata["num_warps"] = int(warps_match.group(1))
+
+    # Extract num_stages
+    stages_match = re.search(r'"ttg\.num-stages"\s*=\s*(\d+)', ir_content)
+    if stages_match:
+        metadata["num_stages"] = int(stages_match.group(1))
+
+    # Count operations
+    metadata["cond_barrier_count"] = ir_content.count("amdgpu.cond_barrier")
+    metadata["setprio_count"] = ir_content.count("rocdl.s.setprio")
+    metadata["dot_count"] = ir_content.count("tt.dot")
+
+    # Estimate PP clusters
+    num_warps = metadata.get("num_warps", 0)
+    cond_barrier_count = metadata.get("cond_barrier_count", 0)
+    has_cond_barrier = cond_barrier_count > 0
+    if num_warps == 4 and not has_cond_barrier:
+        metadata["num_pp_clusters"] = 1
+    elif num_warps == 8 and has_cond_barrier:
+        dot_count = metadata.get("dot_count", 0)
+        if dot_count >= 4:
+            metadata["num_pp_clusters"] = 4
+        else:
+            metadata["num_pp_clusters"] = 2
+
+    return metadata
+
+
+def find_procedures_with_patterns(
+    procedure_configs: list[dict[str, Any]],
+    ir_key: str,
+    file_content: dict[str, str],
+    file_path: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Check multiple procedures with custom FileCheck patterns in IR content."""
+    ir_content = load_ir_contents(ir_key, file_content, file_path)
+
+    if not ir_content:
+        return {
+            cfg["name"]: {
+                "procedure_name": cfg["name"],
+                "detected": False,
+                "error_message": "No IR content available",
+            }
+            for cfg in procedure_configs
+        }
+
+    results = {}
+    for cfg in procedure_configs:
+        config = ProcedureCheckConfig(
+            name=cfg["name"],
+            patterns=cfg.get("patterns", f"CHECK: {cfg['name']}"),
+            description=cfg.get("description", ""),
+        )
+        result = run_filecheck(ir_content, config)
+        result_dict = asdict(result)
+        result_dict["detection_method"] = "filecheck"
+        results[cfg["name"]] = result_dict
+
+    return results
 
 
 class BlockPingpongCategory(Enum):
@@ -620,7 +894,55 @@ def generate_loop_schedule(
     return loop_schedules
 
 
-def _generate_ir_analysis(entry: str):
+def _analyze_buffer_ops(
+    ttgir_key: str,
+    amdgcn_key: str,
+    file_content: dict[str, str],
+    file_path: dict[str, str],
+) -> dict[str, dict[str, int]]:
+    """Analyze AMD buffer operations from TTGIR and AMDGCN content."""
+    io_counts = {}
+    ttgir_bufferops_info = process_amd_ttgir_bufferops(
+        ttgir_key, file_content, file_path
+    )
+    gcn_bufferops_info = process_amd_gcn_bufferops(amdgcn_key, file_content, file_path)
+    if ttgir_bufferops_info:
+        io_counts["amd_ttgir_bufferops_count"] = ttgir_bufferops_info
+    if gcn_bufferops_info:
+        io_counts["amd_gcn_bufferops_count"] = gcn_bufferops_info
+    return io_counts
+
+
+def _analyze_loop_schedules(
+    ttir_key: str,
+    ttgir_key: str,
+    file_content: dict[str, str],
+    file_path: dict[str, str],
+    payload: dict[str, Any],
+    source_mappings: dict[str, Any],
+) -> list[dict]:
+    """Generate loop schedule information from TTIR and TTGIR content."""
+    python_source_content = None
+    python_source_start_line = 1
+    python_source_info = payload.get("python_source")
+    if python_source_info:
+        python_source_content = python_source_info.get("code")
+        python_source_start_line = python_source_info.get("start_line", 1)
+
+    return generate_loop_schedule(
+        ttir_key,
+        ttgir_key,
+        file_content,
+        file_path,
+        source_mappings,
+        python_source_content,
+        python_source_start_line,
+    )
+
+
+def _generate_ir_analysis(
+    entry: str, procedure_checks: list[dict[str, Any]] | None = None
+):
     payload = entry.setdefault("payload", {})
     file_content = payload.get("file_content", {})
     file_path = payload.get("file_path", {})
@@ -636,39 +958,12 @@ def _generate_ir_analysis(entry: str):
         return {}
     ir_analysis = {}
     if amdgcn_key and ttgir_key:
-        # Add BufferOps information
-        ttgir_bufferops_info = process_amd_ttgir_bufferops(
-            ttgir_key, file_content, file_path
-        )
-        gcn_bufferops_info = process_amd_gcn_bufferops(
-            amdgcn_key, file_content, file_path
-        )
-        io_counts = {}
-        # NDJSON format requires a newline at the end of each line
-        if ttgir_bufferops_info:
-            io_counts["amd_ttgir_bufferops_count"] = ttgir_bufferops_info
-        if gcn_bufferops_info:
-            io_counts["amd_gcn_bufferops_count"] = gcn_bufferops_info
+        io_counts = _analyze_buffer_ops(ttgir_key, amdgcn_key, file_content, file_path)
         if io_counts:
             ir_analysis["io_counts"] = io_counts
     if ttir_key and ttgir_key:
-        # Get Python source content and start line if available
-        python_source_content = None
-        python_source_start_line = 1  # Default to 1 if not available
-        python_source_info = payload.get("python_source")
-        if python_source_info:
-            python_source_content = python_source_info.get("code")
-            python_source_start_line = python_source_info.get("start_line", 1)
-
-        # Add loop schedule information
-        loop_schedule = generate_loop_schedule(
-            ttir_key,
-            ttgir_key,
-            file_content,
-            file_path,
-            source_mappings,
-            python_source_content,
-            python_source_start_line,
+        loop_schedule = _analyze_loop_schedules(
+            ttir_key, ttgir_key, file_content, file_path, payload, source_mappings
         )
         if loop_schedule:
             ir_analysis["loop_schedules"] = loop_schedule
@@ -680,5 +975,16 @@ def _generate_ir_analysis(entry: str):
         )
         if blockpingpong_info:
             ir_analysis["blockpingpong"] = blockpingpong_info
+
+    # Add FileCheck-based procedure detection if procedure_checks are specified
+    if procedure_checks and ttgir_key:
+        procedure_results = find_procedures_with_patterns(
+            procedure_checks,
+            ttgir_key,
+            file_content,
+            file_path,
+        )
+        if procedure_results:
+            ir_analysis["procedure_checks"] = procedure_results
 
     return ir_analysis
