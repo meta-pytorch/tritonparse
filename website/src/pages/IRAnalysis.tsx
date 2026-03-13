@@ -19,6 +19,7 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   const [expandedPatterns, setExpandedPatterns] = useState<Record<string, boolean>>({});
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [expandedModuleAttrs, setExpandedModuleAttrs] = useState<Record<string, boolean>>({});
+  const [expandedProcedures, setExpandedProcedures] = useState<Record<string, boolean>>({});
 
   if (kernels.length === 0) {
     return (
@@ -378,134 +379,147 @@ Check the specific conditions required for this procedure.`;
                   const isPatternExpanded = expandedPatterns[name] || false;
                   const isMessageExpanded = expandedMessages[name] || false;
                   const isModuleAttrsExpanded = expandedModuleAttrs[name] || false;
+                  const isProcedureExpanded = expandedProcedures[name] || false;
                   return (
-                    <div key={name} className="bg-white p-3 rounded border border-gray-200">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium text-gray-800">{name}</span>
+                    <div key={name} className="bg-white rounded border border-gray-200">
+                      {/* Foldable Header */}
+                      <button
+                        onClick={() => setExpandedProcedures(prev => ({ ...prev, [name]: !isProcedureExpanded }))}
+                        className="w-full p-3 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center">
+                          <span className="mr-2 text-gray-500">{isProcedureExpanded ? "▼" : "▶"}</span>
+                          <span className="font-medium text-gray-800">{name}</span>
+                        </div>
                         <span className={`inline-flex items-center px-2 py-1 rounded text-sm font-medium border ${display.color}`}>
                           {display.icon} {checkResult.detected ? "Detected" : "Not Detected"}
                         </span>
-                      </div>
+                      </button>
 
-                      {/* Key Parameters Grid (only shown when detected) */}
-                      {checkResult.detected && (
-                        <div className="grid grid-cols-[repeat(auto-fit,_minmax(120px,_1fr))] gap-3 mb-3 bg-gray-50 p-3 rounded border border-gray-100">
-                          {checkResult.num_warps !== null && checkResult.num_warps !== undefined && (
-                            <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500">Warps</span>
-                              <span className="font-mono text-sm">{checkResult.num_warps}</span>
-                            </div>
-                          )}
-                          {checkResult.num_stages !== null && checkResult.num_stages !== undefined && (
-                            <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500">Stages</span>
-                              <span className="font-mono text-sm">{checkResult.num_stages}</span>
-                            </div>
-                          )}
-                          {checkResult.num_pp_clusters !== null && checkResult.num_pp_clusters !== undefined && (
-                            <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500">PP Clusters</span>
-                              <span className="font-mono text-sm">{checkResult.num_pp_clusters}</span>
-                            </div>
-                          )}
-                          {checkResult.cond_barrier_count !== null && checkResult.cond_barrier_count !== undefined && (
-                            <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500">Cond Barriers</span>
-                              <span className="font-mono text-sm">{checkResult.cond_barrier_count}</span>
-                            </div>
-                          )}
-                          {checkResult.setprio_count !== null && checkResult.setprio_count !== undefined && (
-                            <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500">SetPrio Ops</span>
-                              <span className="font-mono text-sm">{checkResult.setprio_count}</span>
-                            </div>
-                          )}
-                          {checkResult.dot_count !== null && checkResult.dot_count !== undefined && (
-                            <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-500">Dot Operations</span>
-                              <span className="font-mono text-sm">{checkResult.dot_count}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Collapsible Module Attributes */}
-                      {checkResult.module_attributes && (
-                        <div className="mt-2">
-                          <button
-                            onClick={() => setExpandedModuleAttrs(prev => ({ ...prev, [name]: !isModuleAttrsExpanded }))}
-                            className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
-                          >
-                            <span className="mr-1">{isModuleAttrsExpanded ? "▼" : "▶"}</span>
-                            Module Attributes (TTGIR)
-                          </button>
-                          {isModuleAttrsExpanded && (
-                            <div className="mt-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono text-xs overflow-x-auto">
-                              <pre className="text-gray-600 whitespace-pre-wrap break-all">
-                                {checkResult.module_attributes}
-                              </pre>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Collapsible Check Patterns */}
-                      {checkResult.match_details && checkResult.match_details.length > 0 && (
-                        <div className="mt-2">
-                          <button
-                            onClick={() => setExpandedPatterns(prev => ({ ...prev, [name]: !isPatternExpanded }))}
-                            className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
-                          >
-                            <span className="mr-1">{isPatternExpanded ? "▼" : "▶"}</span>
-                            Check Patterns ({checkResult.match_details.length})
-                          </button>
-                          {isPatternExpanded && (
-                            <div className="mt-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono text-xs">
-                              {checkResult.match_details.map((detail: string, idx: number) => (
-                                <div key={idx} className="text-gray-600">
-                                  {detail}
+                      {/* Foldable Content */}
+                      {isProcedureExpanded && (
+                        <div className="p-3 pt-0 border-t border-gray-100">
+                          {/* Key Parameters Grid (only shown when detected) */}
+                          {checkResult.detected && (
+                            <div className="grid grid-cols-[repeat(auto-fit,_minmax(120px,_1fr))] gap-3 mb-3 bg-gray-50 p-3 rounded border border-gray-100">
+                              {checkResult.num_warps !== null && checkResult.num_warps !== undefined && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-gray-500">Warps</span>
+                                  <span className="font-mono text-sm">{checkResult.num_warps}</span>
                                 </div>
-                              ))}
+                              )}
+                              {checkResult.num_stages !== null && checkResult.num_stages !== undefined && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-gray-500">Stages</span>
+                                  <span className="font-mono text-sm">{checkResult.num_stages}</span>
+                                </div>
+                              )}
+                              {checkResult.num_pp_clusters !== null && checkResult.num_pp_clusters !== undefined && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-gray-500">PP Clusters</span>
+                                  <span className="font-mono text-sm">{checkResult.num_pp_clusters}</span>
+                                </div>
+                              )}
+                              {checkResult.cond_barrier_count !== null && checkResult.cond_barrier_count !== undefined && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-gray-500">Cond Barriers</span>
+                                  <span className="font-mono text-sm">{checkResult.cond_barrier_count}</span>
+                                </div>
+                              )}
+                              {checkResult.setprio_count !== null && checkResult.setprio_count !== undefined && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-gray-500">SetPrio Ops</span>
+                                  <span className="font-mono text-sm">{checkResult.setprio_count}</span>
+                                </div>
+                              )}
+                              {checkResult.dot_count !== null && checkResult.dot_count !== undefined && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-gray-500">Dot Operations</span>
+                                  <span className="font-mono text-sm">{checkResult.dot_count}</span>
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
-                      )}
 
-                      {/* Collapsible Detailed Message (Criteria & Performance Implications) - when DETECTED */}
-                      {checkResult.detected && checkResult.message && (
-                        <div className="mt-3">
-                          <button
-                            onClick={() => setExpandedMessages(prev => ({ ...prev, [name]: !isMessageExpanded }))}
-                            className="flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
-                          >
-                            <span className="mr-1">{isMessageExpanded ? "▼" : "▶"}</span>
-                            Show Details (Criteria & Performance Implications)
-                          </button>
-                          {isMessageExpanded && (
-                            <div className="mt-2 bg-blue-50 p-4 rounded-md border border-blue-200">
-                              <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
-                                {checkResult.message.trim()}
-                              </pre>
+                          {/* Collapsible Module Attributes */}
+                          {checkResult.module_attributes && (
+                            <div className="mt-2">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setExpandedModuleAttrs(prev => ({ ...prev, [name]: !isModuleAttrsExpanded })); }}
+                                className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+                              >
+                                <span className="mr-1">{isModuleAttrsExpanded ? "▼" : "▶"}</span>
+                                Module Attributes (TTGIR)
+                              </button>
+                              {isModuleAttrsExpanded && (
+                                <div className="mt-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono text-xs overflow-x-auto">
+                                  <pre className="text-gray-600 whitespace-pre-wrap break-all">
+                                    {checkResult.module_attributes}
+                                  </pre>
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
-                      )}
 
-                      {/* Collapsible Conditions for Activation - when NOT DETECTED */}
-                      {!checkResult.detected && (
-                        <div className="mt-3">
-                          <button
-                            onClick={() => setExpandedMessages(prev => ({ ...prev, [name]: !isMessageExpanded }))}
-                            className="flex items-center text-sm font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
-                          >
-                            <span className="mr-1">{isMessageExpanded ? "▼" : "▶"}</span>
-                            Show Details (Conditions for Activation)
-                          </button>
-                          {isMessageExpanded && (
-                            <div className="mt-2 bg-gray-50 p-4 rounded-md border border-gray-200">
-                              <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans leading-relaxed">
-                                {getNotDetectedMessage(name)}
-                              </pre>
+                          {/* Collapsible Check Patterns */}
+                          {checkResult.match_details && checkResult.match_details.length > 0 && (
+                            <div className="mt-2">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setExpandedPatterns(prev => ({ ...prev, [name]: !isPatternExpanded })); }}
+                                className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+                              >
+                                <span className="mr-1">{isPatternExpanded ? "▼" : "▶"}</span>
+                                Check Patterns ({checkResult.match_details.length})
+                              </button>
+                              {isPatternExpanded && (
+                                <div className="mt-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono text-xs">
+                                  {checkResult.match_details.map((detail: string, idx: number) => (
+                                    <div key={idx} className="text-gray-600">
+                                      {detail}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Collapsible Detailed Message (Criteria & Performance Implications) - when DETECTED */}
+                          {checkResult.detected && checkResult.message && (
+                            <div className="mt-3">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setExpandedMessages(prev => ({ ...prev, [name]: !isMessageExpanded })); }}
+                                className="flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
+                              >
+                                <span className="mr-1">{isMessageExpanded ? "▼" : "▶"}</span>
+                                Show Details (Criteria & Performance Implications)
+                              </button>
+                              {isMessageExpanded && (
+                                <div className="mt-2 bg-blue-50 p-4 rounded-md border border-blue-200">
+                                  <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
+                                    {checkResult.message.trim()}
+                                  </pre>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Collapsible Conditions for Activation - when NOT DETECTED */}
+                          {!checkResult.detected && (
+                            <div className="mt-3">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setExpandedMessages(prev => ({ ...prev, [name]: !isMessageExpanded })); }}
+                                className="flex items-center text-sm font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+                              >
+                                <span className="mr-1">{isMessageExpanded ? "▼" : "▶"}</span>
+                                Show Details (Conditions for Activation)
+                              </button>
+                              {isMessageExpanded && (
+                                <div className="mt-2 bg-gray-50 p-4 rounded-md border border-gray-200">
+                                  <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans leading-relaxed">
+                                    {getNotDetectedMessage(name)}
+                                  </pre>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
