@@ -265,6 +265,74 @@ class TestTensorBlob(GPUTestBase):
             )
             print("✓ Storage correctly disabled when enable_tensor_blob_storage=False")
 
+        # === Test 5: Skip/Max Runs ===
+        print("\n=== Test 5: Skip/Max Runs ===")
+
+        # Test 5a: tensor_save_max_runs=1 — only first kernel run saves blobs
+        print("\n--- Test 5a: max_runs=1 ---")
+        temp_output_dir_5a = tempfile.mkdtemp()
+
+        with tritonparse.context_manager.TritonParseManager(
+            enable_trace_launch=True,
+            enable_tensor_blob_storage=True,
+            tensor_save_max_runs=1,
+            out=temp_output_dir_5a,
+        ) as manager:
+            # Run 3 kernels with different inputs so blobs are not deduped
+            for i in range(3):
+                x = torch.randn(
+                    (512,), device=self.cuda_device, dtype=torch.float32
+                ) * (i + 1)
+                y = run_kernel(x)
+                y.sum()
+            torch.cuda.synchronize()
+
+            blobs_5a = count_all_blobs(manager.dir_path)
+            print(f"  Blobs with max_runs=1 over 3 launches: {blobs_5a}")
+            # With max_runs=1, only the first kernel run saves blobs (input + output = 2)
+            # Runs 2 and 3 should not save any blobs
+            self.assertGreater(
+                blobs_5a, 0, "Should have at least 1 blob from first run"
+            )
+            self.assertLessEqual(
+                blobs_5a, 2, "Should have at most 2 blobs (input+output of first run)"
+            )
+            print(f"✓ max_runs=1: {blobs_5a} blob(s) saved (only first kernel run)")
+
+        # Test 5b: skip_runs=1, max_runs=2 — only second and third kernel runs save blobs
+        print("\n--- Test 5b: skip_runs=1, max_runs=2 ---")
+        temp_output_dir_5b = tempfile.mkdtemp()
+
+        with tritonparse.context_manager.TritonParseManager(
+            enable_trace_launch=True,
+            enable_tensor_blob_storage=True,
+            tensor_save_skip_runs=1,
+            tensor_save_max_runs=2,
+            out=temp_output_dir_5b,
+        ) as manager:
+            for i in range(4):
+                x = torch.randn(
+                    (512,), device=self.cuda_device, dtype=torch.float32
+                ) * (i + 1)
+                y = run_kernel(x)
+                y.sum()
+            torch.cuda.synchronize()
+
+            blobs_5b = count_all_blobs(manager.dir_path)
+            print(f"  Blobs with skip=1, max=2 over 4 launches: {blobs_5b}")
+            # skip=1 skips first run, max=2 saves runs 2 and 3, skips run 4
+            # Each saved run has input + output = 2 blobs, so expect 3-4 blobs
+            # (dedup may reduce if outputs happen to match)
+            self.assertGreater(
+                blobs_5b, 0, "Should have at least 1 blob from saved runs"
+            )
+            self.assertLessEqual(
+                blobs_5b,
+                4,
+                "Should have at most 4 blobs (input+output of runs 2 and 3)",
+            )
+            print(f"✓ skip=1, max=2: {blobs_5b} blob(s) saved (runs 2 and 3 only)")
+
         # Clean up all test outputs
         try:
             if TEST_KEEP_OUTPUT:
@@ -273,7 +341,9 @@ class TestTensorBlob(GPUTestBase):
                     f"  Test 1: {temp_output_dir_1}\n"
                     f"  Test 2: {temp_output_dir_2}\n"
                     f"  Test 3: {temp_output_dir_3}\n"
-                    f"  Test 4: {temp_output_dir_4}"
+                    f"  Test 4: {temp_output_dir_4}\n"
+                    f"  Test 5a: {temp_output_dir_5a}\n"
+                    f"  Test 5b: {temp_output_dir_5b}"
                 )
             else:
                 for temp_dir in [
@@ -281,6 +351,8 @@ class TestTensorBlob(GPUTestBase):
                     temp_output_dir_2,
                     temp_output_dir_3,
                     temp_output_dir_4,
+                    temp_output_dir_5a,
+                    temp_output_dir_5b,
                 ]:
                     if os.path.exists(temp_dir):
                         shutil.rmtree(temp_dir)

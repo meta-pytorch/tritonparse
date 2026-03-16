@@ -20,6 +20,8 @@ class TritonParseManager:
         split_inductor_compilations=True,
         enable_tensor_blob_storage=False,
         tensor_storage_quota=None,
+        tensor_save_skip_runs=None,
+        tensor_save_max_runs=None,
         log_dir=None,
         keep_logs=False,
         **parse_kwargs,
@@ -32,6 +34,8 @@ class TritonParseManager:
             split_inductor_compilations: Whether to split inductor compilations in the output
             enable_tensor_blob_storage: Whether to enable tensor blob storage
             tensor_storage_quota: Storage quota in bytes for tensor blobs (default: 100GB)
+            tensor_save_skip_runs: Skip tensor blob saving for the first N kernel runs
+            tensor_save_max_runs: Save tensor blobs for at most N kernel runs after skipping
             log_dir: Optional directory path to store raw trace logs. If not provided,
                 a temporary directory will be created and cleaned up after parsing.
                 If provided, the directory will be created if it doesn't exist and
@@ -45,6 +49,8 @@ class TritonParseManager:
         self.split_inductor_compilations = split_inductor_compilations
         self.enable_tensor_blob_storage = enable_tensor_blob_storage
         self.tensor_storage_quota = tensor_storage_quota
+        self.tensor_save_skip_runs = tensor_save_skip_runs
+        self.tensor_save_max_runs = tensor_save_max_runs
         self.user_log_dir = log_dir
         self.keep_logs = keep_logs
         self.parse_kwargs = parse_kwargs
@@ -69,6 +75,10 @@ class TritonParseManager:
         }
         if self.tensor_storage_quota is not None:
             init_kwargs["tensor_storage_quota"] = self.tensor_storage_quota
+        if self.tensor_save_skip_runs is not None:
+            init_kwargs["tensor_save_skip_runs"] = self.tensor_save_skip_runs
+        if self.tensor_save_max_runs is not None:
+            init_kwargs["tensor_save_max_runs"] = self.tensor_save_max_runs
 
         init(self.dir_path, **init_kwargs)
         return self

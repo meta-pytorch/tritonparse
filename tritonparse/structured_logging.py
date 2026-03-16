@@ -89,6 +89,9 @@ TRITONPARSE_DUMP_SASS = os.getenv("TRITONPARSE_DUMP_SASS", None) in [
 
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
+# Kernel run counter and per-launch blob save flag for skip/max runs gating
+_kernel_run_count = 0
+_save_blobs_for_current_launch = True
 # Enable tensor blob storage
 TRITONPARSE_SAVE_TENSOR_BLOBS = os.getenv("TRITONPARSE_SAVE_TENSOR_BLOBS", "0") in [
     "1",
@@ -109,6 +112,14 @@ TRITONPARSE_COMPRESSION_THRESHOLD = 1 * 1024 * 1024
 TRITONPARSE_COMPRESSION_LEVEL = 4
 # Log statistics every N saved blobs
 TRITONPARSE_STATS_LOG_FREQUENCY = 100
+# Skip tensor blob saving for the first N kernel runs (0 = no skip)
+TRITONPARSE_TENSOR_SAVE_SKIP_RUNS = int(
+    os.getenv("TRITONPARSE_TENSOR_SAVE_SKIP_RUNS", "0")
+)
+# Save tensor blobs for at most N kernel runs after skipping (0 = unlimited)
+TRITONPARSE_TENSOR_SAVE_MAX_RUNS = int(
+    os.getenv("TRITONPARSE_TENSOR_SAVE_MAX_RUNS", "0")
+)
 
 TRITON_TRACE_HANDLER = None
 # Global tensor blob manager instance
@@ -607,7 +618,11 @@ def _log_torch_tensor_info(tensor_value):
             arg_info["tensor_capture_error"] = str(e)
 
     # Add tensor blob storage if enabled
-    if TRITONPARSE_SAVE_TENSOR_BLOBS and TENSOR_BLOB_MANAGER is not None:
+    if (
+        TRITONPARSE_SAVE_TENSOR_BLOBS
+        and TENSOR_BLOB_MANAGER is not None
+        and _save_blobs_for_current_launch
+    ):
         blob_info = TENSOR_BLOB_MANAGER.save_tensor_blob(tensor_value)
         arg_info.update(blob_info)
     return arg_info
@@ -1428,6 +1443,8 @@ def extract_arg_info(arg_dict):
 
 
 def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
+    global _kernel_run_count, _save_blobs_for_current_launch
+
     # Check if we're in CUDA graph capture mode - if so, skip detailed argument extraction
     # to avoid CUDA errors (cudaErrorStreamCaptureUnsupported)
     is_capturing = False
@@ -1447,6 +1464,25 @@ def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
                 {},
             )
         }
+
+    # Gate tensor blob saving based on skip/max runs
+    if TRITONPARSE_SAVE_TENSOR_BLOBS:
+        skip = TRITONPARSE_TENSOR_SAVE_SKIP_RUNS
+        max_runs = TRITONPARSE_TENSOR_SAVE_MAX_RUNS
+        if skip > 0 or max_runs > 0:
+            # Only capture the stack when we actually need kernel run counting
+            from .parse.sourcemap_utils import _is_autotune_benchmark_launch
+
+            if not _is_autotune_benchmark_launch(get_stack_trace()):
+                _kernel_run_count += 1
+            _save_blobs_for_current_launch = not (
+                _kernel_run_count <= skip
+                or (max_runs > 0 and _kernel_run_count > skip + max_runs)
+            )
+        else:
+            _save_blobs_for_current_launch = True
+    else:
+        _save_blobs_for_current_launch = False
 
     # Extract detailed argument information (only when NOT capturing)
     extracted_args = extract_arg_info(arg_dict)
@@ -1691,6 +1727,8 @@ def init(
     enable_tensor_blob_storage: bool = False,
     tensor_storage_quota: Optional[int] = None,
     compression: Optional[str] = None,
+    tensor_save_skip_runs: Optional[int] = None,
+    tensor_save_max_runs: Optional[int] = None,
 ):
     """
     This function is a wrapper around init_basic() that also sets up the compilation listener. Its arguments have higher priority than the environment variables for same settings.
@@ -1712,12 +1750,15 @@ def init(
         tensor_storage_quota (Optional[int]): Storage quota in bytes for tensor blobs (default: 100GB).
         compression (Optional[str]): Compression format for trace files ("none", "gzip", or "clp").
             If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "none".
+        tensor_save_skip_runs (Optional[int]): Skip tensor blob saving for the first N kernel runs.
+        tensor_save_max_runs (Optional[int]): Save tensor blobs for at most N kernel runs after skipping.
     """
     global TRITON_TRACE_LAUNCH, TRITON_TRACE_LAUNCH_WITHIN_PROFILING
     global TRITONPARSE_MORE_TENSOR_INFORMATION
     global TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK, TRITONPARSE_DUMP_SASS
     global TRITONPARSE_SAVE_TENSOR_BLOBS, TRITONPARSE_TENSOR_STORAGE_QUOTA
     global TRITON_TRACE_COMPRESSION
+    global TRITONPARSE_TENSOR_SAVE_SKIP_RUNS, TRITONPARSE_TENSOR_SAVE_MAX_RUNS
 
     # Set global flags BEFORE calling init_basic, so init_logs() can see them
     # TRITON_TRACE_LAUNCH and TRITON_TRACE_LAUNCH_WITHIN_PROFILING are mutually exclusive.
@@ -1750,6 +1791,12 @@ def init(
         if os.getenv("TRITON_TRACE_COMPRESSION") is None:
             TRITON_TRACE_COMPRESSION = compression
 
+    # Set tensor save skip/max runs (Python API overrides env var)
+    if tensor_save_skip_runs is not None:
+        TRITONPARSE_TENSOR_SAVE_SKIP_RUNS = tensor_save_skip_runs
+    if tensor_save_max_runs is not None:
+        TRITONPARSE_TENSOR_SAVE_MAX_RUNS = tensor_save_max_runs
+
     init_basic(trace_folder)
     from triton import knobs
 
@@ -1779,6 +1826,7 @@ def clear_logging_config():
     global TRITON_TRACE_HANDLER, triton_trace_folder, _KERNEL_ALLOWLIST_PATTERNS
     global _trace_launch_enabled
     global TENSOR_BLOB_MANAGER
+    global _kernel_run_count, _save_blobs_for_current_launch
     # 1. Clean up the log handler
     if TRITON_TRACE_HANDLER is not None:
         if TRITON_TRACE_HANDLER in triton_trace_log.handlers:
@@ -1793,6 +1841,8 @@ def clear_logging_config():
 
     # 3. Reset tensor blob manager and related flags
     TENSOR_BLOB_MANAGER = None
+    _kernel_run_count = 0
+    _save_blobs_for_current_launch = True
 
     # 4. Reset Triton knobs
     # Check if triton was actually imported and used
