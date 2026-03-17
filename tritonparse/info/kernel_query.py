@@ -71,7 +71,7 @@ def list_kernels(events: List[Dict[str, Any]]) -> List[KernelSummary]:
             continue
 
         comp_meta = event.get("compilation_metadata", {})
-        kernel_name = comp_meta.get("name")
+        kernel_name = comp_meta.get("name") or event.get("name")
         kernel_hash = comp_meta.get("hash", "")
 
         if kernel_name:
@@ -208,7 +208,7 @@ def find_launch_index_by_kernel(
             continue
 
         comp_meta = event.get("compilation_metadata", {})
-        name = comp_meta.get("name")
+        name = comp_meta.get("name") or event.get("name")
         if name == kernel_name:
             if count == launch_id:
                 return i
@@ -247,7 +247,7 @@ def list_launches_for_kernel(
             continue
 
         comp_meta = event.get("compilation_metadata", {})
-        name = comp_meta.get("name")
+        name = comp_meta.get("name") or event.get("name")
         if name == kernel_name:
             # Extract grid information from launch event
             grid = event.get("grid", [])
@@ -345,7 +345,8 @@ def find_best_autotuned_launch_index(
         (i, e)
         for i, e in enumerate(events)
         if e.get("event_type") == "launch"
-        and e.get("compilation_metadata", {}).get("name") == kernel_name
+        and (e.get("compilation_metadata", {}).get("name") or e.get("name"))
+        == kernel_name
     ]
 
     if not launch_events:

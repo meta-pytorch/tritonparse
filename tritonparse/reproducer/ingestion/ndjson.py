@@ -59,19 +59,38 @@ def get_launch_and_compilation_events(
 
     comp_meta = launch_event.get("compilation_metadata", {})
     comp_hash = comp_meta.get("hash")
-    if not comp_hash:
-        raise RuntimeError("Could not find compilation hash in launch event.")
 
     comp_event = None
-    for event in events:
-        if (
-            event["event_type"] == "compilation"
-            and event.get("payload", {}).get("metadata", {}).get("hash") == comp_hash
-        ):
-            comp_event = event
-            break
+
+    if comp_hash:
+        # Primary path: match by compilation hash
+        for event in events:
+            if (
+                event["event_type"] == "compilation"
+                and event.get("payload", {}).get("metadata", {}).get("hash")
+                == comp_hash
+            ):
+                comp_event = event
+                break
+    else:
+        # Fallback: match by kernel name (for Inductor kernels whose launch
+        # events lack compilation_metadata because the JIT hook didn't fire).
+        kernel_name = launch_event.get("name", "")
+        if kernel_name:
+            for event in events:
+                if event["event_type"] != "compilation":
+                    continue
+                payload = event.get("payload", {})
+                meta = payload.get("metadata", {})
+                if meta.get("name") == kernel_name:
+                    comp_event = event
+                    break
+
     if not comp_event:
-        raise RuntimeError(f"Could not find compilation event for hash {comp_hash}.")
+        raise RuntimeError(
+            "Could not find compilation event for launch event "
+            f"(hash={comp_hash!r}, name={launch_event.get('name', '')!r})."
+        )
     return launch_event, comp_event
 
 

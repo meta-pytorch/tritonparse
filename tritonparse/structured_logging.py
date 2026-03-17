@@ -1555,9 +1555,9 @@ class JITHookImpl(JITHook):
             log.warning(
                 f"fn {fn} launch_metadata is not None: {current_launch_metadata}. It will be overridden by tritonparse."
             )
-        function.launch_metadata = partial(
-            add_launch_metadata, inductor_args=inductor_args
-        )
+        metadata_fn = partial(add_launch_metadata, inductor_args=inductor_args)
+        function.launch_metadata = metadata_fn
+
         return True
 
 
