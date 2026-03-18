@@ -173,7 +173,7 @@ class TestClaudeCodeClient(unittest.TestCase):
     def test_init_default_values(self):
         """Test default initialization values."""
         client = ClaudeCodeClient()
-        self.assertEqual(client.model, "opus")
+        self.assertIsNone(client.model)
         self.assertEqual(client.retry_count, 3)
         self.assertEqual(client.timeout, 600)
         self.assertEqual(client.allowed_tools, ["Read", "Grep", "Glob"])
@@ -267,8 +267,8 @@ class TestClaudeCodeClient(unittest.TestCase):
     def test_chat_retry_on_failure(self, mock_unlink, mock_run):
         """Test retry on failure."""
         mock_run.side_effect = [
-            MagicMock(returncode=1, stderr="Error"),
-            MagicMock(returncode=1, stderr="Error"),
+            MagicMock(returncode=1, stdout="", stderr="Error"),
+            MagicMock(returncode=1, stdout="", stderr="Error"),
             MagicMock(returncode=0, stdout='{"result": "Success"}'),
         ]
         client = ClaudeCodeClient(retry_count=3)
@@ -280,7 +280,7 @@ class TestClaudeCodeClient(unittest.TestCase):
     @patch("tritonparse.ai.client.os.unlink")
     def test_chat_all_retries_fail(self, mock_unlink, mock_run):
         """Test all retries failing."""
-        mock_run.return_value = MagicMock(returncode=1, stderr="Error")
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="Error")
         client = ClaudeCodeClient(retry_count=2)
         with self.assertRaises(RuntimeError) as context:
             client.chat([Message(role="user", content="Hi")])
@@ -361,7 +361,7 @@ class TestClaudeCodeClient(unittest.TestCase):
     @patch("tritonparse.ai.client.os.unlink")
     def test_chat_cleans_up_on_failure(self, mock_unlink, mock_run):
         """Test that temp files are cleaned up even on failure."""
-        mock_run.return_value = MagicMock(returncode=1, stderr="Error")
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="Error")
         client = ClaudeCodeClient(retry_count=1)
         with self.assertRaises(RuntimeError):
             client.chat([Message(role="user", content="Hi")])

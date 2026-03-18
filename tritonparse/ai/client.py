@@ -187,12 +187,10 @@ class ClaudeCodeClient(LLMClient):
         allowed_tools: List of tools Claude is allowed to use
         retry_count: Number of retry attempts on failure
         timeout: Timeout in seconds for CLI calls
-        model: Model name or alias (default: "opus")
+        model: Model name or alias, or None to let Claude CLI auto-select
         cwd: Working directory for CLI execution
         session_id: Session ID for multi-turn conversations
     """
-
-    DEFAULT_MODEL = "opus"
 
     def __init__(
         self,
@@ -208,13 +206,13 @@ class ClaudeCodeClient(LLMClient):
             allowed_tools: Tools Claude can use (e.g., ["Read", "Write", "Bash(git*)"])
             retry_count: Number of retry attempts on failure
             timeout: Timeout in seconds (default: 600 = 10 minutes)
-            model: Model name or alias, default "opus" (Claude Opus 4.5)
+            model: Model name or alias, or None to let Claude CLI auto-select (default: None)
             cwd: Working directory for running in external repos
         """
         self.allowed_tools = allowed_tools or ["Read", "Grep", "Glob"]
         self.retry_count = retry_count
         self.timeout = timeout
-        self.model = model or self.DEFAULT_MODEL
+        self.model = model
         self.cwd = cwd
         self.session_id: Optional[str] = None
 
@@ -265,8 +263,9 @@ class ClaudeCodeClient(LLMClient):
             if self.session_id:
                 cmd += f' --resume "{self.session_id}"'
 
-            # Model selection
-            cmd += f' --model "{self.model}"'
+            # Model selection (only if explicitly specified)
+            if self.model:
+                cmd += f' --model "{self.model}"'
 
             # JSON output
             cmd += " --output-format json"
@@ -286,10 +285,24 @@ class ClaudeCodeClient(LLMClient):
                 if result.returncode == 0:
                     return self._parse_response(result.stdout)
 
-            # All retries failed
+            # All retries failed — include both stderr and stdout for diagnostics.
+            # The actual error reason is often in stdout (JSON "result" field),
+            # while stderr only contains service warnings (e.g., SEV notices).
+            stdout_snippet = ""
+            if result and result.stdout:
+                try:
+                    data = json.loads(result.stdout)
+                    stdout_snippet = data.get("result", result.stdout[:500])
+                except (json.JSONDecodeError, AttributeError):
+                    stdout_snippet = result.stdout[:500]
+            stderr_snippet = (
+                result.stderr[:500] if result and result.stderr else "(empty)"
+            )
             raise RuntimeError(
                 f"Claude Code CLI failed after {self.retry_count} attempts. "
-                f"Return code: {result.returncode}, Error: {result.stderr}"
+                f"Return code: {result.returncode}\n"
+                f"Error: {stdout_snippet}\n"
+                f"Stderr: {stderr_snippet}"
             )
 
         finally:
@@ -346,8 +359,9 @@ class ClaudeCodeClient(LLMClient):
             if self.session_id:
                 cmd += f' --resume "{self.session_id}"'
 
-            # Model selection
-            cmd += f' --model "{self.model}"'
+            # Model selection (only if explicitly specified)
+            if self.model:
+                cmd += f' --model "{self.model}"'
 
             # Stream JSON output
             cmd += " --output-format stream-json"
