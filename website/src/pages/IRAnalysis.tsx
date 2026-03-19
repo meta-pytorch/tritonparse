@@ -20,6 +20,7 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const [expandedModuleAttrs, setExpandedModuleAttrs] = useState<Record<string, boolean>>({});
   const [expandedProcedures, setExpandedProcedures] = useState<Record<string, boolean>>({});
+  const [expandedTileSize, setExpandedTileSize] = useState<Record<string, boolean>>({});
 
   if (kernels.length === 0) {
     return (
@@ -399,8 +400,13 @@ Check the specific conditions required for this procedure.`;
                       {/* Foldable Content */}
                       {isProcedureExpanded && (
                         <div className="p-3 pt-0 border-t border-gray-100">
-                          {/* Key Parameters Grid (only shown when detected) */}
-                          {checkResult.detected && (
+                          {/* Key Parameters Grid - Always displayed when data available */}
+                          {((checkResult.num_warps !== null && checkResult.num_warps !== undefined) ||
+                        (checkResult.num_stages !== null && checkResult.num_stages !== undefined) ||
+                        (checkResult.num_pp_clusters !== null && checkResult.num_pp_clusters !== undefined) ||
+                        (checkResult.cond_barrier_count !== null && checkResult.cond_barrier_count !== undefined) ||
+                        (checkResult.setprio_count !== null && checkResult.setprio_count !== undefined) ||
+                        (checkResult.dot_count !== null && checkResult.dot_count !== undefined)) && (
                             <div className="grid grid-cols-[repeat(auto-fit,_minmax(120px,_1fr))] gap-3 mb-3 bg-gray-50 p-3 rounded border border-gray-100">
                               {checkResult.num_warps !== null && checkResult.num_warps !== undefined && (
                                 <div className="flex flex-col">
@@ -441,7 +447,84 @@ Check the specific conditions required for this procedure.`;
                             </div>
                           )}
 
-                          {/* Collapsible Module Attributes */}
+                          {/* Tile Size Information - Always visible when tile info available, foldable */}
+                      {(checkResult.tile_m !== null && checkResult.tile_m !== undefined) ||
+                       (checkResult.tile_n !== null && checkResult.tile_n !== undefined) ||
+                       (checkResult.tile_k !== null && checkResult.tile_k !== undefined) ||
+                       (checkResult.tile_size_bits !== null && checkResult.tile_size_bits !== undefined) ||
+                       (checkResult.input_dtype !== null && checkResult.input_dtype !== undefined) ||
+                       (checkResult.output_dtype !== null && checkResult.output_dtype !== undefined) ||
+                       (checkResult.mfma_m !== null && checkResult.mfma_m !== undefined) ? (
+                        <div className="mb-3">
+                          <button
+                            onClick={() => setExpandedTileSize(prev => ({ ...prev, [name]: !expandedTileSize[name] }))}
+                            className="flex items-center text-xs font-medium text-blue-600 hover:text-blue-800 cursor-pointer mb-2"
+                          >
+                            <span className="mr-1">{expandedTileSize[name] ? "▼" : "▶"}</span>
+                            Tile Size Information
+                          </button>
+                          {expandedTileSize[name] && (
+                            <div className="grid grid-cols-[repeat(auto-fit,_minmax(120px,_1fr))] gap-3 bg-blue-50 p-3 rounded border border-blue-100">
+                              {(checkResult.tile_m !== null && checkResult.tile_m !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">Tile M</span>
+                                  <span className="font-mono text-sm">{checkResult.tile_m}</span>
+                                </div>
+                              )}
+                              {(checkResult.tile_n !== null && checkResult.tile_n !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">Tile N</span>
+                                  <span className="font-mono text-sm">{checkResult.tile_n}</span>
+                                </div>
+                              )}
+                              {(checkResult.tile_k !== null && checkResult.tile_k !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">Tile K</span>
+                                  <span className="font-mono text-sm">{checkResult.tile_k}</span>
+                                </div>
+                              )}
+                              {(checkResult.tile_size_bits !== null && checkResult.tile_size_bits !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">Tile Size (bits)</span>
+                                  <span className="font-mono text-sm">{checkResult.tile_size_bits.toLocaleString()}</span>
+                                </div>
+                              )}
+                              {(checkResult.input_dtype !== null && checkResult.input_dtype !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">Input Type</span>
+                                  <span className="font-mono text-sm">{checkResult.input_dtype}</span>
+                                </div>
+                              )}
+                              {(checkResult.output_dtype !== null && checkResult.output_dtype !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">Output Type</span>
+                                  <span className="font-mono text-sm">{checkResult.output_dtype}</span>
+                                </div>
+                              )}
+                              {(checkResult.mfma_m !== null && checkResult.mfma_m !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">MFMA M</span>
+                                  <span className="font-mono text-sm">{checkResult.mfma_m}</span>
+                                </div>
+                              )}
+                              {(checkResult.mfma_n !== null && checkResult.mfma_n !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">MFMA N</span>
+                                  <span className="font-mono text-sm">{checkResult.mfma_n}</span>
+                                </div>
+                              )}
+                              {(checkResult.mfma_k !== null && checkResult.mfma_k !== undefined) && (
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-blue-600">MFMA K</span>
+                                  <span className="font-mono text-sm">{checkResult.mfma_k}</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+
+                      {/* Collapsible Module Attributes */}
                           {checkResult.module_attributes && (
                             <div className="mt-2">
                               <button

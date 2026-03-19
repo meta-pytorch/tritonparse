@@ -223,6 +223,16 @@ export interface ProcedureCheckResult {
     setprio_count?: number | null;
     dot_count?: number | null;
     module_attributes?: string | null;
+    // Tile size related attributes
+    tile_m?: number | null;
+    tile_n?: number | null;
+    tile_k?: number | null;
+    tile_size_bits?: number | null;
+    input_dtype?: string | null;
+    output_dtype?: string | null;
+    mfma_m?: number | null;
+    mfma_n?: number | null;
+    mfma_k?: number | null;
 }
 
 /**

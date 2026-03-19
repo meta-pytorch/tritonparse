@@ -79,6 +79,16 @@ class ProcedureCheckResult:
     setprio_count: int | None = None
     dot_count: int | None = None
     module_attributes: str | None = None
+    # Tile size related attributes
+    tile_m: int | None = None
+    tile_n: int | None = None
+    tile_k: int | None = None
+    tile_size_bits: int | None = None
+    input_dtype: str | None = None
+    output_dtype: str | None = None
+    mfma_m: int | None = None
+    mfma_n: int | None = None
+    mfma_k: int | None = None
 
 
 @dataclass
@@ -167,8 +177,20 @@ def run_filecheck(
                         setprio_count=metadata.get("setprio_count"),
                         dot_count=metadata.get("dot_count"),
                         module_attributes=metadata.get("module_attributes"),
+                        # Tile size related attributes
+                        tile_m=metadata.get("tile_m"),
+                        tile_n=metadata.get("tile_n"),
+                        tile_k=metadata.get("tile_k"),
+                        tile_size_bits=metadata.get("tile_size_bits"),
+                        input_dtype=metadata.get("input_dtype"),
+                        output_dtype=metadata.get("output_dtype"),
+                        mfma_m=metadata.get("mfma_m"),
+                        mfma_n=metadata.get("mfma_n"),
+                        mfma_k=metadata.get("mfma_k"),
                     )
                 else:
+                    # Extract metadata even when not detected
+                    metadata = extract_ir_metadata(content)
                     error_output = result.stdout + result.stderr
                     return ProcedureCheckResult(
                         procedure_name=config.name,
@@ -178,24 +200,79 @@ def run_filecheck(
                         error_message=f"{error_output[:500]}... [truncated]"
                         if error_output
                         else None,
+                        # Include all metadata even when not detected
+                        num_warps=metadata.get("num_warps"),
+                        num_stages=metadata.get("num_stages"),
+                        num_pp_clusters=metadata.get("num_pp_clusters"),
+                        cond_barrier_count=metadata.get("cond_barrier_count"),
+                        setprio_count=metadata.get("setprio_count"),
+                        dot_count=metadata.get("dot_count"),
+                        module_attributes=metadata.get("module_attributes"),
+                        tile_m=metadata.get("tile_m"),
+                        tile_n=metadata.get("tile_n"),
+                        tile_k=metadata.get("tile_k"),
+                        tile_size_bits=metadata.get("tile_size_bits"),
+                        input_dtype=metadata.get("input_dtype"),
+                        output_dtype=metadata.get("output_dtype"),
+                        mfma_m=metadata.get("mfma_m"),
+                        mfma_n=metadata.get("mfma_n"),
+                        mfma_k=metadata.get("mfma_k"),
                     )
 
         except subprocess.TimeoutExpired:
+            # Extract metadata even on timeout
+            metadata = extract_ir_metadata(content) if content else {}
             return ProcedureCheckResult(
                 procedure_name=config.name,
                 detected=False,
                 check_pattern=config.patterns,
                 match_details=match_details,
                 error_message="FileCheck timed out",
+                # Include all metadata even on timeout
+                num_warps=metadata.get("num_warps"),
+                num_stages=metadata.get("num_stages"),
+                num_pp_clusters=metadata.get("num_pp_clusters"),
+                cond_barrier_count=metadata.get("cond_barrier_count"),
+                setprio_count=metadata.get("setprio_count"),
+                dot_count=metadata.get("dot_count"),
+                module_attributes=metadata.get("module_attributes"),
+                tile_m=metadata.get("tile_m"),
+                tile_n=metadata.get("tile_n"),
+                tile_k=metadata.get("tile_k"),
+                tile_size_bits=metadata.get("tile_size_bits"),
+                input_dtype=metadata.get("input_dtype"),
+                output_dtype=metadata.get("output_dtype"),
+                mfma_m=metadata.get("mfma_m"),
+                mfma_n=metadata.get("mfma_n"),
+                mfma_k=metadata.get("mfma_k"),
             )
         except Exception as e:
             logger.warning(f"FileCheck error for {config.name}: {e}")
+            # Extract metadata even on exception
+            metadata = extract_ir_metadata(content) if content else {}
             return ProcedureCheckResult(
                 procedure_name=config.name,
                 detected=False,
                 check_pattern=config.patterns,
                 match_details=match_details,
                 error_message=f"FileCheck error: {e}",
+                # Include all metadata even on exception
+                num_warps=metadata.get("num_warps"),
+                num_stages=metadata.get("num_stages"),
+                num_pp_clusters=metadata.get("num_pp_clusters"),
+                cond_barrier_count=metadata.get("cond_barrier_count"),
+                setprio_count=metadata.get("setprio_count"),
+                dot_count=metadata.get("dot_count"),
+                module_attributes=metadata.get("module_attributes"),
+                tile_m=metadata.get("tile_m"),
+                tile_n=metadata.get("tile_n"),
+                tile_k=metadata.get("tile_k"),
+                tile_size_bits=metadata.get("tile_size_bits"),
+                input_dtype=metadata.get("input_dtype"),
+                output_dtype=metadata.get("output_dtype"),
+                mfma_m=metadata.get("mfma_m"),
+                mfma_n=metadata.get("mfma_n"),
+                mfma_k=metadata.get("mfma_k"),
             )
     else:
         return ProcedureCheckResult(
@@ -248,7 +325,124 @@ def extract_ir_metadata(ir_content: str) -> dict[str, Any]:
         else:
             metadata["num_pp_clusters"] = 2
 
+    # Extract tile size related attributes
+    tile_info = _extract_tile_size_info(ir_content)
+    if tile_info:
+        metadata.update(tile_info)
+
     return metadata
+
+
+def _extract_tile_size_info(ir_content: str) -> dict[str, Any]:
+    """
+    Extract tile size related information from IR content.
+
+    This function extracts tile dimensions and calculates tile size following
+    the BlockPingpong.cpp definition:
+        tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth
+    Where:
+        - dotShape[0] = M (output tensor first dimension)
+        - dotShape[1] = N (output tensor second dimension)
+        - aShape[1] = K (first operand second dimension, reduction dimension)
+        - elemWidth = element bit width of input A
+
+    Also extracts MFMA instruction shape from #ttg.amd_mfma encoding.
+
+    Returns:
+        Dictionary containing tile size attributes.
+    """
+    tile_info: dict[str, Any] = {}
+
+    # Extract from tt.dot tensor dimensions in TTGIR format
+    # Pattern: tt.dot ... : tensor<MxKxdtype, #encoding> * tensor<KxNxdtype, #encoding> -> tensor<MxNxresult_dtype, #encoding>
+    # Example: tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xbf16, #ttg.dot_op<...>> * tensor<32x64xbf16, #ttg.dot_op<...>> -> tensor<64x64xf32, #mma>
+    dot_pattern = re.search(
+        r"tt\.dot[^:]*:\s*tensor<(\d+)x(\d+)x([a-zA-Z0-9]+)[^*]*\*\s*tensor<(\d+)x(\d+)x([a-zA-Z0-9]+)[^-]*->\s*tensor<(\d+)x(\d+)x([a-zA-Z0-9]+)",
+        ir_content,
+    )
+    if dot_pattern:
+        # First operand (A): MxK
+        _a_m = int(dot_pattern.group(1))  # noqa: F841 - kept for documentation
+        a_k = int(dot_pattern.group(2))
+        input_dtype = dot_pattern.group(3).strip()
+
+        # Second operand (B): KxN - we extract but don't use, kept for documentation
+        _b_k = int(dot_pattern.group(4))  # noqa: F841 - should equal a_k
+        _b_n = int(dot_pattern.group(5))  # noqa: F841 - should equal out_n
+
+        # Output (C): MxN
+        out_m = int(dot_pattern.group(7))
+        out_n = int(dot_pattern.group(8))
+        output_dtype = dot_pattern.group(9).strip()
+
+        tile_info["tile_m"] = out_m
+        tile_info["tile_n"] = out_n
+        tile_info["tile_k"] = a_k
+        tile_info["input_dtype"] = input_dtype
+        tile_info["output_dtype"] = output_dtype
+
+        # Calculate tile size in bits following BlockPingpong.cpp:
+        # tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth
+        # Where elemWidth is the bit width of input A (not output!)
+        input_bits = _get_dtype_bits(input_dtype)
+        if input_bits:
+            tile_info["tile_size_bits"] = out_m * out_n * a_k * input_bits
+
+    # Extract MFMA instruction shape from #ttg.amd_mfma encoding
+    # Pattern: #ttg.amd_mfma<{..., instrShape = [M, N], ...}>
+    # Example: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
+    mfma_pattern = re.search(
+        r"#ttg\.amd_mfma<\{[^}]*instrShape\s*=\s*\[(\d+),\s*(\d+)\]",
+        ir_content,
+    )
+    if mfma_pattern:
+        tile_info["mfma_m"] = int(mfma_pattern.group(1))
+        tile_info["mfma_n"] = int(mfma_pattern.group(2))
+
+    # Alternative: Extract from amdgpu.mfma intrinsic (e.g., amdgpu.mfma 32x32x8)
+    if "mfma_m" not in tile_info:
+        mfma_intrinsic_pattern = re.search(
+            r"amdgpu\.mfma.*?(\d+)x(\d+)x(\d+)",
+            ir_content,
+        )
+        if mfma_intrinsic_pattern:
+            tile_info["mfma_m"] = int(mfma_intrinsic_pattern.group(1))
+            tile_info["mfma_n"] = int(mfma_intrinsic_pattern.group(2))
+            tile_info["mfma_k"] = int(mfma_intrinsic_pattern.group(3))
+
+    return tile_info
+
+
+def _get_dtype_bits(dtype_str: str) -> int | None:
+    """Get the number of bits for a given data type string."""
+    dtype_bits_map = {
+        "f16": 16,
+        "bf16": 16,
+        "f32": 32,
+        "f64": 64,
+        "fp16": 16,
+        "bfloat16": 16,
+        "fp32": 32,
+        "fp64": 64,
+        "i8": 8,
+        "i16": 16,
+        "i32": 32,
+        "i64": 64,
+        "int8": 8,
+        "int16": 16,
+        "int32": 32,
+        "int64": 64,
+        "f8e4m3fnuz": 8,
+        "f8e5m2fnuz": 8,
+        "f8e4m3fn": 8,
+        "f8e5m2": 8,
+    }
+    # Clean up the dtype string and look for matches
+    dtype_clean = dtype_str.strip().lower()
+    for key, bits in dtype_bits_map.items():
+        if key in dtype_clean:
+            return bits
+    return None
 
 
 def find_procedures_with_patterns(
@@ -256,6 +450,7 @@ def find_procedures_with_patterns(
     ir_key: str,
     file_content: dict[str, str],
     file_path: dict[str, str],
+    ttir_key: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Check multiple procedures with custom FileCheck patterns in IR content."""
     ir_content = load_ir_contents(ir_key, file_content, file_path)
@@ -270,6 +465,13 @@ def find_procedures_with_patterns(
             for cfg in procedure_configs
         }
 
+    # Extract tile size info from TTIR content if ttir_key is provided
+    tile_info = {}
+    if ttir_key:
+        ttir_content = load_ir_contents(ttir_key, file_content, file_path)
+        if ttir_content:
+            tile_info = _extract_tile_size_info(ttir_content)
+
     results = {}
     for cfg in procedure_configs:
         config = ProcedureCheckConfig(
@@ -280,6 +482,8 @@ def find_procedures_with_patterns(
         result = run_filecheck(ir_content, config)
         result_dict = asdict(result)
         result_dict["detection_method"] = "filecheck"
+        if tile_info:
+            result_dict.update(tile_info)
         results[cfg["name"]] = result_dict
 
     return results
@@ -983,6 +1187,7 @@ def _generate_ir_analysis(
             ttgir_key,
             file_content,
             file_path,
+            ttir_key=ttir_key,
         )
         if procedure_results:
             ir_analysis["procedure_checks"] = procedure_results
