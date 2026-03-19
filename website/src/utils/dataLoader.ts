@@ -193,18 +193,6 @@ export interface PingpongSchedulingData {
     occurrences: PingpongOccurrence[];
 }
 
-export interface BlockPingpongData {
-    detected: boolean;
-    category: string;
-    num_warps: number | null;
-    num_pp_clusters: number | null;
-    pattern_matches: string[];
-    cond_barrier_count: number;
-    setprio_count: number;
-    dot_count: number;
-    message?: string;  // Detailed message with criteria and performance implications
-}
-
 /**
  * Result of a FileCheck-based procedure check
  */
@@ -258,7 +246,6 @@ export interface IRAnalysisData {
     // Mapping from IR stage -> <IO type -> count>
     io_counts?: Record<string, Record<string, number>>;
     loop_schedules?: [Record<string, [string]>];
-    blockpingpong?: BlockPingpongData;
     // FileCheck-based procedure detection results
     procedure_checks?: Record<string, ProcedureCheckResult>;
 }
