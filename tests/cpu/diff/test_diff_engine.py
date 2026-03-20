@@ -86,6 +86,34 @@ class TestDiffEngine(unittest.TestCase):
         for key in diff_event["by_python_line"].keys():
             self.assertIsInstance(key, str)
 
+    def test_summary_includes_dtype_mismatch_note(self) -> None:
+        """Summary includes a correctness note when dtype mismatches detected."""
+        from .test_fixtures import create_launch_event
+
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.bfloat16"},
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float16"},
+            }
+        )
+        engine = DiffEngine(
+            COMP_EVENT_A,
+            COMP_EVENT_B,
+            launch_a=launch_a,
+            launch_b=launch_b,
+            tensor_values=True,
+        )
+        result = engine.run()
+        correctness_notes = [
+            n for n in result.summary.notes if n.category == "correctness"
+        ]
+        self.assertEqual(len(correctness_notes), 1)
+        self.assertIn("dtype mismatch", correctness_notes[0].content.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

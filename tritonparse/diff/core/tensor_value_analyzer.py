@@ -21,6 +21,21 @@ logger = logging.getLogger(__name__)
 
 _INLINE_STAT_KEYS = ("min", "max", "mean", "std")
 
+_TENSOR_TYPES = {"tensor", "TensorDescriptor"}
+
+
+def _resolve_tensor_info(info: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap TensorDescriptor to its base tensor metadata.
+
+    TensorDescriptor args store the actual tensor info (dtype, shape,
+    blob_path, stats) inside a nested ``base`` dict. This function
+    returns ``info["base"]`` for TensorDescriptor args, or ``info``
+    itself for plain tensor args.
+    """
+    if info.get("type") == "TensorDescriptor":
+        return info.get("base", info)
+    return info
+
 
 def _has_inline_stats(info: dict[str, Any]) -> bool:
     """Check if a tensor arg has all required inline statistics.
@@ -79,6 +94,50 @@ class TensorValueAnalyzer:
         self.atol = atol
         self.rtol = rtol
 
+    def _build_dtype_inventory(
+        self, args: dict[str, Any], tensor_names: set[str]
+    ) -> dict[str, str]:
+        """Build a mapping of tensor arg name -> dtype string."""
+        return {
+            name: _resolve_tensor_info(args[name]).get("dtype", "")
+            for name in sorted(tensor_names)
+        }
+
+    def _detect_cross_side_dtype_mismatches(
+        self,
+        inventory_a: dict[str, str],
+        inventory_b: dict[str, str],
+    ) -> list:
+        """Detect dtype mismatches when tensor names don't overlap.
+
+        Only flags a mismatch when the dtype sets are completely disjoint
+        (no dtype appears on both sides), to avoid false positives from
+        shared utility dtypes like fp32 bias terms.
+        """
+        from tritonparse.diff.core.diff_types import DtypeMismatch
+
+        dtypes_a = set(inventory_a.values()) - {""}
+        dtypes_b = set(inventory_b.values()) - {""}
+
+        if not dtypes_a or not dtypes_b:
+            return []
+
+        # Only flag when dtype sets are completely disjoint
+        if dtypes_a & dtypes_b:
+            return []
+
+        return [
+            DtypeMismatch(
+                dtypes_a=sorted(dtypes_a),
+                dtypes_b=sorted(dtypes_b),
+                description=(
+                    f"Trace A tensors use {sorted(dtypes_a)}, "
+                    f"Trace B tensors use {sorted(dtypes_b)} "
+                    "— likely cause of accuracy issues"
+                ),
+            )
+        ]
+
     def analyze(self) -> TensorValueDiff:
         """Analyze tensor value differences between two launch events.
 
@@ -94,28 +153,55 @@ class TensorValueAnalyzer:
                 warning="No extracted_args found in launch events",
             )
 
-        # Find common tensor arguments
+        # Find common tensor arguments (supports both "tensor" and "TensorDescriptor")
         tensor_names_a = {
-            name for name, info in args_a.items() if info.get("type") == "tensor"
+            name for name, info in args_a.items() if info.get("type") in _TENSOR_TYPES
         }
         tensor_names_b = {
-            name for name, info in args_b.items() if info.get("type") == "tensor"
+            name for name, info in args_b.items() if info.get("type") in _TENSOR_TYPES
         }
+
+        # Always build dtype inventories before any early return
+        dtype_inventory_a = self._build_dtype_inventory(args_a, tensor_names_a)
+        dtype_inventory_b = self._build_dtype_inventory(args_b, tensor_names_b)
+
         common_tensors = sorted(tensor_names_a & tensor_names_b)
 
         if not common_tensors:
+            # No common tensor names — check for cross-side dtype mismatches
+            dtype_mismatches = self._detect_cross_side_dtype_mismatches(
+                dtype_inventory_a, dtype_inventory_b
+            )
+            if dtype_mismatches:
+                return TensorValueDiff(
+                    status="divergent",
+                    warning="No common tensor arguments found between launch events",
+                    dtype_inventory_a=dtype_inventory_a,
+                    dtype_inventory_b=dtype_inventory_b,
+                    dtype_mismatches=dtype_mismatches,
+                )
             return TensorValueDiff(
                 status="skipped",
                 warning="No common tensor arguments found between launch events",
+                dtype_inventory_a=dtype_inventory_a,
+                dtype_inventory_b=dtype_inventory_b,
             )
+
+        # Resolve TensorDescriptor args to their base tensor metadata
+        resolved_a = {
+            name: _resolve_tensor_info(args_a[name]) for name in common_tensors
+        }
+        resolved_b = {
+            name: _resolve_tensor_info(args_b[name]) for name in common_tensors
+        }
 
         # Check if any tensor has blob_path or inline stats on both sides
         has_any_blobs = any(
-            args_a[name].get("blob_path") and args_b[name].get("blob_path")
+            resolved_a[name].get("blob_path") and resolved_b[name].get("blob_path")
             for name in common_tensors
         )
         has_any_inline_stats = any(
-            _has_inline_stats(args_a[name]) and _has_inline_stats(args_b[name])
+            _has_inline_stats(resolved_a[name]) and _has_inline_stats(resolved_b[name])
             for name in common_tensors
         )
 
@@ -137,7 +223,7 @@ class TensorValueAnalyzer:
         args_divergent = 0
 
         for name in common_tensors:
-            arg_diff = self._compare_arg(name, args_a[name], args_b[name])
+            arg_diff = self._compare_arg(name, resolved_a[name], resolved_b[name])
             per_arg[name] = arg_diff
 
             if arg_diff.status == "skipped":
@@ -174,6 +260,8 @@ class TensorValueAnalyzer:
             atol=self.atol,
             rtol=self.rtol,
             per_arg=per_arg,
+            dtype_inventory_a=dtype_inventory_a,
+            dtype_inventory_b=dtype_inventory_b,
         )
 
     def _compare_arg(

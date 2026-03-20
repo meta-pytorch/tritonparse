@@ -38,7 +38,10 @@ def format_summary(result: CompilationDiffResult) -> str:
     sections.append(_format_ir_stats(result.ir_stats))
     sections.append(_format_python_line_summary(result.by_python_line))
 
-    if result.tensor_value_diff.status != "skipped":
+    if (
+        result.tensor_value_diff.status != "skipped"
+        or result.tensor_value_diff.dtype_mismatches
+    ):
         sections.append(_format_tensor_value_diff(result.tensor_value_diff))
     elif result.tensor_value_diff.warning:
         sections.append(f"\nTensor Values: {result.tensor_value_diff.warning}")
@@ -201,11 +204,43 @@ def _format_tensor_value_diff(tensor_diff: TensorValueDiff) -> str:
         f"  Tolerance: atol={tensor_diff.atol:.0e}, rtol={tensor_diff.rtol:.0e}"
     )
 
+    # Show dtype mismatches prominently
+    if tensor_diff.dtype_mismatches:
+        lines.append("  *** DTYPE MISMATCH DETECTED ***")
+        for mismatch in tensor_diff.dtype_mismatches:
+            lines.append(f"    Trace A dtypes: {mismatch.dtypes_a}")
+            lines.append(f"    Trace B dtypes: {mismatch.dtypes_b}")
+
+    # Show dtype inventories when no per-arg comparisons were possible
+    if not tensor_diff.per_arg and (
+        tensor_diff.dtype_inventory_a or tensor_diff.dtype_inventory_b
+    ):
+        if tensor_diff.dtype_inventory_a:
+            lines.append("  Trace A tensor args:")
+            for name, dtype in tensor_diff.dtype_inventory_a.items():
+                lines.append(f"    {name}: {dtype}")
+        if tensor_diff.dtype_inventory_b:
+            lines.append("  Trace B tensor args:")
+            for name, dtype in tensor_diff.dtype_inventory_b.items():
+                lines.append(f"    {name}: {dtype}")
+
     for arg_name, arg_diff in tensor_diff.per_arg.items():
         icon = status_icon.get(arg_diff.status, "?")
         mode = arg_diff.metrics.get("comparison_mode", "")
         mode_suffix = " (stats)" if mode == "stats" else ""
-        lines.append(f"  [{icon}] {arg_name}: {arg_diff.status}{mode_suffix}")
+        # Show dtype/shape details inline for mismatch statuses
+        if arg_diff.status == "dtype_mismatch":
+            lines.append(
+                f"  [{icon}] {arg_name}: dtype_mismatch "
+                f"({arg_diff.dtype_a} vs {arg_diff.dtype_b})"
+            )
+        elif arg_diff.status == "shape_mismatch":
+            lines.append(
+                f"  [{icon}] {arg_name}: shape_mismatch "
+                f"({arg_diff.shape_a} vs {arg_diff.shape_b})"
+            )
+        else:
+            lines.append(f"  [{icon}] {arg_name}: {arg_diff.status}{mode_suffix}")
 
         # Show expanded metrics for divergent args
         if arg_diff.status == "divergent":

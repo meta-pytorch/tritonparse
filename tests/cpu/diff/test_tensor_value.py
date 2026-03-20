@@ -30,6 +30,13 @@ class TestTensorValueDiff(unittest.TestCase):
         self.assertEqual(val_diff.args_compared, 0)
         self.assertEqual(val_diff.per_arg, {})
 
+    def test_dtype_mismatch_fields_default(self) -> None:
+        """Test new dtype fields have correct defaults."""
+        val_diff = TensorValueDiff()
+        self.assertEqual(val_diff.dtype_inventory_a, {})
+        self.assertEqual(val_diff.dtype_inventory_b, {})
+        self.assertEqual(val_diff.dtype_mismatches, [])
+
     def test_types_serialization(self) -> None:
         """Test tensor value types can be serialized to JSON."""
         from dataclasses import asdict
@@ -602,6 +609,400 @@ class TestTensorValueDiffInlineStats(unittest.TestCase):
         self.assertIn("(stats)", output)
         self.assertIn("Min", output)
         self.assertIn("Mean", output)
+
+
+class TestDtypeMismatchDetection(unittest.TestCase):
+    """Tests for cross-side dtype mismatch detection."""
+
+    def test_no_common_names_different_dtypes(self) -> None:
+        """Dtype mismatch detected when names differ and dtypes differ."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.bfloat16"},
+                "b_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.bfloat16"},
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float16"},
+                "y_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float16"},
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "divergent")
+        self.assertEqual(len(result.dtype_mismatches), 1)
+        self.assertIn("torch.bfloat16", result.dtype_mismatches[0].dtypes_a)
+        self.assertIn("torch.float16", result.dtype_mismatches[0].dtypes_b)
+        self.assertEqual(
+            result.dtype_inventory_a,
+            {"a_ptr": "torch.bfloat16", "b_ptr": "torch.bfloat16"},
+        )
+        self.assertEqual(
+            result.dtype_inventory_b,
+            {"x_ptr": "torch.float16", "y_ptr": "torch.float16"},
+        )
+
+    def test_no_common_names_same_dtypes_no_false_alarm(self) -> None:
+        """No false alarm when names differ but dtypes are the same."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float32"},
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float32"},
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.dtype_mismatches, [])
+        self.assertEqual(result.dtype_inventory_a, {"a_ptr": "torch.float32"})
+        self.assertEqual(result.dtype_inventory_b, {"x_ptr": "torch.float32"})
+
+    def test_no_common_names_partial_overlap_no_false_alarm(self) -> None:
+        """No false alarm when dtype sets partially overlap."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.bfloat16"},
+                "bias": {"type": "tensor", "shape": [64], "dtype": "torch.float32"},
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float16"},
+                "scale": {"type": "tensor", "shape": [64], "dtype": "torch.float32"},
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.dtype_mismatches, [])
+
+    def test_inventories_populated_on_happy_path(self) -> None:
+        """Dtype inventories populated even when common names exist."""
+        args = {
+            "x_ptr": {
+                "type": "tensor",
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "min": 0.0,
+                "max": 1.0,
+                "mean": 0.5,
+                "std": 0.29,
+            },
+        }
+        launch_a = create_launch_event(extracted_args=dict(args))
+        launch_b = create_launch_event(extracted_args=dict(args))
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "identical")
+        self.assertEqual(result.dtype_inventory_a, {"x_ptr": "torch.float32"})
+        self.assertEqual(result.dtype_inventory_b, {"x_ptr": "torch.float32"})
+
+    def test_cross_side_dtype_mismatch_in_highlights(self) -> None:
+        """Cross-side dtype mismatches appear in DiffEngine highlights."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.bfloat16"},
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {"type": "tensor", "shape": [1024], "dtype": "torch.float16"},
+            }
+        )
+        engine = DiffEngine(
+            COMP_EVENT_A,
+            COMP_EVENT_B,
+            launch_a=launch_a,
+            launch_b=launch_b,
+            tensor_values=True,
+        )
+        result = engine.run()
+        highlights_text = " ".join(result.summary.highlights)
+        self.assertIn("DTYPE MISMATCH", highlights_text)
+        self.assertIn("torch.bfloat16", highlights_text)
+        self.assertIn("torch.float16", highlights_text)
+
+    def test_per_arg_dtype_mismatch_in_highlights(self) -> None:
+        """Per-arg dtype_mismatch status appears in DiffEngine highlights."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                },
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float16",
+                    "blob_path": "/tmp/b.bin",
+                },
+            }
+        )
+        engine = DiffEngine(
+            COMP_EVENT_A,
+            COMP_EVENT_B,
+            launch_a=launch_a,
+            launch_b=launch_b,
+            tensor_values=True,
+        )
+        result = engine.run()
+        highlights_text = " ".join(result.summary.highlights)
+        self.assertIn("x_ptr", highlights_text)
+        self.assertIn("dtype mismatch", highlights_text.lower())
+
+    def test_format_summary_shows_dtype_mismatch(self) -> None:
+        """format_summary displays dtype mismatch prominently."""
+        from tritonparse.diff.core.diff_types import (
+            CompilationDiffResult,
+            DtypeMismatch,
+        )
+
+        result = CompilationDiffResult()
+        result.tensor_value_diff = TensorValueDiff(
+            status="divergent",
+            warning="No common tensor arguments found between launch events",
+            dtype_inventory_a={"a_ptr": "torch.bfloat16", "b_ptr": "torch.bfloat16"},
+            dtype_inventory_b={"x_ptr": "torch.float16", "y_ptr": "torch.float16"},
+            dtype_mismatches=[
+                DtypeMismatch(
+                    dtypes_a=["torch.bfloat16"],
+                    dtypes_b=["torch.float16"],
+                    description="Trace A tensors use ['torch.bfloat16'], Trace B tensors use ['torch.float16'] — likely cause of accuracy issues",
+                )
+            ],
+        )
+        output = format_summary(result)
+        self.assertIn("DTYPE MISMATCH", output)
+        self.assertIn("torch.bfloat16", output)
+        self.assertIn("torch.float16", output)
+        self.assertIn("a_ptr", output)
+        self.assertIn("x_ptr", output)
+
+    def test_format_summary_shows_dtype_inventories(self) -> None:
+        """format_summary shows dtype inventories when no per-arg comparisons."""
+        from tritonparse.diff.core.diff_types import (
+            CompilationDiffResult,
+            DtypeMismatch,
+        )
+
+        result = CompilationDiffResult()
+        result.tensor_value_diff = TensorValueDiff(
+            status="divergent",
+            dtype_inventory_a={"a_ptr": "torch.bfloat16"},
+            dtype_inventory_b={"x_ptr": "torch.float16"},
+            dtype_mismatches=[
+                DtypeMismatch(
+                    dtypes_a=["torch.bfloat16"],
+                    dtypes_b=["torch.float16"],
+                    description="mismatch",
+                )
+            ],
+        )
+        output = format_summary(result)
+        self.assertIn("Trace A tensor args", output)
+        self.assertIn("Trace B tensor args", output)
+
+    def test_common_names_per_arg_dtype_mismatch(self) -> None:
+        """Per-arg dtype_mismatch status is counted as divergent."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "blob_path": "/tmp/a.bin",
+                },
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024],
+                    "dtype": "torch.float16",
+                    "blob_path": "/tmp/b.bin",
+                },
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "divergent")
+        self.assertEqual(result.per_arg["x_ptr"].status, "dtype_mismatch")
+        self.assertEqual(result.args_divergent, 1)
+
+    def test_end_to_end_dtype_mismatch_output(self) -> None:
+        """Full pipeline: DiffEngine -> format_summary shows dtype mismatch."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_ptr": {
+                    "type": "tensor",
+                    "shape": [1024, 1024],
+                    "dtype": "torch.bfloat16",
+                },
+                "b_ptr": {
+                    "type": "tensor",
+                    "shape": [1024, 1024],
+                    "dtype": "torch.bfloat16",
+                },
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_ptr": {
+                    "type": "tensor",
+                    "shape": [1024, 1024],
+                    "dtype": "torch.float16",
+                },
+                "y_ptr": {
+                    "type": "tensor",
+                    "shape": [1024, 1024],
+                    "dtype": "torch.float16",
+                },
+            }
+        )
+        engine = DiffEngine(
+            COMP_EVENT_A,
+            COMP_EVENT_B,
+            launch_a=launch_a,
+            launch_b=launch_b,
+            tensor_values=True,
+        )
+        result = engine.run()
+
+        # Verify data model
+        self.assertEqual(result.tensor_value_diff.status, "divergent")
+        self.assertEqual(len(result.tensor_value_diff.dtype_mismatches), 1)
+
+        # Verify highlights
+        highlights_text = " ".join(result.summary.highlights)
+        self.assertIn("DTYPE MISMATCH", highlights_text)
+
+        # Verify notes
+        correctness_notes = [
+            n for n in result.summary.notes if n.category == "correctness"
+        ]
+        self.assertGreater(len(correctness_notes), 0)
+
+        # Verify formatted output
+        output = format_summary(result)
+        self.assertIn("DTYPE MISMATCH", output)
+        self.assertIn("torch.bfloat16", output)
+        self.assertIn("torch.float16", output)
+        self.assertIn("a_ptr", output)
+        self.assertIn("x_ptr", output)
+
+
+class TestTensorDescriptorSupport(unittest.TestCase):
+    """Tests for TensorDescriptor arg type support."""
+
+    def test_tensor_descriptor_recognized_as_tensor(self) -> None:
+        """TensorDescriptor args are recognized and compared."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_desc": {
+                    "type": "TensorDescriptor",
+                    "base": {
+                        "type": "tensor",
+                        "shape": [1024],
+                        "dtype": "torch.bfloat16",
+                        "min": 0.0,
+                        "max": 1.0,
+                        "mean": 0.5,
+                        "std": 0.29,
+                    },
+                    "shape": [1024],
+                    "strides": [1],
+                    "block_shape": [64],
+                },
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "a_desc": {
+                    "type": "TensorDescriptor",
+                    "base": {
+                        "type": "tensor",
+                        "shape": [1024],
+                        "dtype": "torch.bfloat16",
+                        "min": 0.0,
+                        "max": 1.0,
+                        "mean": 0.5,
+                        "std": 0.29,
+                    },
+                    "shape": [1024],
+                    "strides": [1],
+                    "block_shape": [64],
+                },
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "identical")
+        self.assertEqual(result.args_compared, 1)
+        self.assertEqual(result.dtype_inventory_a, {"a_desc": "torch.bfloat16"})
+
+    def test_tensor_descriptor_dtype_mismatch(self) -> None:
+        """Dtype mismatch detected through TensorDescriptor base."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_desc": {
+                    "type": "TensorDescriptor",
+                    "base": {
+                        "type": "tensor",
+                        "shape": [1024],
+                        "dtype": "torch.bfloat16",
+                        "blob_path": "/tmp/a.bin",
+                    },
+                },
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "a_desc": {
+                    "type": "TensorDescriptor",
+                    "base": {
+                        "type": "tensor",
+                        "shape": [1024],
+                        "dtype": "torch.float16",
+                        "blob_path": "/tmp/b.bin",
+                    },
+                },
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "divergent")
+        self.assertEqual(result.per_arg["a_desc"].status, "dtype_mismatch")
+        self.assertEqual(result.per_arg["a_desc"].dtype_a, "torch.bfloat16")
+        self.assertEqual(result.per_arg["a_desc"].dtype_b, "torch.float16")
+
+    def test_tensor_descriptor_cross_side_mismatch(self) -> None:
+        """Cross-side dtype mismatch with TensorDescriptor and no common names."""
+        launch_a = create_launch_event(
+            extracted_args={
+                "a_desc": {
+                    "type": "TensorDescriptor",
+                    "base": {"type": "tensor", "dtype": "torch.bfloat16"},
+                },
+            }
+        )
+        launch_b = create_launch_event(
+            extracted_args={
+                "x_desc": {
+                    "type": "TensorDescriptor",
+                    "base": {"type": "tensor", "dtype": "torch.float16"},
+                },
+            }
+        )
+        result = TensorValueAnalyzer(launch_a, launch_b).analyze()
+        self.assertEqual(result.status, "divergent")
+        self.assertEqual(len(result.dtype_mismatches), 1)
+        self.assertEqual(result.dtype_inventory_a, {"a_desc": "torch.bfloat16"})
+        self.assertEqual(result.dtype_inventory_b, {"x_desc": "torch.float16"})
 
 
 if __name__ == "__main__":

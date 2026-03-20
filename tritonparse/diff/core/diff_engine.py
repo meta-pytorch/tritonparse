@@ -21,6 +21,7 @@ from typing import Any
 
 from tritonparse.diff.core.diff_types import (
     CompilationDiffResult,
+    DiffNote,
     DiffSummary,
     TensorValueDiff,
 )
@@ -191,6 +192,11 @@ class DiffEngine:
         """Get highlight strings for tensor value divergences."""
         highlights: list[str] = []
         tv = self.result.tensor_value_diff
+
+        # Cross-side dtype mismatches (no common tensor names case)
+        for mismatch in tv.dtype_mismatches:
+            highlights.append(f"DTYPE MISMATCH: {mismatch.description}")
+
         if tv.status == "divergent":
             for arg_name, arg_diff in tv.per_arg.items():
                 if arg_diff.status == "divergent":
@@ -208,11 +214,22 @@ class DiffEngine:
                             highlights.append(
                                 f"Tensor '{arg_name}': max_abs_error={max_err:.2e}"
                             )
+                elif arg_diff.status == "dtype_mismatch":
+                    highlights.append(
+                        f"Tensor '{arg_name}': dtype mismatch "
+                        f"({arg_diff.dtype_a} vs {arg_diff.dtype_b})"
+                    )
+                elif arg_diff.status == "shape_mismatch":
+                    highlights.append(
+                        f"Tensor '{arg_name}': shape mismatch "
+                        f"({arg_diff.shape_a} vs {arg_diff.shape_b})"
+                    )
         return highlights
 
     def _generate_summary(self) -> None:
         """Generate summary from all diff results."""
         highlights: list[str] = []
+        notes: list[DiffNote] = []
         stats: dict[str, int] = {}
 
         # Add metadata differences to highlights
@@ -237,6 +254,20 @@ class DiffEngine:
 
         # Add tensor value divergence highlights
         highlights.extend(self._get_tensor_value_highlights())
+
+        # Add dtype mismatch note
+        if self.result.tensor_value_diff.dtype_mismatches:
+            notes.append(
+                DiffNote(
+                    source="rule",
+                    category="correctness",
+                    content=(
+                        "Dtype mismatch detected between kernel tensor arguments "
+                        "— this commonly causes accuracy=0 in benchmarks. "
+                        "Check that both kernels receive the same input dtypes."
+                    ),
+                )
+            )
 
         # Compute stats
         stats["python_lines_compared"] = len(self.result.by_python_line)
@@ -267,5 +298,5 @@ class DiffEngine:
             warning=warning,
             highlights=highlights,
             stats=stats,
-            notes=[],
+            notes=notes,
         )

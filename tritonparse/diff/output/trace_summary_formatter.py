@@ -17,6 +17,7 @@ from tritonparse.diff.output.summary_formatter import (
     _format_highlights,
     _format_ir_stats,
     _format_python_line_summary,
+    _format_tensor_value_diff,
 )
 
 
@@ -165,6 +166,12 @@ def _format_single_match(match: KernelMatchResult) -> str:
             _format_ir_stats(diff.ir_stats),
             _format_python_line_summary(diff.by_python_line),
         ]
+        # Include tensor value diff if it has meaningful content
+        tv = diff.tensor_value_diff
+        if tv.status != "skipped" or tv.dtype_mismatches:
+            detail_sections.append(_format_tensor_value_diff(tv))
+        elif tv.warning:
+            detail_sections.append(f"\nTensor Values: {tv.warning}")
         for section in detail_sections:
             if section:
                 parts.append(_indent(section.lstrip("\n"), "    "))

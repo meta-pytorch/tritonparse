@@ -164,6 +164,24 @@ class TensorArgDiff:
 
 
 @dataclass
+class DtypeMismatch:
+    """A detected dtype mismatch between tensor args across two traces.
+
+    Used when tensor argument names don't overlap, so we compare
+    the set of unique dtypes across all tensor args on each side.
+
+    Attributes:
+        dtypes_a: Unique dtypes found in trace A tensor args.
+        dtypes_b: Unique dtypes found in trace B tensor args.
+        description: Human-readable description of the mismatch.
+    """
+
+    dtypes_a: list[str] = field(default_factory=list)
+    dtypes_b: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass
 class TensorValueDiff:
     """Level 5: Tensor value comparison result.
 
@@ -177,6 +195,9 @@ class TensorValueDiff:
         rtol: Relative tolerance used.
         warning: Warning message (e.g., "No tensor blobs found").
         per_arg: Per-argument comparison results keyed by arg name.
+        dtype_inventory_a: Maps arg name -> dtype for ALL tensor args in trace A.
+        dtype_inventory_b: Maps arg name -> dtype for ALL tensor args in trace B.
+        dtype_mismatches: Detected cross-side dtype mismatches (when names don't match).
     """
 
     status: str = "skipped"
@@ -188,6 +209,9 @@ class TensorValueDiff:
     rtol: float = 1e-3
     warning: str | None = None
     per_arg: dict[str, TensorArgDiff] = field(default_factory=dict)
+    dtype_inventory_a: dict[str, str] = field(default_factory=dict)
+    dtype_inventory_b: dict[str, str] = field(default_factory=dict)
+    dtype_mismatches: list[DtypeMismatch] = field(default_factory=list)
 
 
 @dataclass
