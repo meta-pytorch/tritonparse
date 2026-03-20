@@ -960,5 +960,159 @@ class TestTensorValueDiffInlineStats(unittest.TestCase):
         self.assertIn("Mean", output)
 
 
+# --- Trace Data Types Tests ---
+
+
+class TestTraceDataTypes(unittest.TestCase):
+    """Tests for trace-level data types."""
+
+    def test_match_method_enum_values(self) -> None:
+        """Test MatchMethod enum string values."""
+        from tritonparse.diff.core.diff_types import MatchMethod
+
+        self.assertEqual(MatchMethod.HASH.value, "hash")
+        self.assertEqual(MatchMethod.NAME.value, "name")
+        self.assertEqual(MatchMethod.SOURCE.value, "source")
+        self.assertEqual(MatchMethod.FUZZY_NAME.value, "fuzzy_name")
+        # str enum allows string comparison
+        self.assertEqual(MatchMethod.HASH, "hash")
+
+    def test_kernel_match_result_defaults(self) -> None:
+        """Test KernelMatchResult default field values."""
+        from tritonparse.diff.core.diff_types import KernelMatchResult, MatchMethod
+
+        result = KernelMatchResult()
+        self.assertEqual(result.kernel_name_a, "")
+        self.assertEqual(result.kernel_name_b, "")
+        self.assertEqual(result.match_method, MatchMethod.NAME)
+        self.assertEqual(result.match_confidence, 1.0)
+        self.assertEqual(result.status, "")
+        self.assertIsNone(result.compilation_diff)
+        self.assertEqual(result.launch_count_a, 0)
+        self.assertEqual(result.launch_count_b, 0)
+        self.assertEqual(result.metadata_changes, [])
+        self.assertEqual(result.ir_stat_highlights, [])
+
+    def test_compilation_diff_result_backward_compat(self) -> None:
+        """Test that CompilationDiffResult still works with new fields defaulting to None."""
+        from tritonparse.diff.core.diff_types import CompilationDiffResult
+
+        result = CompilationDiffResult()
+        # New fields default to None
+        self.assertIsNone(result.match_method)
+        self.assertIsNone(result.match_confidence)
+        # Existing fields still have their defaults
+        self.assertEqual(result.diff_id, "")
+        self.assertEqual(result.kernel_name_a, "")
+        self.assertFalse(result.kernel_names_identical)
+        self.assertEqual(result.summary.status, "identical")
+
+
+# --- Event Grouping Tests ---
+
+
+class TestEventGrouping(unittest.TestCase):
+    """Tests for event grouping functions."""
+
+    def test_group_compilations_by_kernel(self) -> None:
+        """Test grouping compilation events by kernel name."""
+        from tritonparse.diff.core.event_matcher import group_compilations_by_kernel
+
+        events = [
+            create_compilation_event(kernel_name="add_kernel", kernel_hash="hash1"),
+            create_compilation_event(kernel_name="matmul_kernel", kernel_hash="hash2"),
+            create_compilation_event(kernel_name="add_kernel", kernel_hash="hash3"),
+        ]
+        groups = group_compilations_by_kernel(events)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(len(groups["add_kernel"]), 2)
+        self.assertEqual(len(groups["matmul_kernel"]), 1)
+        # Check compilation indices are correct
+        self.assertEqual(groups["add_kernel"][0][0], 0)  # first compilation
+        self.assertEqual(groups["add_kernel"][1][0], 2)  # third compilation
+        self.assertEqual(groups["matmul_kernel"][0][0], 1)  # second compilation
+
+    def test_group_compilations_empty(self) -> None:
+        """Test grouping with empty events list."""
+        from tritonparse.diff.core.event_matcher import group_compilations_by_kernel
+
+        groups = group_compilations_by_kernel([])
+        self.assertEqual(groups, {})
+
+    def test_group_launches_by_kernel(self) -> None:
+        """Test grouping launch events by kernel name."""
+        from tritonparse.diff.core.event_matcher import group_launches_by_kernel
+
+        events = [
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "add_kernel", "hash": "h1"},
+            },
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "matmul_kernel", "hash": "h2"},
+            },
+            {
+                "event_type": "launch",
+                "compilation_metadata": {"name": "add_kernel", "hash": "h1"},
+            },
+            # non-launch events should be skipped
+            create_compilation_event(kernel_name="add_kernel"),
+        ]
+        groups = group_launches_by_kernel(events)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(len(groups["add_kernel"]), 2)
+        self.assertEqual(len(groups["matmul_kernel"]), 1)
+
+    def test_group_unknown_kernels(self) -> None:
+        """Test that events with no name are grouped under 'unknown'."""
+        from tritonparse.diff.core.event_matcher import group_compilations_by_kernel
+
+        event_no_name = {
+            "event_type": "compilation",
+            "payload": {"ttir": DEFAULT_TTIR, "source_mappings": {}},
+        }
+        events = [event_no_name]
+        groups = group_compilations_by_kernel(events)
+        self.assertIn("unknown", groups)
+        self.assertEqual(len(groups["unknown"]), 1)
+
+    def test_group_compilations_skips_non_compilation(self) -> None:
+        """Test that non-compilation events are skipped."""
+        from tritonparse.diff.core.event_matcher import group_compilations_by_kernel
+
+        events = [
+            {"event_type": "launch", "compilation_metadata": {"name": "k1"}},
+            create_compilation_event(kernel_name="add_kernel"),
+        ]
+        groups = group_compilations_by_kernel(events)
+        self.assertEqual(len(groups), 1)
+        self.assertIn("add_kernel", groups)
+
+    def test_group_launches_fallback_name_field(self) -> None:
+        """Test that launch grouping falls back to top-level name field."""
+        from tritonparse.diff.core.event_matcher import group_launches_by_kernel
+
+        events = [
+            {
+                "event_type": "launch",
+                "name": "my_kernel",
+                "compilation_metadata": {"hash": "h1"},
+            },
+        ]
+        groups = group_launches_by_kernel(events)
+        self.assertIn("my_kernel", groups)
+
+    def test_group_launches_unknown_fallback(self) -> None:
+        """Test that launches with no name info are grouped under 'unknown'."""
+        from tritonparse.diff.core.event_matcher import group_launches_by_kernel
+
+        events = [
+            {"event_type": "launch", "compilation_metadata": {"hash": "h1"}},
+        ]
+        groups = group_launches_by_kernel(events)
+        self.assertIn("unknown", groups)
+
+
 if __name__ == "__main__":
     unittest.main()

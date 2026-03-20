@@ -10,14 +10,23 @@ from tritonparse.diff.core.diff_types import (
     DiffSummary,
     IRStats,
     IRStatsDiff,
+    KernelMatchResult,
+    MatchMethod,
     MetadataDiff,
     OperationDiff,
     PythonLineDiff,
     PythonSourceDiff,
     TensorArgDiff,
     TensorValueDiff,
+    TraceDiffResult,
+    TraceDiffSummary,
+    TraceStats,
 )
-from tritonparse.diff.core.event_matcher import find_launches_for_compilation
+from tritonparse.diff.core.event_matcher import (
+    find_launches_for_compilation,
+    group_compilations_by_kernel,
+    group_launches_by_kernel,
+)
 from tritonparse.diff.core.ir_stats_analyzer import (
     analyze_ir_stats,
     analyze_operation_diff,
@@ -39,14 +48,21 @@ __all__ = [
     "DiffSummary",
     "IRStats",
     "IRStatsDiff",
+    "KernelMatchResult",
+    "MatchMethod",
     "MetadataDiff",
     "OperationDiff",
     "PythonLineDiff",
     "PythonSourceDiff",
     "TensorArgDiff",
     "TensorValueDiff",
+    "TraceDiffResult",
+    "TraceDiffSummary",
+    "TraceStats",
     # Event matcher
     "find_launches_for_compilation",
+    "group_compilations_by_kernel",
+    "group_launches_by_kernel",
     # Tensor Value Analyzer
     "analyze_tensor_values",
     "TensorValueAnalyzer",

@@ -8,6 +8,7 @@ ensure they have source_mappings, and match events by index or kernel name.
 """
 
 import json
+from collections import defaultdict
 from typing import Any
 
 from tritonparse.tools.prettify_ndjson import load_ndjson
@@ -281,3 +282,51 @@ def find_launch_for_compilation(
         launch_position += 1
 
     return None
+
+
+def group_compilations_by_kernel(
+    events: list[dict[str, Any]],
+) -> dict[str, list[tuple[int, dict[str, Any]]]]:
+    """Group compilation events by kernel name.
+
+    Args:
+        events: List of all events.
+
+    Returns:
+        Dictionary mapping kernel names to lists of (compilation_index, event) tuples.
+    """
+    groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    comp_idx = 0
+    for event in events:
+        if not is_compilation_event(event):
+            continue
+        name = get_kernel_name(event)
+        groups[name].append((comp_idx, event))
+        comp_idx += 1
+    return dict(groups)
+
+
+def group_launches_by_kernel(
+    events: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Group launch events by kernel name.
+
+    Extracts kernel name from compilation_metadata.name or the top-level name field.
+
+    Args:
+        events: List of all events.
+
+    Returns:
+        Dictionary mapping kernel names to lists of launch event dicts.
+    """
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in events:
+        if event.get("event_type") != "launch":
+            continue
+        name = (
+            event.get("compilation_metadata", {}).get("name")
+            or event.get("name")
+            or "unknown"
+        )
+        groups[name].append(event)
+    return dict(groups)

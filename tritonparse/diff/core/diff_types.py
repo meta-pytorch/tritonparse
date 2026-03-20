@@ -8,6 +8,7 @@ comparison results between two compilation events.
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 
@@ -274,3 +275,139 @@ class CompilationDiffResult:
     operation_diff: dict[str, OperationDiff] = field(default_factory=dict)
     by_python_line: dict[int, PythonLineDiff] = field(default_factory=dict)
     tensor_value_diff: TensorValueDiff = field(default_factory=TensorValueDiff)
+
+    # Trace-mode matching info (None for manual/single-pair diffs)
+    match_method: str | None = None
+    match_confidence: float | None = None
+
+
+class MatchMethod(str, Enum):
+    """How a kernel pair was matched across traces."""
+
+    HASH = "hash"
+    NAME = "name"
+    SOURCE = "source"
+    FUZZY_NAME = "fuzzy_name"
+    CONFIG = "config"
+
+
+@dataclass
+class KernelMatchResult:
+    """Result of matching and diffing a single kernel pair across two traces.
+
+    Attributes:
+        kernel_name_a: Kernel name from trace A.
+        kernel_name_b: Kernel name from trace B.
+        hash_a: Kernel hash from trace A.
+        hash_b: Kernel hash from trace B.
+        event_index_a: Compilation event index in trace A.
+        event_index_b: Compilation event index in trace B.
+        match_method: Which strategy produced this match.
+        match_confidence: Confidence score (1.0 for exact, similarity ratio for fuzzy).
+        status: "identical", "similar", or "different".
+        compilation_diff: Full per-kernel diff result (filled after matching).
+        launch_count_a: Number of launches in trace A.
+        launch_count_b: Number of launches in trace B.
+        source_similarity: Python source similarity ratio.
+        metadata_changes: List of metadata change descriptions.
+        ir_stat_highlights: List of IR stat change descriptions.
+        tensor_summary: Summary of tensor value comparison, if any.
+    """
+
+    kernel_name_a: str = ""
+    kernel_name_b: str = ""
+    hash_a: str = ""
+    hash_b: str = ""
+    event_index_a: int = 0
+    event_index_b: int = 0
+    match_method: MatchMethod = MatchMethod.NAME
+    match_confidence: float = 1.0
+    status: str = ""
+    compilation_diff: CompilationDiffResult | None = None
+    launch_count_a: int = 0
+    launch_count_b: int = 0
+    source_similarity: float = 0.0
+    metadata_changes: list[str] = field(default_factory=list)
+    ir_stat_highlights: list[str] = field(default_factory=list)
+    tensor_summary: str | None = None
+
+
+@dataclass
+class TraceStats:
+    """Statistics for a single trace file.
+
+    Attributes:
+        trace_path: Path to the trace file.
+        total_events: Total number of events in the trace.
+        unique_kernels: Number of unique kernel names.
+        total_compilations: Total number of compilation events.
+        total_launches: Total number of launch events.
+        kernel_names: List of unique kernel names.
+    """
+
+    trace_path: str = ""
+    total_events: int = 0
+    unique_kernels: int = 0
+    total_compilations: int = 0
+    total_launches: int = 0
+    kernel_names: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TraceDiffSummary:
+    """Summary of the trace-level diff.
+
+    Attributes:
+        status: Overall status: "identical", "minor_diff", or "significant_diff".
+        total_matched: Number of matched kernel pairs.
+        identical: Number of identical kernel pairs.
+        similar: Number of similar kernel pairs.
+        different: Number of different kernel pairs.
+        only_a: Number of kernels only in trace A.
+        only_b: Number of kernels only in trace B.
+        extra_compilations_a: Unpaired autotuning compilations in trace A.
+        extra_compilations_b: Unpaired autotuning compilations in trace B.
+        highlights: List of key differences as human-readable strings.
+        match_stats: Count of matches per strategy. Format: {method_value: count}.
+        tensor_divergent_kernels: Kernel names with divergent tensor values.
+    """
+
+    status: str = "identical"
+    total_matched: int = 0
+    identical: int = 0
+    similar: int = 0
+    different: int = 0
+    only_a: int = 0
+    only_b: int = 0
+    extra_compilations_a: int = 0
+    extra_compilations_b: int = 0
+    highlights: list[str] = field(default_factory=list)
+    match_stats: dict[str, int] = field(default_factory=dict)
+    tensor_divergent_kernels: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TraceDiffResult:
+    """Complete diff result between two trace files.
+
+    Attributes:
+        diff_id: Unique identifier for this trace diff.
+        trace_a: Statistics for trace A.
+        trace_b: Statistics for trace B.
+        matched_kernels: List of matched kernel pair results.
+        only_in_a: Kernel names only present in trace A (truly absent).
+        only_in_b: Kernel names only present in trace B (truly absent).
+        extra_compilations_a: Unpaired autotuning compilations in trace A.
+        extra_compilations_b: Unpaired autotuning compilations in trace B.
+        summary: Overall trace diff summary.
+    """
+
+    diff_id: str = ""
+    trace_a: TraceStats = field(default_factory=TraceStats)
+    trace_b: TraceStats = field(default_factory=TraceStats)
+    matched_kernels: list[KernelMatchResult] = field(default_factory=list)
+    only_in_a: list[str] = field(default_factory=list)
+    only_in_b: list[str] = field(default_factory=list)
+    extra_compilations_a: int = 0
+    extra_compilations_b: int = 0
+    summary: TraceDiffSummary = field(default_factory=TraceDiffSummary)
