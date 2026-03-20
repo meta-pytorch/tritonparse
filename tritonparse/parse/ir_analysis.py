@@ -481,6 +481,9 @@ def find_procedures_with_patterns(
         result = run_filecheck(ir_content, config)
         result_dict = asdict(result)
         result_dict["detection_method"] = "filecheck"
+        # Include message from config if available
+        if cfg.get("message"):
+            result_dict["message"] = cfg["message"]
         if tile_info:
             result_dict.update(tile_info)
         results[cfg["name"]] = result_dict

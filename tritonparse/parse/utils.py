@@ -17,6 +17,7 @@ from .common import (
     save_logs,
 )
 from .source_type import Source, SourceType
+from .trace_processor import load_procedure_checks_from_file
 
 
 def _validate_rank(value: str) -> int:
@@ -85,6 +86,16 @@ def _add_parse_args(parser: argparse.ArgumentParser) -> None:
             "Used to recover kernel compilation attribution in multi-process scenarios. "
             "If not specified, auto-discovers torch trace files alongside tritonparse logs."
         ),
+    )
+    parser.add_argument(
+        "--procedure-checks",
+        help=(
+            "Path to a JSON file containing custom procedure check configurations "
+            "for FileCheck-based pattern detection. If not specified, uses built-in "
+            "default patterns (BlockPingpong_Small, BlockPingpong_Medium, BlockPingpong_Large)."
+        ),
+        type=str,
+        dest="procedure_checks_file",
     )
     if is_fbcode():
         from tritonparse.fb.utils import append_parser
@@ -175,6 +186,7 @@ def unified_parse(
     split_inductor_compilations: bool = True,
     skip_logger: bool = False,
     torch_trace_dir: Optional[str] = None,
+    procedure_checks_file: Optional[str] = None,
     **kwargs,
 ):
     """
@@ -189,12 +201,23 @@ def unified_parse(
         verbose: Whether to enable verbose logging
         skip_logger: Whether to skip usage logging (default: False).
         torch_trace_dir: Path to directory containing inductor torch trace logs.
+        procedure_checks_file: Path to a JSON file containing custom procedure check
+            configurations. If not specified, uses built-in default patterns.
     """
     # Log usage for API invocations
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
 
         usage_report_logger()
+
+    # Load procedure checks from file if specified
+    procedure_checks = None
+    if procedure_checks_file:
+        procedure_checks = load_procedure_checks_from_file(procedure_checks_file)
+        if verbose:
+            print(
+                f"Loaded {len(procedure_checks)} procedure checks from {procedure_checks_file}"
+            )
 
     # Choose the appropriate parse function
     if is_fbcode():
@@ -212,6 +235,7 @@ def unified_parse(
         split_inductor_compilations=split_inductor_compilations,
         skip_logger=skip_logger,
         torch_trace_dir=torch_trace_dir,
+        procedure_checks=procedure_checks,
         **kwargs,
     )
     return output

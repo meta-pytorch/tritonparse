@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ProcessedKernel, ProcedureCheckResult } from "../utils/dataLoader";
+import { ProcessedKernel, ProcedureCheckResult, DisplayAttribute } from "../utils/dataLoader";
 
 interface IRAnalysisProps {
   kernels: ProcessedKernel[];
@@ -14,6 +14,31 @@ interface LoopSchedule {
   loop_body?: string[];
   epilogue?: string[];
 }
+
+// Default display attributes configuration for backward compatibility
+const DEFAULT_PARAMETER_ATTRS: DisplayAttribute[] = [
+  { key: "num_warps", label: "Warps", type: "number", group: "parameters" },
+  { key: "num_stages", label: "Stages", type: "number", group: "parameters" },
+  { key: "num_pp_clusters", label: "PP Clusters", type: "number", group: "parameters" },
+  { key: "cond_barrier_count", label: "Cond Barriers", type: "number", group: "counters" },
+  { key: "setprio_count", label: "SetPrio Ops", type: "number", group: "counters" },
+  { key: "dot_count", label: "Dot Operations", type: "number", group: "counters" },
+];
+
+const DEFAULT_TILE_ATTRS: DisplayAttribute[] = [
+  { key: "tile_m", label: "Tile M", type: "number", group: "tile_info" },
+  { key: "tile_n", label: "Tile N", type: "number", group: "tile_info" },
+  { key: "tile_k", label: "Tile K", type: "number", group: "tile_info" },
+  { key: "tile_size_bits", label: "Tile Size (bits)", type: "number", group: "tile_info" },
+  { key: "input_dtype", label: "Input Type", type: "string", group: "tile_info" },
+  { key: "output_dtype", label: "Output Type", type: "string", group: "tile_info" },
+  { key: "mfma_m", label: "MFMA M", type: "number", group: "tile_info" },
+  { key: "mfma_n", label: "MFMA N", type: "number", group: "tile_info" },
+  { key: "mfma_k", label: "MFMA K", type: "number", group: "tile_info" },
+];
+
+// Export default attributes for use in dynamic rendering
+export { DEFAULT_PARAMETER_ATTRS, DEFAULT_TILE_ATTRS };
 
 const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   const [expandedPatterns, setExpandedPatterns] = useState<Record<string, boolean>>({});
@@ -62,7 +87,10 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   };
 
   // Helper function to get not-detected message for each procedure type
-  const getNotDetectedMessage = (name: string): string => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const getNotDetectedMessage = (name: string, _checkResult: ProcedureCheckResult): string => {
+    // If the result has a custom message for not-detected state, use it
+    // Otherwise, fall back to hardcoded messages for backward compatibility
     if (name === "BlockPingpong_Small") {
       return `BlockPingpong Small (1 PP Cluster) - NOT DETECTED
 
@@ -486,7 +514,7 @@ Check the specific conditions required for this procedure.`;
                               {isMessageExpanded && (
                                 <div className="mt-2 bg-gray-50 p-4 rounded-md border border-gray-200">
                                   <pre className="text-xs text-gray-600 whitespace-pre-wrap font-sans leading-relaxed">
-                                    {getNotDetectedMessage(name)}
+                                    {getNotDetectedMessage(name, checkResult)}
                                   </pre>
                                 </div>
                               )}

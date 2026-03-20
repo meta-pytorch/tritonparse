@@ -372,6 +372,7 @@ def parse_logs(
     tritonparse_url_prefix: str = "",
     split_inductor_compilations: bool = True,
     torch_trace_dir: Optional[str] = None,
+    procedure_checks: list = None,
 ) -> Tuple[str, dict]:
     """
     Parse logs.
@@ -388,6 +389,8 @@ def parse_logs(
             logs. When provided, kernel compilation attribution will use these logs to
             recover frame_id/compile_id for kernels compiled in multi-process scenarios.
             If None, auto-discovers torch trace files in the same directory as tritonparse logs.
+        procedure_checks: List of procedure check configurations for FileCheck-based
+            pattern detection. If None, uses default patterns.
     Returns:
         Tuple of (parsed log directory, file mapping)
     """
@@ -473,6 +476,7 @@ def parse_logs(
                 output_dir,
                 split_inductor_compilations,
                 kernel_compile_mapping=kernel_compile_mapping,
+                procedure_checks=procedure_checks,
             )
             # Collect generated files after parsing and gzip them immediately
             if os.path.exists(output_dir):

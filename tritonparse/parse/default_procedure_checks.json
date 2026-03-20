@@ -1,0 +1,235 @@
+{
+  "version": "1.0",
+  "procedures": [
+    {
+      "name": "BlockPingpong_Small",
+      "heading": "BlockPingpong_Small - 1 PP cluster with setprio interleaving (no cond_barrier)",
+      "description": "Detects BlockPingpong scheduling with 1 PP cluster (numWarps=4)",
+      "message": "BlockPingpong Small (1 PP Cluster) Detected\n\nCRITERIA:\n  • numWarps = 4\n  • numStages > 1\n  • No amdgpu.cond_barrier (uses setprio interleaving only)\n  • Single tt.dot operation per loop iteration\n  • 262,144 ≤ tileSize ≤ 16,777,216 bits\n",
+      "pattern_checks": "\nCHECK-NOT: amdgpu.cond_barrier\nCHECK: ttg.local_load\nCHECK: rocdl.s.setprio 1\nCHECK: tt.load\nCHECK: rocdl.sched.barrier\nCHECK: ttg.local_load\nCHECK: rocdl.s.setprio 0\nCHECK: tt.load\nCHECK: rocdl.sched.barrier\nCHECK: rocdl.s.setprio 1\nCHECK: tt.dot\nCHECK: rocdl.s.setprio 0\n",
+      "display_attributes": [
+        {
+          "key": "num_warps",
+          "label": "Warps",
+          "type": "number",
+          "source": "module_attrs",
+          "group": "parameters"
+        },
+        {
+          "key": "num_stages",
+          "label": "Stages",
+          "type": "number",
+          "source": "module_attrs",
+          "group": "parameters"
+        },
+        {
+          "key": "num_pp_clusters",
+          "label": "PP Clusters",
+          "type": "number",
+          "source": "computed",
+          "group": "parameters"
+        },
+        {
+          "key": "setprio_count",
+          "label": "SetPrio Ops",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "dot_count",
+          "label": "Dot Operations",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "tile_m",
+          "label": "Tile M",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_n",
+          "label": "Tile N",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_k",
+          "label": "Tile K",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_size_bits",
+          "label": "Tile Size (bits)",
+          "type": "number",
+          "source": "computed",
+          "group": "tile_info"
+        }
+      ]
+    },
+    {
+      "name": "BlockPingpong_Medium",
+      "heading": "BlockPingpong_Medium - 2 PP clusters with cond_barrier synchronization",
+      "description": "Detects BlockPingpong scheduling with 2 PP clusters (numWarps=8)",
+      "message": "BlockPingpong Medium (2 PP Clusters) Detected\n\nCRITERIA:\n  • numWarps = 8\n  • numStages = 2\n  • Uses amdgpu.cond_barrier for inter-cluster synchronization\n  • Two tt.dot operations per loop iteration\n  • tileSize == 33,554,432 bits (medium tile exactly)\n",
+      "pattern_checks": "\nCHECK: gpu.barrier\nCHECK: amdgpu.cond_barrier\nCHECK: scf.for\nCHECK: = ttg.local_load\nCHECK: = ttg.local_load\nCHECK: rocdl.sched.barrier 0\nCHECK: tt.load\nCHECK: rocdl.s.setprio 1\nCHECK: = tt.dot\nCHECK: rocdl.s.setprio 0\nCHECK: gpu.barrier\nCHECK: rocdl.s.setprio 1\nCHECK: = tt.dot\nCHECK: rocdl.s.setprio 0\nCHECK: gpu.barrier\nCHECK: scf.yield\nCHECK: amdgpu.cond_barrier\n",
+      "display_attributes": [
+        {
+          "key": "num_warps",
+          "label": "Warps",
+          "type": "number",
+          "source": "module_attrs",
+          "group": "parameters"
+        },
+        {
+          "key": "num_stages",
+          "label": "Stages",
+          "type": "number",
+          "source": "module_attrs",
+          "group": "parameters"
+        },
+        {
+          "key": "num_pp_clusters",
+          "label": "PP Clusters",
+          "type": "number",
+          "source": "computed",
+          "group": "parameters"
+        },
+        {
+          "key": "cond_barrier_count",
+          "label": "Cond Barriers",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "setprio_count",
+          "label": "SetPrio Ops",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "dot_count",
+          "label": "Dot Operations",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "tile_m",
+          "label": "Tile M",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_n",
+          "label": "Tile N",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_k",
+          "label": "Tile K",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_size_bits",
+          "label": "Tile Size (bits)",
+          "type": "number",
+          "source": "computed",
+          "group": "tile_info"
+        }
+      ]
+    },
+    {
+      "name": "BlockPingpong_Large",
+      "heading": "BlockPingpong_Large - 4 PP clusters with cond_barrier synchronization",
+      "description": "Detects BlockPingpong scheduling with 4 PP clusters (numWarps=8)",
+      "message": "BlockPingpong Large (4 PP Clusters) Detected\n\nCRITERIA:\n  • numWarps = 8\n  • numStages = 2\n  • Uses amdgpu.cond_barrier for inter-cluster synchronization\n  • Four tt.dot operations per loop iteration\n  • tileSize ≥ 67,108,864 bits\n",
+      "pattern_checks": "\nCHECK: gpu.barrier\nCHECK: amdgpu.cond_barrier\nCHECK: scf.for\nCHECK: tt.load\nCHECK: = ttg.local_load\nCHECK: rocdl.s.setprio 1\nCHECK: = tt.dot\nCHECK: rocdl.s.setprio 0\nCHECK: gpu.barrier\nCHECK: rocdl.s.setprio 1\nCHECK: = tt.dot\nCHECK: rocdl.s.setprio 0\nCHECK: gpu.barrier\nCHECK: rocdl.s.setprio 1\nCHECK: = tt.dot\nCHECK: rocdl.s.setprio 0\nCHECK: gpu.barrier\nCHECK: rocdl.s.setprio 1\nCHECK: tt.dot\nCHECK: rocdl.s.setprio 0\nCHECK: gpu.barrier\nCHECK: scf.yield\nCHECK: amdgpu.cond_barrier\n",
+      "display_attributes": [
+        {
+          "key": "num_warps",
+          "label": "Warps",
+          "type": "number",
+          "source": "module_attrs",
+          "group": "parameters"
+        },
+        {
+          "key": "num_stages",
+          "label": "Stages",
+          "type": "number",
+          "source": "module_attrs",
+          "group": "parameters"
+        },
+        {
+          "key": "num_pp_clusters",
+          "label": "PP Clusters",
+          "type": "number",
+          "source": "computed",
+          "group": "parameters"
+        },
+        {
+          "key": "cond_barrier_count",
+          "label": "Cond Barriers",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "setprio_count",
+          "label": "SetPrio Ops",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "dot_count",
+          "label": "Dot Operations",
+          "type": "number",
+          "source": "ir_content",
+          "group": "counters"
+        },
+        {
+          "key": "tile_m",
+          "label": "Tile M",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_n",
+          "label": "Tile N",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_k",
+          "label": "Tile K",
+          "type": "number",
+          "source": "ir_content",
+          "group": "tile_info"
+        },
+        {
+          "key": "tile_size_bits",
+          "label": "Tile Size (bits)",
+          "type": "number",
+          "source": "computed",
+          "group": "tile_info"
+        }
+      ]
+    }
+  ]
+}

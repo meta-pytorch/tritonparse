@@ -202,15 +202,18 @@ export interface ProcedureCheckResult {
     check_pattern: string;
     match_details: string[];
     error_message: string | null;
-    // Additional metadata for BlockPingpong detection
+    // Detailed message with criteria and performance implications
     message?: string;
+    // Module attributes from IR
+    module_attributes?: string | null;
+    // Dynamic attributes - can contain any key-value pairs based on display_attributes config
+    // Known common attributes for backward compatibility:
     num_warps?: number | null;
     num_stages?: number | null;
     num_pp_clusters?: number | null;
     cond_barrier_count?: number | null;
     setprio_count?: number | null;
     dot_count?: number | null;
-    module_attributes?: string | null;
     // Tile size related attributes
     tile_m?: number | null;
     tile_n?: number | null;
@@ -221,6 +224,22 @@ export interface ProcedureCheckResult {
     mfma_m?: number | null;
     mfma_n?: number | null;
     mfma_k?: number | null;
+    // Display attributes configuration from JSON (optional)
+    display_attributes?: DisplayAttribute[];
+    // Allow additional dynamic attributes
+    [key: string]: unknown;
+}
+
+/**
+ * Display attribute configuration for custom procedure check attributes
+ */
+export interface DisplayAttribute {
+    key: string;
+    label: string;
+    type?: 'number' | 'string' | 'boolean';
+    source?: 'module_attrs' | 'ir_content' | 'computed';
+    pattern?: string;
+    group?: 'parameters' | 'tile_info' | 'counters';
 }
 
 /**

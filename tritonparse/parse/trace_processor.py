@@ -3,7 +3,7 @@
 import json
 import os
 from collections import defaultdict
-from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse.tools.compression import open_compressed_file
@@ -29,151 +29,135 @@ logger = get_logger("SourceMapping")
 
 
 # =============================================================================
-# DEFAULT PROCEDURE CHECKS
+# PROCEDURE CHECKS - Loaded from JSON configuration file
 # =============================================================================
-@dataclass
-class ProcedureCheckDefinition:
-    """Definition of a procedure check with heading, patterns, and messages."""
-
-    heading: str
-    pattern_checks: str
-    message: str = ""
 
 
-# BlockPingpong Small: 1 PP cluster (numWarps=4)
-PINGPONG_SMALL = ProcedureCheckDefinition(
-    heading="BlockPingpong_Small - 1 PP cluster with setprio interleaving (no cond_barrier)",
-    message="""BlockPingpong Small (1 PP Cluster) Detected
-
-CRITERIA:
-  • numWarps = 4
-  • numStages > 1
-  • No amdgpu.cond_barrier (uses setprio interleaving only)
-  • Single tt.dot operation per loop iteration
-  • 262,144 ≤ tileSize ≤ 16,777,216 bits
-""",
-    pattern_checks="""
-CHECK-NOT: amdgpu.cond_barrier
-CHECK: ttg.local_load
-CHECK: rocdl.s.setprio 1
-CHECK: tt.load
-CHECK: rocdl.sched.barrier
-CHECK: ttg.local_load
-CHECK: rocdl.s.setprio 0
-CHECK: tt.load
-CHECK: rocdl.sched.barrier
-CHECK: rocdl.s.setprio 1
-CHECK: tt.dot
-CHECK: rocdl.s.setprio 0
-""",
-)
-
-# BlockPingpong Medium: 2 PP clusters (numWarps=8)
-PINGPONG_MEDIUM = ProcedureCheckDefinition(
-    heading="BlockPingpong_Medium - 2 PP clusters with cond_barrier synchronization",
-    message="""BlockPingpong Medium (2 PP Clusters) Detected
-
-CRITERIA:
-  • numWarps = 8
-  • numStages = 2
-  • Uses amdgpu.cond_barrier for inter-cluster synchronization
-  • Two tt.dot operations per loop iteration
-  • tileSize == 33,554,432 bits (medium tile exactly)
-""",
-    pattern_checks="""
-CHECK: gpu.barrier
-CHECK: amdgpu.cond_barrier
-CHECK: scf.for
-CHECK: = ttg.local_load
-CHECK: = ttg.local_load
-CHECK: rocdl.sched.barrier 0
-CHECK: tt.load
-CHECK: rocdl.s.setprio 1
-CHECK: = tt.dot
-CHECK: rocdl.s.setprio 0
-CHECK: gpu.barrier
-CHECK: rocdl.s.setprio 1
-CHECK: = tt.dot
-CHECK: rocdl.s.setprio 0
-CHECK: gpu.barrier
-CHECK: scf.yield
-CHECK: amdgpu.cond_barrier
-""",
-)
-
-# BlockPingpong Large: 4 PP clusters (numWarps=8)
-PINGPONG_LARGE = ProcedureCheckDefinition(
-    heading="BlockPingpong_Large - 4 PP clusters with cond_barrier synchronization",
-    message="""BlockPingpong Large (4 PP Clusters) Detected
-
-CRITERIA:
-  • numWarps = 8
-  • numStages = 2
-  • Uses amdgpu.cond_barrier for inter-cluster synchronization
-  • Four tt.dot operations per loop iteration
-  • tileSize ≥ 67,108,864 bits
-""",
-    pattern_checks="""
-CHECK: gpu.barrier
-CHECK: amdgpu.cond_barrier
-CHECK: scf.for
-CHECK: tt.load
-CHECK: = ttg.local_load
-CHECK: rocdl.s.setprio 1
-CHECK: = tt.dot
-CHECK: rocdl.s.setprio 0
-CHECK: gpu.barrier
-CHECK: rocdl.s.setprio 1
-CHECK: = tt.dot
-CHECK: rocdl.s.setprio 0
-CHECK: gpu.barrier
-CHECK: rocdl.s.setprio 1
-CHECK: = tt.dot
-CHECK: rocdl.s.setprio 0
-CHECK: gpu.barrier
-CHECK: rocdl.s.setprio 1
-CHECK: tt.dot
-CHECK: rocdl.s.setprio 0
-CHECK: gpu.barrier
-CHECK: scf.yield
-CHECK: amdgpu.cond_barrier
-""",
-)
+def get_default_procedure_checks_path() -> str:
+    """Get the path to the default procedure checks JSON file."""
+    return str(Path(__file__).parent / "default_procedure_checks.json")
 
 
-def build_procedure_check_config(
-    definition: ProcedureCheckDefinition,
-) -> Dict[str, Any]:
-    """Convert a ProcedureCheckDefinition to the procedure check config format."""
-    name = definition.heading.split(" - ")[0].strip()
-    return {
-        "name": name,
-        "heading": definition.heading,
-        "patterns": definition.pattern_checks,  # Pass raw pattern string directly
-        "description": definition.heading,
-        "message": definition.message,
+def load_procedure_checks_from_file(file_path: str) -> List[Dict[str, Any]]:
+    """
+    Load procedure check configurations from a JSON file.
+
+    The JSON file should have the following structure:
+    {
+        "version": "1.0",
+        "procedures": [
+            {
+                "name": "ProcedureName",
+                "heading": "Display heading for the procedure",
+                "description": "Brief description",
+                "message": "Detailed message when detected",
+                "pattern_checks": "CHECK: pattern\\nCHECK-NOT: another",
+                "display_attributes": [
+                    {"key": "num_warps", "label": "Warps", "type": "number", ...}
+                ]
+            }
+        ]
     }
 
+    Args:
+        file_path: Path to the JSON configuration file.
 
-# Build the DEFAULT_PROCEDURE_CHECKS list from the definitions
-DEFAULT_PROCEDURE_CHECKS: List[Dict[str, Any]] = [
-    build_procedure_check_config(PINGPONG_SMALL),
-    build_procedure_check_config(PINGPONG_MEDIUM),
-    build_procedure_check_config(PINGPONG_LARGE),
-]
+    Returns:
+        List of procedure check configuration dictionaries.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        json.JSONDecodeError: If the file is not valid JSON.
+        ValueError: If the file structure is invalid.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Procedure checks file not found: {file_path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Validate structure
+    if not isinstance(data, dict):
+        raise ValueError("Procedure checks file must contain a JSON object")
+
+    procedures = data.get("procedures", [])
+    if not isinstance(procedures, list):
+        raise ValueError("'procedures' must be an array")
+
+    result = []
+    for i, proc in enumerate(procedures):
+        if not isinstance(proc, dict):
+            raise ValueError(f"Procedure at index {i} must be an object")
+
+        name = proc.get("name")
+        if not name:
+            raise ValueError(f"Procedure at index {i} is missing 'name' field")
+
+        pattern_checks = proc.get("pattern_checks")
+        if not pattern_checks:
+            raise ValueError(f"Procedure '{name}' is missing 'pattern_checks' field")
+
+        config = {
+            "name": name,
+            "heading": proc.get("heading", name),
+            "patterns": pattern_checks,
+            "description": proc.get("description", ""),
+            "message": proc.get("message", ""),
+        }
+
+        # Include display_attributes if provided
+        display_attrs = proc.get("display_attributes")
+        if display_attrs and isinstance(display_attrs, list):
+            config["display_attributes"] = display_attrs
+
+        result.append(config)
+
+    logger.info(f"Loaded {len(result)} procedure checks from {file_path}")
+    return result
+
+
+def get_default_procedure_checks() -> List[Dict[str, Any]]:
+    """
+    Load the default procedure checks from the bundled JSON file.
+
+    Returns:
+        List of procedure check configuration dictionaries.
+    """
+    default_path = get_default_procedure_checks_path()
+    try:
+        return load_procedure_checks_from_file(default_path)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        logger.warning(
+            f"Failed to load default procedure checks from {default_path}: {e}"
+        )
+        return []
+
+
+# Lazy-loaded default procedure checks
+_DEFAULT_PROCEDURE_CHECKS: List[Dict[str, Any]] | None = None
+
+
+def get_procedure_checks() -> List[Dict[str, Any]]:
+    """
+    Get the default procedure checks, loading from JSON file on first call.
+
+    Returns:
+        List of procedure check configuration dictionaries.
+    """
+    global _DEFAULT_PROCEDURE_CHECKS
+    if _DEFAULT_PROCEDURE_CHECKS is None:
+        _DEFAULT_PROCEDURE_CHECKS = get_default_procedure_checks()
+    return _DEFAULT_PROCEDURE_CHECKS
 
 
 def get_message_for_pattern(pattern_name: str) -> str:
-    """Get the detailed message for a pingpong pattern category."""
-    name_lower = pattern_name.lower()
-    if "pingpong_large" in name_lower or "large" in name_lower:
-        return PINGPONG_LARGE.message
-    elif "pingpong_medium" in name_lower or "medium" in name_lower:
-        return PINGPONG_MEDIUM.message
-    elif "pingpong_small" in name_lower or "small" in name_lower:
-        return PINGPONG_SMALL.message
-    else:
-        return ""
+    """Get the detailed message for a procedure pattern by name."""
+    procedure_checks = get_procedure_checks()
+    for proc in procedure_checks:
+        if proc.get("name", "").lower() == pattern_name.lower():
+            return proc.get("message", "")
+    return ""
 
 
 def generate_source_mappings(
@@ -601,7 +585,7 @@ def parse_single_file(
     """
     # Use default procedure checks if not specified
     if procedure_checks is None:
-        procedure_checks = DEFAULT_PROCEDURE_CHECKS
+        procedure_checks = get_procedure_checks()
 
     # =====================================================
     # Pass 1: Pre-scan to identify kernels needing fake compilations
