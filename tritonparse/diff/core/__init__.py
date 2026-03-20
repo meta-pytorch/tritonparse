@@ -36,6 +36,7 @@ from tritonparse.diff.core.ir_stats_analyzer import (
     IRStatsAnalyzer,
     OP_PATTERNS,
 )
+from tritonparse.diff.core.kernel_matcher import KernelMatcher
 from tritonparse.diff.core.tensor_value_analyzer import (
     analyze_tensor_values,
     TensorValueAnalyzer,
@@ -59,6 +60,8 @@ __all__ = [
     "TraceDiffResult",
     "TraceDiffSummary",
     "TraceStats",
+    # Kernel Matcher
+    "KernelMatcher",
     # Event matcher
     "find_launches_for_compilation",
     "group_compilations_by_kernel",
