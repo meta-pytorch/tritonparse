@@ -175,6 +175,7 @@ def main():
             tensor_values=args.tensor_values,
             atol=args.atol,
             rtol=args.rtol,
+            trace=args.trace,
         )
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)

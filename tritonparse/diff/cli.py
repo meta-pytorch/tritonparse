@@ -98,6 +98,11 @@ def _add_diff_args(parser: argparse.ArgumentParser) -> None:
         default=1e-3,
         help="Relative tolerance for tensor comparison (default: 1e-3)",
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Compare all kernels across two trace files. Requires two input files.",
+    )
 
 
 def _parse_event_indices(events_str: str) -> tuple[int, int]:
@@ -142,6 +147,61 @@ def _generate_output_path(input_path: str) -> str:
     return f"{base}_diff{ext}"
 
 
+def trace_diff_command(
+    input_paths: list[str],
+    output: Optional[str] = None,
+    quiet: bool = False,
+    tensor_values: bool = False,
+    atol: float = 1e-5,
+    rtol: float = 1e-3,
+) -> None:
+    """Run trace-level diff comparing all kernels across two trace files.
+
+    Args:
+        input_paths: Exactly 2 input ndjson file paths.
+        output: Optional output file path.
+        quiet: If True, suppress CLI output.
+        tensor_values: If True, compare tensor values.
+        atol: Absolute tolerance for tensor comparison.
+        rtol: Relative tolerance for tensor comparison.
+    """
+    from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+    from tritonparse.diff.output.event_writer import ConsolidatedDiffWriter
+    from tritonparse.diff.output.trace_summary_formatter import format_trace_summary
+
+    if len(input_paths) != 2:
+        raise ValueError("--trace requires exactly 2 input files")
+
+    # Load events
+    events_a = load_events(input_paths[0])
+    events_b = load_events(input_paths[1])
+
+    # Run trace diff
+    engine = TraceDiffEngine(
+        events_a,
+        events_b,
+        trace_path_a=input_paths[0],
+        trace_path_b=input_paths[1],
+        tensor_values=tensor_values,
+        atol=atol,
+        rtol=rtol,
+    )
+    result = engine.run()
+
+    # Print summary
+    if not quiet:
+        print(format_trace_summary(result))
+        print()
+
+    # Write output
+    output_path = output or _generate_output_path(input_paths[0])
+    writer = ConsolidatedDiffWriter()
+    writer.add_trace_diff(result, events_a, events_b)
+    writer.write(output_path)
+    if not quiet:
+        print(f"Output written to: {output_path}")
+
+
 def diff_command(
     input_paths: list[str],
     events: str = "0,1",
@@ -154,6 +214,7 @@ def diff_command(
     tensor_values: bool = False,
     atol: float = 1e-5,
     rtol: float = 1e-3,
+    trace: bool = False,
 ) -> None:
     """
     Main function for the diff command.
@@ -170,11 +231,25 @@ def diff_command(
         tensor_values: If True, compare tensor values between launch events
         atol: Absolute tolerance for tensor comparison
         rtol: Relative tolerance for tensor comparison
+        trace: If True, compare all kernels across two trace files
     """
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
 
         usage_report_logger()
+
+    # Handle --trace mode
+    if trace:
+        if in_place:
+            raise ValueError("--trace and --in-place cannot be used together")
+        return trace_diff_command(
+            input_paths=input_paths,
+            output=output,
+            quiet=quiet,
+            tensor_values=tensor_values,
+            atol=atol,
+            rtol=rtol,
+        )
 
     # Validate input paths
     if len(input_paths) > 2:

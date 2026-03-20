@@ -1911,5 +1911,115 @@ class TestTraceDiffEventWriter(unittest.TestCase):
         self.assertEqual(parsed["matched_kernels"][0]["status"], "identical")
 
 
+# --- Trace Diff CLI Tests ---
+
+
+class TestTraceDiffCLI(unittest.TestCase):
+    """Tests for trace diff CLI integration."""
+
+    def setUp(self) -> None:
+        """Create temporary ndjson files for testing."""
+        self.temp_file_a = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".ndjson", delete=False
+        )
+        self.temp_file_a.write(
+            json.dumps(create_compilation_event(kernel_name="k1", kernel_hash="h1"))
+            + "\n"
+        )
+        self.temp_file_a.write(
+            json.dumps(create_compilation_event(kernel_name="k2", kernel_hash="h2"))
+            + "\n"
+        )
+        self.temp_file_a.close()
+
+        self.temp_file_b = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".ndjson", delete=False
+        )
+        self.temp_file_b.write(
+            json.dumps(create_compilation_event(kernel_name="k1", kernel_hash="h1"))
+            + "\n"
+        )
+        self.temp_file_b.write(
+            json.dumps(create_compilation_event(kernel_name="k3", kernel_hash="h3"))
+            + "\n"
+        )
+        self.temp_file_b.close()
+
+        self.temp_path_a = self.temp_file_a.name
+        self.temp_path_b = self.temp_file_b.name
+        self.output_path = self.temp_path_a.replace(".ndjson", "_diff.ndjson")
+
+    def tearDown(self) -> None:
+        """Clean up temporary files."""
+        for path in [self.temp_path_a, self.temp_path_b, self.output_path]:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_trace_flag_two_files(self) -> None:
+        """--trace with two temp ndjson files produces output."""
+        output = StringIO()
+        with patch("sys.stdout", output):
+            diff_command(
+                input_paths=[self.temp_path_a, self.temp_path_b],
+                trace=True,
+                skip_logger=True,
+            )
+
+        output_text = output.getvalue()
+        self.assertIn("Trace Diff Summary", output_text)
+        self.assertTrue(os.path.exists(self.output_path))
+
+    def test_trace_flag_one_file_error(self) -> None:
+        """--trace with one file raises error."""
+        with self.assertRaises(ValueError) as ctx:
+            diff_command(
+                input_paths=[self.temp_path_a],
+                trace=True,
+                skip_logger=True,
+            )
+        self.assertIn("exactly 2 input files", str(ctx.exception))
+
+    def test_trace_in_place_error(self) -> None:
+        """--trace --in-place raises error."""
+        with self.assertRaises(ValueError) as ctx:
+            diff_command(
+                input_paths=[self.temp_path_a, self.temp_path_b],
+                trace=True,
+                in_place=True,
+                skip_logger=True,
+            )
+        self.assertIn("cannot be used together", str(ctx.exception))
+
+    def test_trace_output_file(self) -> None:
+        """Output ndjson contains trace_diff event type."""
+        with patch("sys.stdout", new_callable=StringIO):
+            diff_command(
+                input_paths=[self.temp_path_a, self.temp_path_b],
+                trace=True,
+                skip_logger=True,
+            )
+
+        self.assertTrue(os.path.exists(self.output_path))
+        with open(self.output_path) as f:
+            lines = f.readlines()
+
+        # Should have compilation events + trace_diff event
+        event_types = [json.loads(line)["event_type"] for line in lines]
+        self.assertIn("trace_diff", event_types)
+
+    def test_trace_diff_basic(self) -> None:
+        """Trace diff with two files produces summary output."""
+        output = StringIO()
+        with patch("sys.stdout", output):
+            diff_command(
+                input_paths=[self.temp_path_a, self.temp_path_b],
+                trace=True,
+                skip_logger=True,
+            )
+
+        output_text = output.getvalue()
+        self.assertIn("Trace Diff Summary", output_text)
+
+
 if __name__ == "__main__":
     unittest.main()
