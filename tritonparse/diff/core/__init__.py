@@ -41,6 +41,7 @@ from tritonparse.diff.core.tensor_value_analyzer import (
     analyze_tensor_values,
     TensorValueAnalyzer,
 )
+from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
 
 __all__ = [
     # Types
@@ -62,6 +63,8 @@ __all__ = [
     "TraceStats",
     # Kernel Matcher
     "KernelMatcher",
+    # Trace Diff Engine
+    "TraceDiffEngine",
     # Event matcher
     "find_launches_for_compilation",
     "group_compilations_by_kernel",

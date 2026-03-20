@@ -1511,5 +1511,220 @@ class TestKernelMatcher(unittest.TestCase):
         self.assertIn(MatchMethod.SOURCE, methods)
 
 
+# --- TraceDiffEngine Tests ---
+
+
+class TestTraceDiffEngine(unittest.TestCase):
+    """Tests for the TraceDiffEngine orchestrator."""
+
+    def test_identical_traces(self) -> None:
+        """Same events -> all 'identical', matched by hash."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        events = [
+            create_compilation_event(kernel_name="k1", kernel_hash="h1"),
+            create_compilation_event(kernel_name="k2", kernel_hash="h2"),
+        ]
+        engine = TraceDiffEngine(events, list(events), "a.ndjson", "b.ndjson")
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 2)
+        self.assertEqual(len(result.only_in_a), 0)
+        self.assertEqual(len(result.only_in_b), 0)
+        for m in result.matched_kernels:
+            self.assertEqual(m.status, "identical")
+        self.assertEqual(result.summary.status, "identical")
+        self.assertEqual(result.summary.identical, 2)
+
+    def test_different_compilations(self) -> None:
+        """Same kernel names, different hashes -> status 'different'."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        events_a = [
+            create_compilation_event(
+                kernel_name="add_kernel",
+                kernel_hash="hash_a",
+                num_stages=3,
+                num_warps=4,
+            ),
+        ]
+        events_b = [
+            create_compilation_event(
+                kernel_name="add_kernel",
+                kernel_hash="hash_b",
+                num_stages=5,
+                num_warps=8,
+                ttir=LONGER_TTIR,
+            ),
+        ]
+        engine = TraceDiffEngine(events_a, events_b)
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 1)
+        # Different metadata means significant_diff -> "different"
+        self.assertIn(result.matched_kernels[0].status, ["similar", "different"])
+        self.assertIsNotNone(result.matched_kernels[0].compilation_diff)
+
+    def test_only_in_a_and_b(self) -> None:
+        """Non-overlapping kernels populate only_in_a/only_in_b."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        events_a = [
+            create_compilation_event(
+                kernel_name="alpha_compute",
+                kernel_hash="ha",
+                python_source=DEFAULT_PYTHON_SOURCE,
+            ),
+        ]
+        events_b = [
+            create_compilation_event(
+                kernel_name="zeta_transform",
+                kernel_hash="hb",
+                python_source=DIFFERENT_PYTHON_SOURCE_MATMUL,
+            ),
+        ]
+        engine = TraceDiffEngine(events_a, events_b)
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 0)
+        self.assertIn("alpha_compute", result.only_in_a)
+        self.assertIn("zeta_transform", result.only_in_b)
+        self.assertEqual(result.summary.status, "significant_diff")
+
+    def test_mixed_scenario(self) -> None:
+        """Mix of identical + only-in."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        # Use very different names and sources to prevent fuzzy matching
+        only_a_source = """\
+@triton.jit
+def alpha_reduction(input_ptr, output_ptr, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    vals = tl.load(input_ptr + pid * BLOCK + tl.arange(0, BLOCK))
+    result = tl.sum(vals)
+    tl.store(output_ptr + pid, result)
+"""
+        only_b_source = """\
+@triton.jit
+def zeta_scatter(src_ptr, idx_ptr, dst_ptr, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    idx = tl.load(idx_ptr + pid * BLOCK + tl.arange(0, BLOCK))
+    val = tl.load(src_ptr + idx)
+    tl.store(dst_ptr + idx, val)
+"""
+        events_a = [
+            create_compilation_event(kernel_name="shared", kernel_hash="h1"),
+            create_compilation_event(
+                kernel_name="alpha_reduction_kernel",
+                kernel_hash="ha_unique",
+                python_source=only_a_source,
+            ),
+        ]
+        events_b = [
+            create_compilation_event(kernel_name="shared", kernel_hash="h1"),
+            create_compilation_event(
+                kernel_name="zeta_scatter_kernel",
+                kernel_hash="hb_unique",
+                python_source=only_b_source,
+            ),
+        ]
+        engine = TraceDiffEngine(events_a, events_b)
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 1)
+        self.assertEqual(result.matched_kernels[0].status, "identical")
+        self.assertIn("alpha_reduction_kernel", result.only_in_a)
+        self.assertIn("zeta_scatter_kernel", result.only_in_b)
+        self.assertEqual(result.summary.status, "significant_diff")
+
+    def test_launch_count_diff(self) -> None:
+        """Same kernels, different launch counts reflected in result."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        events_a = [
+            create_compilation_event(kernel_name="k1", kernel_hash="h1"),
+            create_launch_event(kernel_hash="h1"),
+            create_launch_event(kernel_hash="h1"),
+            create_launch_event(kernel_hash="h1"),
+        ]
+        events_b = [
+            create_compilation_event(kernel_name="k1", kernel_hash="h1"),
+            create_launch_event(kernel_hash="h1"),
+        ]
+        engine = TraceDiffEngine(events_a, events_b)
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 1)
+        self.assertEqual(result.matched_kernels[0].launch_count_a, 3)
+        self.assertEqual(result.matched_kernels[0].launch_count_b, 1)
+        # Trace stats should reflect launch counts
+        self.assertEqual(result.trace_a.total_launches, 3)
+        self.assertEqual(result.trace_b.total_launches, 1)
+
+    def test_representative_selection(self) -> None:
+        """Multiple compilations with same name — matching picks correct hash."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        # In trace A: kernel "k1" has two compilations with different hashes.
+        # Hash "winner" exists in both traces, so it's matched by hash.
+        # Hash "loser" only exists in A, so it's unmatched.
+        events_a = [
+            create_compilation_event(kernel_name="k1", kernel_hash="loser"),
+            create_compilation_event(kernel_name="k1", kernel_hash="winner"),
+            create_launch_event(kernel_hash="loser"),
+            create_launch_event(kernel_hash="winner"),
+            create_launch_event(kernel_hash="winner"),
+            create_launch_event(kernel_hash="winner"),
+        ]
+        events_b = [
+            create_compilation_event(kernel_name="k1", kernel_hash="winner"),
+            create_launch_event(kernel_hash="winner"),
+        ]
+        engine = TraceDiffEngine(events_a, events_b)
+        result = engine.run()
+
+        # Only one match: the "winner" hash matches by hash
+        self.assertEqual(len(result.matched_kernels), 1)
+        self.assertEqual(result.matched_kernels[0].hash_a, "winner")
+        self.assertEqual(result.matched_kernels[0].hash_b, "winner")
+
+    def test_empty_traces(self) -> None:
+        """No events -> empty result, no crash."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        engine = TraceDiffEngine([], [])
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 0)
+        self.assertEqual(len(result.only_in_a), 0)
+        self.assertEqual(len(result.only_in_b), 0)
+        self.assertEqual(result.summary.status, "identical")
+        self.assertEqual(result.trace_a.total_events, 0)
+        self.assertEqual(result.trace_b.total_events, 0)
+
+    def test_match_stats_populated(self) -> None:
+        """summary.match_stats has correct per-strategy counts."""
+        from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
+
+        events_a = [
+            # Will match by hash
+            create_compilation_event(kernel_name="k1_old", kernel_hash="shared_h"),
+            # Will match by name
+            create_compilation_event(kernel_name="k2", kernel_hash="h_a"),
+        ]
+        events_b = [
+            create_compilation_event(kernel_name="k1_new", kernel_hash="shared_h"),
+            create_compilation_event(kernel_name="k2", kernel_hash="h_b"),
+        ]
+        engine = TraceDiffEngine(events_a, events_b)
+        result = engine.run()
+
+        self.assertEqual(len(result.matched_kernels), 2)
+        self.assertIn("hash", result.summary.match_stats)
+        self.assertIn("name", result.summary.match_stats)
+        self.assertEqual(result.summary.match_stats["hash"], 1)
+        self.assertEqual(result.summary.match_stats["name"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
