@@ -15,18 +15,27 @@ from tritonparse.diff.core.diff_types import (
     DiffSummary,
     IRStats,
     IRStatsDiff,
+    KernelMatchResult,
+    MatchMethod,
     MetadataDiff,
     OperationDiff,
     PythonLineDiff,
     PythonSourceDiff,
     TensorArgDiff,
     TensorValueDiff,
+    TraceDiffResult,
+    TraceDiffSummary,
+    TraceStats,
 )
+from tritonparse.diff.core.kernel_matcher import KernelMatcher
+from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
 from tritonparse.diff.output import (
     append_diff_to_file,
     ConsolidatedDiffWriter,
     create_diff_event,
+    create_trace_diff_event,
     format_summary,
+    format_trace_summary,
     write_consolidated_output,
 )
 
@@ -40,16 +49,26 @@ __all__ = [
     "DiffSummary",
     "IRStats",
     "IRStatsDiff",
+    "KernelMatchResult",
+    "MatchMethod",
     "MetadataDiff",
     "OperationDiff",
     "PythonLineDiff",
     "PythonSourceDiff",
     "TensorArgDiff",
     "TensorValueDiff",
+    "TraceDiffResult",
+    "TraceDiffSummary",
+    "TraceStats",
+    # Engines
+    "KernelMatcher",
+    "TraceDiffEngine",
     # Output functions
     "append_diff_to_file",
     "ConsolidatedDiffWriter",
     "create_diff_event",
+    "create_trace_diff_event",
     "format_summary",
+    "format_trace_summary",
     "write_consolidated_output",
 ]

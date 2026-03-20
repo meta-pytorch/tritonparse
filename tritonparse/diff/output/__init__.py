@@ -14,14 +14,18 @@ from tritonparse.diff.output.event_writer import (
     append_diff_to_file,
     ConsolidatedDiffWriter,
     create_diff_event,
+    create_trace_diff_event,
     write_consolidated_output,
 )
 from tritonparse.diff.output.summary_formatter import format_summary
+from tritonparse.diff.output.trace_summary_formatter import format_trace_summary
 
 __all__ = [
     "append_diff_to_file",
     "ConsolidatedDiffWriter",
     "create_diff_event",
+    "create_trace_diff_event",
     "format_summary",
+    "format_trace_summary",
     "write_consolidated_output",
 ]

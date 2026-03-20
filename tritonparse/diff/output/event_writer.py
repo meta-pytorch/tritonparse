@@ -14,7 +14,11 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from tritonparse.diff.core.diff_types import CompilationDiffResult, PythonLineDiff
+from tritonparse.diff.core.diff_types import (
+    CompilationDiffResult,
+    PythonLineDiff,
+    TraceDiffResult,
+)
 from tritonparse.diff.core.event_matcher import get_kernel_hash
 
 
@@ -80,6 +84,64 @@ def create_diff_event(result: CompilationDiffResult) -> dict[str, Any]:
         "operation_diff": {k: asdict(v) for k, v in result.operation_diff.items()},
         "by_python_line": _convert_by_python_line(result.by_python_line),
         "tensor_value_diff": asdict(result.tensor_value_diff),
+    }
+
+
+def create_trace_diff_event(result: TraceDiffResult) -> dict[str, Any]:
+    """Create a trace_diff event from the trace diff result.
+
+    Serializes the TraceDiffResult into a JSON-serializable dictionary.
+    For each matched kernel, includes the compilation diff without
+    by_python_line to control output size.
+
+    Args:
+        result: The trace diff result from TraceDiffEngine.run().
+
+    Returns:
+        A dictionary representing the trace_diff event for ndjson.
+    """
+    from dataclasses import asdict
+
+    matched_kernels = []
+    for match in result.matched_kernels:
+        kernel_data: dict[str, Any] = {
+            "kernel_name_a": match.kernel_name_a,
+            "kernel_name_b": match.kernel_name_b,
+            "hash_a": match.hash_a,
+            "hash_b": match.hash_b,
+            "event_index_a": match.event_index_a,
+            "event_index_b": match.event_index_b,
+            "match_method": match.match_method.value
+            if hasattr(match.match_method, "value")
+            else str(match.match_method),
+            "match_confidence": match.match_confidence,
+            "status": match.status,
+            "launch_count_a": match.launch_count_a,
+            "launch_count_b": match.launch_count_b,
+            "source_similarity": match.source_similarity,
+            "metadata_changes": match.metadata_changes,
+            "ir_stat_highlights": match.ir_stat_highlights,
+            "tensor_summary": match.tensor_summary,
+        }
+        if match.compilation_diff:
+            # Include compilation diff without by_python_line to save space
+            comp_diff = create_diff_event(match.compilation_diff)
+            comp_diff.pop("by_python_line", None)
+            kernel_data["compilation_diff"] = comp_diff
+
+        matched_kernels.append(kernel_data)
+
+    return {
+        "event_type": "trace_diff",
+        "diff_id": result.diff_id,
+        "trace_a": asdict(result.trace_a),
+        "trace_b": asdict(result.trace_b),
+        "matched_kernels": matched_kernels,
+        "only_in_a": result.only_in_a,
+        "only_in_b": result.only_in_b,
+        "extra_compilations_a": result.extra_compilations_a,
+        "extra_compilations_b": result.extra_compilations_b,
+        "summary": asdict(result.summary),
     }
 
 
@@ -157,6 +219,32 @@ class ConsolidatedDiffWriter:
         self.add_event(comp_a)
         self.add_event(comp_b)
         self._diffs.append(create_diff_event(result))
+
+    def add_trace_diff(
+        self,
+        result: TraceDiffResult,
+        events_a: list[dict[str, Any]],
+        events_b: list[dict[str, Any]],
+    ) -> None:
+        """Add a trace diff result and its associated compilation events.
+
+        Adds all unique compilation events from both traces, then adds
+        the trace_diff event.
+
+        Args:
+            result: The trace diff result from TraceDiffEngine.run().
+            events_a: All events from trace A.
+            events_b: All events from trace B.
+        """
+        # Add all unique compilation events
+        for event in events_a:
+            if event.get("event_type") == "compilation":
+                self.add_event(event)
+        for event in events_b:
+            if event.get("event_type") == "compilation":
+                self.add_event(event)
+
+        self._diffs.append(create_trace_diff_event(result))
 
     def add_diff_event(self, diff_event: dict[str, Any]) -> None:
         """Add a pre-created diff event.
