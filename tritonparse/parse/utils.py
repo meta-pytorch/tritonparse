@@ -113,6 +113,7 @@ def oss_run(
     split_inductor_compilations: bool = True,
     skip_logger: bool = True,
     torch_trace_dir: Optional[str] = None,
+    procedure_checks: list = None,
 ):
     """
     Main function for tritonparse. It is for OSS only.
@@ -126,6 +127,8 @@ def oss_run(
         verbose: Verbose logging
         skip_logger: Unused in OSS, kept for API compatibility.
         torch_trace_dir: Path to directory containing inductor torch trace logs.
+        procedure_checks: List of procedure check configurations for FileCheck-based
+            pattern detection. If None, uses default patterns.
     """
     source = Source(source, verbose)
     rank_config = RankConfig.from_cli_args(rank, all_ranks, source.type)
@@ -161,6 +164,7 @@ def oss_run(
             verbose,
             split_inductor_compilations=split_inductor_compilations,
             torch_trace_dir=torch_trace_dir,
+            procedure_checks=procedure_checks,
         )
     else:
         parsed_log_dir = source.value
