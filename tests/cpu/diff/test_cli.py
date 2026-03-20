@@ -61,15 +61,14 @@ class TestDiffCLI(unittest.TestCase):
 
     def test_list_compilations(self) -> None:
         """Test --list mode."""
-        output = StringIO()
-        with patch("sys.stdout", output):
+        with self.assertLogs("tritonparse.diff.cli", level="INFO") as cm:
             diff_command(
                 input_paths=[self.temp_path],
                 list_compilations_flag=True,
                 skip_logger=True,
             )
 
-        output_text = output.getvalue()
+        output_text = "\n".join(cm.output)
         self.assertIn("Compilations in", output_text)
         self.assertIn("add_kernel", output_text)
 
@@ -189,15 +188,14 @@ class TestTraceDiffCLI(unittest.TestCase):
 
     def test_trace_flag_two_files(self) -> None:
         """--trace with two temp ndjson files produces output."""
-        output = StringIO()
-        with patch("sys.stdout", output):
+        with self.assertLogs("tritonparse.diff.cli", level="INFO") as cm:
             diff_command(
                 input_paths=[self.temp_path_a, self.temp_path_b],
                 trace=True,
                 skip_logger=True,
             )
 
-        output_text = output.getvalue()
+        output_text = "\n".join(cm.output)
         self.assertIn("Trace Diff Summary", output_text)
         self.assertTrue(os.path.exists(self.output_path))
 
@@ -241,15 +239,14 @@ class TestTraceDiffCLI(unittest.TestCase):
 
     def test_trace_diff_basic(self) -> None:
         """Trace diff with two files produces summary output."""
-        output = StringIO()
-        with patch("sys.stdout", output):
+        with self.assertLogs("tritonparse.diff.cli", level="INFO") as cm:
             diff_command(
                 input_paths=[self.temp_path_a, self.temp_path_b],
                 trace=True,
                 skip_logger=True,
             )
 
-        output_text = output.getvalue()
+        output_text = "\n".join(cm.output)
         self.assertIn("Trace Diff Summary", output_text)
 
 

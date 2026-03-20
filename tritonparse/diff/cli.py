@@ -28,6 +28,9 @@ from tritonparse.diff.output import (
 )
 from tritonparse.info.kernel_query import list_compilations
 from tritonparse.shared_vars import is_fbcode
+from tritonparse.tp_logger import get_logger
+
+logger = get_logger("diff.cli")
 
 
 def _add_diff_args(parser: argparse.ArgumentParser) -> None:
@@ -190,8 +193,7 @@ def trace_diff_command(
 
     # Print summary
     if not quiet:
-        print(format_trace_summary(result))
-        print()
+        logger.info(format_trace_summary(result))
 
     # Write output
     output_path = output or _generate_output_path(input_paths[0])
@@ -199,7 +201,7 @@ def trace_diff_command(
     writer.add_trace_diff(result, events_a, events_b)
     writer.write(output_path)
     if not quiet:
-        print(f"Output written to: {output_path}")
+        logger.info(f"Output written to: {output_path}")
 
 
 def diff_command(
@@ -295,13 +297,13 @@ def diff_command(
     if list_compilations_flag:
         compilations = list_compilations(events_for_listing)
         if not compilations:
-            print(f"No compilation events found in {input_path_a}")
+            logger.info(f"No compilation events found in {input_path_a}")
             return
 
-        print(f"\nCompilations in {input_path_a}:")
+        logger.info(f"\nCompilations in {input_path_a}:")
         if kernel:
-            print(f"(Filtered by kernel: {kernel})")
-        print("-" * 80)
+            logger.info(f"(Filtered by kernel: {kernel})")
+        logger.info("-" * 80)
         any_tensor_data = False
         for comp in compilations:
             stages = comp.num_stages if comp.num_stages is not None else "?"
@@ -312,17 +314,21 @@ def diff_command(
             if comp.tensor_data:
                 tensor_str = f" tensor={comp.tensor_data}"
                 any_tensor_data = True
-            print(
+            logger.info(
                 f"  [{comp.index:2d}] {comp.kernel_name[:30]:30s} "
                 f"hash={comp.kernel_hash} "
                 f"stages={stages} warps={warps} mapped={has_map} "
                 f"{launches_str}{tensor_str}"
             )
-        print("-" * 80)
-        print(f"Total: {len(compilations)} compilation(s)")
-        print("\nUse --events N,M to compare two compilations (e.g., --events 0,1)")
+        logger.info("-" * 80)
+        logger.info(f"Total: {len(compilations)} compilation(s)")
+        logger.info(
+            "\nUse --events N,M to compare two compilations (e.g., --events 0,1)"
+        )
         if any_tensor_data:
-            print("Add --tensor-values to compare tensor data between launch events")
+            logger.info(
+                "Add --tensor-values to compare tensor data between launch events"
+            )
         return
 
     # Parse event indices
@@ -393,8 +399,7 @@ def diff_command(
 
     # Print CLI summary
     if not quiet:
-        print(format_summary(result))
-        print()
+        logger.info(format_summary(result))
 
     # Create diff event
     diff_event = create_diff_event(result)
@@ -403,11 +408,11 @@ def diff_command(
     if in_place:
         append_diff_to_file(input_path_a, diff_event)
         if not quiet:
-            print(f"Appended diff event to: {input_path_a}")
+            logger.info(f"Appended diff event to: {input_path_a}")
     else:
         output_path = output or _generate_output_path(input_path_a)
         writer = ConsolidatedDiffWriter()
         writer.add_diff(result, comp_a, comp_b)
         writer.write(output_path)
         if not quiet:
-            print(f"Output written to: {output_path}")
+            logger.info(f"Output written to: {output_path}")
