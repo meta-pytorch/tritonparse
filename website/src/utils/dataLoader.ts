@@ -181,20 +181,9 @@ export interface CompilationMetadata {
     [key: string]: any; // Allow additional unknown fields from trace
 }
 
-export interface PingpongOccurrence {
-    ttgir_line: number;
-    ttir_line: number | null;
-    python_line: number | null;
-    python_source: string | null;
-}
-
-export interface PingpongSchedulingData {
-    count: number;
-    occurrences: PingpongOccurrence[];
-}
-
 /**
- * Result of a FileCheck-based procedure check
+ * Result of a FileCheck-based procedure check.
+ * Attributes are dynamic and driven by the display_attributes config from JSON.
  */
 export interface ProcedureCheckResult {
     procedure_name: string;
@@ -206,32 +195,17 @@ export interface ProcedureCheckResult {
     message?: string;
     // Module attributes from IR
     module_attributes?: string | null;
-    // Dynamic attributes - can contain any key-value pairs based on display_attributes config
-    // Known common attributes for backward compatibility:
-    num_warps?: number | null;
-    num_stages?: number | null;
-    num_pp_clusters?: number | null;
-    cond_barrier_count?: number | null;
-    setprio_count?: number | null;
-    dot_count?: number | null;
-    // Tile size related attributes
-    tile_m?: number | null;
-    tile_n?: number | null;
-    tile_k?: number | null;
-    tile_size_bits?: number | null;
-    input_dtype?: string | null;
-    output_dtype?: string | null;
-    mfma_m?: number | null;
-    mfma_n?: number | null;
-    mfma_k?: number | null;
-    // Display attributes configuration from JSON (optional)
+    // Dynamic attributes extracted based on display_attributes config
+    attributes?: Record<string, unknown>;
+    // Display attributes configuration from JSON
     display_attributes?: DisplayAttribute[];
     // Allow additional dynamic attributes
     [key: string]: unknown;
 }
 
 /**
- * Display attribute configuration for custom procedure check attributes
+ * Display attribute configuration for procedure check attributes.
+ * Defines what attributes to extract and how to display them.
  */
 export interface DisplayAttribute {
     key: string;
@@ -240,25 +214,6 @@ export interface DisplayAttribute {
     source?: 'module_attrs' | 'ir_content' | 'computed';
     pattern?: string;
     group?: 'parameters' | 'tile_info' | 'counters';
-}
-
-/**
- * Configuration for a procedure check pattern
- */
-export interface ProcedureCheckPattern {
-    type: 'check' | 'check_not' | 'check_same' | 'check_next' | 'check_count' | 'check_dag' | 'check_regex';
-    pattern: string;
-    count?: number;
-    exactly?: boolean;
-}
-
-/**
- * Configuration for a procedure check
- */
-export interface ProcedureCheckConfig {
-    name: string;
-    patterns: ProcedureCheckPattern[];
-    description?: string;
 }
 
 export interface IRAnalysisData {

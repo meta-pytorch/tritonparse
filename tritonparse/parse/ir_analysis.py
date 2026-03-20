@@ -71,23 +71,11 @@ class ProcedureCheckResult:
     match_details: list[str] = field(default_factory=list)
     error_message: str | None = None
     message: str = ""
-    num_warps: int | None = None
-    num_stages: int | None = None
-    num_pp_clusters: int | None = None
-    cond_barrier_count: int | None = None
-    setprio_count: int | None = None
-    dot_count: int | None = None
     module_attributes: str | None = None
-    # Tile size related attributes
-    tile_m: int | None = None
-    tile_n: int | None = None
-    tile_k: int | None = None
-    tile_size_bits: int | None = None
-    input_dtype: str | None = None
-    output_dtype: str | None = None
-    mfma_m: int | None = None
-    mfma_n: int | None = None
-    mfma_k: int | None = None
+    # Dynamic attributes extracted based on display_attributes config from JSON
+    attributes: dict[str, Any] = field(default_factory=dict)
+    # Display attributes configuration from JSON
+    display_attributes: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -105,11 +93,18 @@ class ProcedureCheckConfig:
 def run_filecheck(
     content: str,
     config: ProcedureCheckConfig,
+    display_attributes: list[dict[str, Any]] | None = None,
 ) -> ProcedureCheckResult:
     """
     Run FileCheck patterns on the given content to detect a procedure.
 
     Uses LLVM FileCheck binary directly with the raw pattern string.
+
+    Args:
+        content: IR content to check.
+        config: Procedure check configuration with patterns.
+        display_attributes: List of display attribute configs from JSON.
+            Controls which metadata attributes are extracted from the IR.
     """
     if not content:
         return ProcedureCheckResult(
@@ -117,6 +112,7 @@ def run_filecheck(
             detected=False,
             check_pattern=config.patterns,
             error_message="No content provided",
+            display_attributes=display_attributes or [],
         )
 
     # Build match_details from raw pattern string for UI display
@@ -125,6 +121,28 @@ def run_filecheck(
         line = line.strip()
         if line and line.startswith("CHECK"):
             match_details.append(line)
+
+    def _build_result(
+        detected: bool,
+        check_pattern: str,
+        error_message: str | None = None,
+        message: str = "",
+    ) -> ProcedureCheckResult:
+        """Helper to build a ProcedureCheckResult with metadata extraction."""
+        metadata = extract_ir_metadata(content, display_attributes) if content else {}
+        # Separate module_attributes from dynamic attributes
+        module_attributes = metadata.pop("module_attributes", None)
+        return ProcedureCheckResult(
+            procedure_name=config.name,
+            detected=detected,
+            check_pattern=check_pattern,
+            match_details=match_details,
+            error_message=error_message,
+            message=message,
+            module_attributes=module_attributes,
+            attributes=metadata,
+            display_attributes=display_attributes or [],
+        )
 
     if FILECHECK_AVAILABLE:
         try:
@@ -159,119 +177,34 @@ def run_filecheck(
                 )
 
                 if result.returncode == 0:
-                    metadata = extract_ir_metadata(content)
-                    from .trace_processor import get_message_for_pattern
-
-                    message = get_message_for_pattern(config.name)
-                    return ProcedureCheckResult(
-                        procedure_name=config.name,
+                    return _build_result(
                         detected=True,
                         check_pattern=check_text,
-                        match_details=match_details,
-                        message=message,
-                        num_warps=metadata.get("num_warps"),
-                        num_stages=metadata.get("num_stages"),
-                        num_pp_clusters=metadata.get("num_pp_clusters"),
-                        cond_barrier_count=metadata.get("cond_barrier_count"),
-                        setprio_count=metadata.get("setprio_count"),
-                        dot_count=metadata.get("dot_count"),
-                        module_attributes=metadata.get("module_attributes"),
-                        # Tile size related attributes
-                        tile_m=metadata.get("tile_m"),
-                        tile_n=metadata.get("tile_n"),
-                        tile_k=metadata.get("tile_k"),
-                        tile_size_bits=metadata.get("tile_size_bits"),
-                        input_dtype=metadata.get("input_dtype"),
-                        output_dtype=metadata.get("output_dtype"),
-                        mfma_m=metadata.get("mfma_m"),
-                        mfma_n=metadata.get("mfma_n"),
-                        mfma_k=metadata.get("mfma_k"),
                     )
                 else:
-                    # Extract metadata even when not detected
-                    metadata = extract_ir_metadata(content)
                     error_output = result.stdout + result.stderr
-                    return ProcedureCheckResult(
-                        procedure_name=config.name,
+                    return _build_result(
                         detected=False,
                         check_pattern=check_text,
-                        match_details=match_details,
-                        error_message=f"{error_output[:500]}... [truncated]"
-                        if error_output
-                        else None,
-                        # Include all metadata even when not detected
-                        num_warps=metadata.get("num_warps"),
-                        num_stages=metadata.get("num_stages"),
-                        num_pp_clusters=metadata.get("num_pp_clusters"),
-                        cond_barrier_count=metadata.get("cond_barrier_count"),
-                        setprio_count=metadata.get("setprio_count"),
-                        dot_count=metadata.get("dot_count"),
-                        module_attributes=metadata.get("module_attributes"),
-                        tile_m=metadata.get("tile_m"),
-                        tile_n=metadata.get("tile_n"),
-                        tile_k=metadata.get("tile_k"),
-                        tile_size_bits=metadata.get("tile_size_bits"),
-                        input_dtype=metadata.get("input_dtype"),
-                        output_dtype=metadata.get("output_dtype"),
-                        mfma_m=metadata.get("mfma_m"),
-                        mfma_n=metadata.get("mfma_n"),
-                        mfma_k=metadata.get("mfma_k"),
+                        error_message=(
+                            f"{error_output[:500]}... [truncated]"
+                            if error_output
+                            else None
+                        ),
                     )
 
         except subprocess.TimeoutExpired:
-            # Extract metadata even on timeout
-            metadata = extract_ir_metadata(content) if content else {}
-            return ProcedureCheckResult(
-                procedure_name=config.name,
+            return _build_result(
                 detected=False,
                 check_pattern=config.patterns,
-                match_details=match_details,
                 error_message="FileCheck timed out",
-                # Include all metadata even on timeout
-                num_warps=metadata.get("num_warps"),
-                num_stages=metadata.get("num_stages"),
-                num_pp_clusters=metadata.get("num_pp_clusters"),
-                cond_barrier_count=metadata.get("cond_barrier_count"),
-                setprio_count=metadata.get("setprio_count"),
-                dot_count=metadata.get("dot_count"),
-                module_attributes=metadata.get("module_attributes"),
-                tile_m=metadata.get("tile_m"),
-                tile_n=metadata.get("tile_n"),
-                tile_k=metadata.get("tile_k"),
-                tile_size_bits=metadata.get("tile_size_bits"),
-                input_dtype=metadata.get("input_dtype"),
-                output_dtype=metadata.get("output_dtype"),
-                mfma_m=metadata.get("mfma_m"),
-                mfma_n=metadata.get("mfma_n"),
-                mfma_k=metadata.get("mfma_k"),
             )
         except Exception as e:
             logger.warning(f"FileCheck error for {config.name}: {e}")
-            # Extract metadata even on exception
-            metadata = extract_ir_metadata(content) if content else {}
-            return ProcedureCheckResult(
-                procedure_name=config.name,
+            return _build_result(
                 detected=False,
                 check_pattern=config.patterns,
-                match_details=match_details,
                 error_message=f"FileCheck error: {e}",
-                # Include all metadata even on exception
-                num_warps=metadata.get("num_warps"),
-                num_stages=metadata.get("num_stages"),
-                num_pp_clusters=metadata.get("num_pp_clusters"),
-                cond_barrier_count=metadata.get("cond_barrier_count"),
-                setprio_count=metadata.get("setprio_count"),
-                dot_count=metadata.get("dot_count"),
-                module_attributes=metadata.get("module_attributes"),
-                tile_m=metadata.get("tile_m"),
-                tile_n=metadata.get("tile_n"),
-                tile_k=metadata.get("tile_k"),
-                tile_size_bits=metadata.get("tile_size_bits"),
-                input_dtype=metadata.get("input_dtype"),
-                output_dtype=metadata.get("output_dtype"),
-                mfma_m=metadata.get("mfma_m"),
-                mfma_n=metadata.get("mfma_n"),
-                mfma_k=metadata.get("mfma_k"),
             )
     else:
         return ProcedureCheckResult(
@@ -279,65 +212,156 @@ def run_filecheck(
             detected=False,
             check_pattern=config.patterns,
             error_message="FileCheck binary not available. Set FILECHECK_PATH env var or install Triton.",
+            display_attributes=display_attributes or [],
         )
 
 
-def extract_ir_metadata(ir_content: str) -> dict[str, Any]:
-    """Extract metadata from IR content for BlockPingpong detection."""
+def extract_ir_metadata(
+    ir_content: str,
+    display_attributes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Extract metadata from IR content based on display_attributes configuration.
+
+    Extracts module_attributes string and then extracts specific attributes
+    based on display_attributes config from JSON. Attributes are extracted
+    from different sources:
+    - "module_attrs": extracted from module attributes in the IR
+    - "ir_content": counted or extracted from the IR content body
+    - "computed": derived from other extracted values
+
+    Args:
+        ir_content: The IR content string to extract metadata from.
+        display_attributes: List of display attribute configs from JSON.
+            Each has "key", "source", "label", "type", etc.
+
+    Returns:
+        Dictionary of extracted metadata values.
+    """
     if not ir_content:
         return {}
 
     metadata: dict[str, Any] = {}
 
-    # Extract module attributes
+    # Always extract module attributes string (for display)
     module_attrs_match = re.search(
         r"module\s+attributes\s*\{([^}]+)\}", ir_content, re.MULTILINE
     )
     if module_attrs_match:
         metadata["module_attributes"] = module_attrs_match.group(1).strip()
 
-    # Extract num_warps
-    warps_match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', ir_content)
-    if warps_match:
-        metadata["num_warps"] = int(warps_match.group(1))
+    if not display_attributes:
+        return metadata
 
-    # Extract num_stages
-    stages_match = re.search(r'"ttg\.num-stages"\s*=\s*(\d+)', ir_content)
-    if stages_match:
-        metadata["num_stages"] = int(stages_match.group(1))
+    # Build sets of attribute keys by source for efficient lookup
+    module_attr_keys = set()
+    ir_content_keys = set()
+    computed_keys = set()
+    for attr in display_attributes:
+        source = attr.get("source", "")
+        key = attr.get("key", "")
+        if source == "module_attrs":
+            module_attr_keys.add(key)
+        elif source == "ir_content":
+            ir_content_keys.add(key)
+        elif source == "computed":
+            computed_keys.add(key)
 
-    # Count operations
-    metadata["cond_barrier_count"] = ir_content.count("amdgpu.cond_barrier")
-    metadata["setprio_count"] = ir_content.count("rocdl.s.setprio")
-    metadata["dot_count"] = ir_content.count("tt.dot")
+    # Extract module_attrs source attributes using known patterns
+    _MODULE_ATTR_PATTERNS = {
+        "num_warps": r'"ttg\.num-warps"\s*=\s*(\d+)',
+        "num_stages": r'"ttg\.num-stages"\s*=\s*(\d+)',
+        "num_ctas": r'"ttg\.num-ctas"\s*=\s*(\d+)',
+    }
+    for key in module_attr_keys:
+        if key in _MODULE_ATTR_PATTERNS:
+            match = re.search(_MODULE_ATTR_PATTERNS[key], ir_content)
+            if match:
+                metadata[key] = int(match.group(1))
 
-    # Estimate PP clusters
-    num_warps = metadata.get("num_warps", 0)
-    cond_barrier_count = metadata.get("cond_barrier_count", 0)
-    has_cond_barrier = cond_barrier_count > 0
-    if num_warps == 4 and not has_cond_barrier:
-        metadata["num_pp_clusters"] = 1
-    elif num_warps == 8 and has_cond_barrier:
-        dot_count = metadata.get("dot_count", 0)
-        if dot_count >= 4:
-            metadata["num_pp_clusters"] = 4
-        else:
-            metadata["num_pp_clusters"] = 2
+    # Extract ir_content source attributes (counts and patterns)
+    _IR_CONTENT_COUNT_PATTERNS = {
+        "cond_barrier_count": "amdgpu.cond_barrier",
+        "setprio_count": "rocdl.s.setprio",
+        "dot_count": "tt.dot",
+    }
+    for key in ir_content_keys:
+        if key in _IR_CONTENT_COUNT_PATTERNS:
+            metadata[key] = ir_content.count(_IR_CONTENT_COUNT_PATTERNS[key])
 
-    # Extract tile size related attributes
-    tile_info = _extract_tile_size_info(ir_content)
-    if tile_info:
-        metadata.update(tile_info)
+    # Extract tile size info from IR content if any tile-related keys are requested
+    _TILE_KEYS = {
+        "tile_m",
+        "tile_n",
+        "tile_k",
+        "tile_size_bits",
+        "input_dtype",
+        "output_dtype",
+        "mfma_m",
+        "mfma_n",
+        "mfma_k",
+    }
+    if ir_content_keys & _TILE_KEYS or computed_keys & _TILE_KEYS:
+        tile_info = _extract_tile_size_info(ir_content)
+        if tile_info:
+            for key in ir_content_keys | computed_keys:
+                if key in tile_info:
+                    metadata[key] = tile_info[key]
+
+    # Compute derived attributes
+    for key in computed_keys:
+        if key not in metadata:
+            value = _compute_attribute(key, metadata, ir_content)
+            if value is not None:
+                metadata[key] = value
 
     return metadata
+
+
+def _compute_attribute(
+    key: str, metadata: dict[str, Any], ir_content: str
+) -> Any | None:
+    """Compute a derived attribute value from existing metadata and IR content."""
+    if key == "num_pp_clusters":
+        return _compute_pp_clusters(metadata, ir_content)
+    elif key == "tile_size_bits":
+        return metadata.get("tile_size_bits")
+    return None
+
+
+def _compute_pp_clusters(metadata: dict[str, Any], ir_content: str) -> int | None:
+    """Compute number of PP clusters from warps and barrier counts.
+
+    Extracts dependencies from IR content if not already in metadata.
+    """
+    num_warps = metadata.get("num_warps")
+    if num_warps is None:
+        warps_match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', ir_content)
+        num_warps = int(warps_match.group(1)) if warps_match else 0
+
+    cond_barrier_count = metadata.get("cond_barrier_count")
+    if cond_barrier_count is None:
+        cond_barrier_count = ir_content.count("amdgpu.cond_barrier")
+
+    has_cond_barrier = cond_barrier_count > 0
+    if num_warps == 4 and not has_cond_barrier:
+        return 1
+    elif num_warps == 8 and has_cond_barrier:
+        dot_count = metadata.get("dot_count")
+        if dot_count is None:
+            dot_count = ir_content.count("tt.dot")
+        if dot_count >= 4:
+            return 4
+        else:
+            return 2
+    return None
 
 
 def _extract_tile_size_info(ir_content: str) -> dict[str, Any]:
     """
     Extract tile size related information from IR content.
 
-    This function extracts tile dimensions and calculates tile size following
-    the BlockPingpong.cpp definition:
+    This function extracts tile dimensions and calculates tile size:
         tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth
     Where:
         - dotShape[0] = M (output tensor first dimension)
@@ -380,7 +404,7 @@ def _extract_tile_size_info(ir_content: str) -> dict[str, Any]:
         tile_info["input_dtype"] = input_dtype
         tile_info["output_dtype"] = output_dtype
 
-        # Calculate tile size in bits following BlockPingpong.cpp:
+        # Calculate tile size in bits:
         # tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth
         # Where elemWidth is the bit width of input A (not output!)
         input_bits = _get_dtype_bits(input_dtype)
@@ -460,6 +484,7 @@ def find_procedures_with_patterns(
                 "procedure_name": cfg["name"],
                 "detected": False,
                 "error_message": "No IR content available",
+                "display_attributes": cfg.get("display_attributes", []),
             }
             for cfg in procedure_configs
         }
@@ -473,19 +498,23 @@ def find_procedures_with_patterns(
 
     results = {}
     for cfg in procedure_configs:
+        display_attrs = cfg.get("display_attributes", [])
         config = ProcedureCheckConfig(
             name=cfg["name"],
             patterns=cfg.get("patterns", f"CHECK: {cfg['name']}"),
             description=cfg.get("description", ""),
         )
-        result = run_filecheck(ir_content, config)
+        result = run_filecheck(ir_content, config, display_attributes=display_attrs)
         result_dict = asdict(result)
         result_dict["detection_method"] = "filecheck"
         # Include message from config if available
         if cfg.get("message"):
             result_dict["message"] = cfg["message"]
+        # Merge tile_info into the dynamic attributes dict
         if tile_info:
-            result_dict.update(tile_info)
+            for key, value in tile_info.items():
+                if key not in result_dict["attributes"]:
+                    result_dict["attributes"][key] = value
         results[cfg["name"]] = result_dict
 
     return results

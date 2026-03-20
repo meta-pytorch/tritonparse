@@ -92,7 +92,7 @@ def _add_parse_args(parser: argparse.ArgumentParser) -> None:
         help=(
             "Path to a JSON file containing custom procedure check configurations "
             "for FileCheck-based pattern detection. If not specified, uses built-in "
-            "default patterns (BlockPingpong_Small, BlockPingpong_Medium, BlockPingpong_Large)."
+            "default patterns."
         ),
         type=str,
         dest="procedure_checks_file",

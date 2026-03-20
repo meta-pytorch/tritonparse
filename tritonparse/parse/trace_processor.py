@@ -151,15 +151,6 @@ def get_procedure_checks() -> List[Dict[str, Any]]:
     return _DEFAULT_PROCEDURE_CHECKS
 
 
-def get_message_for_pattern(pattern_name: str) -> str:
-    """Get the detailed message for a procedure pattern by name."""
-    procedure_checks = get_procedure_checks()
-    for proc in procedure_checks:
-        if proc.get("name", "").lower() == pattern_name.lower():
-            return proc.get("message", "")
-    return ""
-
-
 def generate_source_mappings(
     ir_content: str, ir_type: str, other_mappings: List[Any] | None = None
 ) -> Dict[str, Dict[str, Any]]:
