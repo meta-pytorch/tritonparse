@@ -316,9 +316,17 @@ def extract_ir_metadata(
         # Ensure dependencies are resolved first
         compute_from = attr.get("compute_from", [])
         for dep_key in compute_from:
-            if dep_key not in metadata and dep_key in attr_by_key:
-                dep_attr = attr_by_key[dep_key]
-                _extract_single_attr(dep_attr, ir_content, metadata, _get_dot_shape)
+            if dep_key not in metadata:
+                if dep_key in attr_by_key:
+                    # Dependency is a declared display attribute - extract it
+                    dep_attr = attr_by_key[dep_key]
+                    _extract_single_attr(dep_attr, ir_content, metadata, _get_dot_shape)
+                else:
+                    # Dependency is not a declared attribute - try dot_shape cache
+                    # (e.g. input_dtype needed for tile_size_bits computation)
+                    dot_shape = _get_dot_shape()
+                    if dep_key in dot_shape:
+                        metadata[dep_key] = dot_shape[dep_key]
 
         value = _run_compute_rule(compute_rule, metadata, ir_content)
         if value is not None:
