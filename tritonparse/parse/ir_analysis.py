@@ -228,7 +228,6 @@ def extract_ir_metadata(
     - source "ir_content" + extract_rule "count": count occurrences of extract_pattern
     - source "ir_content" + extract_rule "regex": regex search, return capture group
     - source "ir_content" + extract_rule "dot_shape": extract from tt.dot tensor shape
-    - source "ir_content" + extract_rule "mfma_shape": extract from MFMA encoding
     - source "computed" + compute_rule: named computation from other attributes
 
     Args:
@@ -258,21 +257,14 @@ def extract_ir_metadata(
     for attr in display_attributes:
         attr_by_key[attr.get("key", "")] = attr
 
-    # Lazy-cache for complex extractions (run once, use for multiple keys)
+    # Lazy-cache for dot_shape extraction (run once, use for multiple keys)
     _dot_shape_cache: dict[str, Any] | None = None
-    _mfma_shape_cache: dict[str, Any] | None = None
 
     def _get_dot_shape() -> dict[str, Any]:
         nonlocal _dot_shape_cache
         if _dot_shape_cache is None:
-            _dot_shape_cache = _extract_tile_size_info(ir_content)
+            _dot_shape_cache = _extract_dot_shape(ir_content)
         return _dot_shape_cache
-
-    def _get_mfma_shape() -> dict[str, Any]:
-        nonlocal _mfma_shape_cache
-        if _mfma_shape_cache is None:
-            _mfma_shape_cache = _extract_tile_size_info(ir_content)
-        return _mfma_shape_cache
 
     # Pass 1: Extract non-computed attributes
     for attr in display_attributes:
@@ -311,11 +303,6 @@ def extract_ir_metadata(
                 dot_shape = _get_dot_shape()
                 if extract_field in dot_shape:
                     metadata[key] = dot_shape[extract_field]
-            elif extract_rule == "mfma_shape":
-                extract_field = attr.get("extract_field", key)
-                mfma_shape = _get_mfma_shape()
-                if extract_field in mfma_shape:
-                    metadata[key] = mfma_shape[extract_field]
 
     # Pass 2: Resolve computed attributes (may depend on pass 1 results)
     for attr in display_attributes:
@@ -428,83 +415,38 @@ def _compute_tile_size_bits(metadata: dict[str, Any]) -> int | None:
     return tile_m * tile_n * tile_k * input_bits
 
 
-def _extract_tile_size_info(ir_content: str) -> dict[str, Any]:
+def _extract_dot_shape(ir_content: str) -> dict[str, Any]:
     """
-    Extract tile size related information from IR content.
+    Extract tile dimensions from tt.dot tensor types in IR content.
 
-    This function extracts tile dimensions and calculates tile size:
-        tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth
-    Where:
-        - dotShape[0] = M (output tensor first dimension)
-        - dotShape[1] = N (output tensor second dimension)
-        - aShape[1] = K (first operand second dimension, reduction dimension)
-        - elemWidth = element bit width of input A
-
-    Also extracts MFMA instruction shape from #ttg.amd_mfma encoding.
+    Parses the tt.dot operation signature to extract:
+    - tile_m, tile_n, tile_k: tile dimensions
+    - input_dtype, output_dtype: data types
 
     Returns:
-        Dictionary containing tile size attributes.
+        Dictionary containing dot shape attributes.
     """
-    tile_info: dict[str, Any] = {}
+    info: dict[str, Any] = {}
 
-    # Extract from tt.dot tensor dimensions in TTGIR format
     # Pattern: tt.dot ... : tensor<MxKxdtype, #encoding> * tensor<KxNxdtype, #encoding> -> tensor<MxNxresult_dtype, #encoding>
-    # Example: tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xbf16, #ttg.dot_op<...>> * tensor<32x64xbf16, #ttg.dot_op<...>> -> tensor<64x64xf32, #mma>
     dot_pattern = re.search(
         r"tt\.dot[^:]*:\s*tensor<(\d+)x(\d+)x([a-zA-Z0-9]+)[^*]*\*\s*tensor<(\d+)x(\d+)x([a-zA-Z0-9]+)[^-]*->\s*tensor<(\d+)x(\d+)x([a-zA-Z0-9]+)",
         ir_content,
     )
     if dot_pattern:
-        # First operand (A): MxK
-        _a_m = int(dot_pattern.group(1))  # noqa: F841 - kept for documentation
         a_k = int(dot_pattern.group(2))
         input_dtype = dot_pattern.group(3).strip()
-
-        # Second operand (B): KxN - we extract but don't use, kept for documentation
-        _b_k = int(dot_pattern.group(4))  # noqa: F841 - should equal a_k
-        _b_n = int(dot_pattern.group(5))  # noqa: F841 - should equal out_n
-
-        # Output (C): MxN
         out_m = int(dot_pattern.group(7))
         out_n = int(dot_pattern.group(8))
         output_dtype = dot_pattern.group(9).strip()
 
-        tile_info["tile_m"] = out_m
-        tile_info["tile_n"] = out_n
-        tile_info["tile_k"] = a_k
-        tile_info["input_dtype"] = input_dtype
-        tile_info["output_dtype"] = output_dtype
+        info["tile_m"] = out_m
+        info["tile_n"] = out_n
+        info["tile_k"] = a_k
+        info["input_dtype"] = input_dtype
+        info["output_dtype"] = output_dtype
 
-        # Calculate tile size in bits:
-        # tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth
-        # Where elemWidth is the bit width of input A (not output!)
-        input_bits = _get_dtype_bits(input_dtype)
-        if input_bits:
-            tile_info["tile_size_bits"] = out_m * out_n * a_k * input_bits
-
-    # Extract MFMA instruction shape from #ttg.amd_mfma encoding
-    # Pattern: #ttg.amd_mfma<{..., instrShape = [M, N], ...}>
-    # Example: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
-    mfma_pattern = re.search(
-        r"#ttg\.amd_mfma<\{[^}]*instrShape\s*=\s*\[(\d+),\s*(\d+)\]",
-        ir_content,
-    )
-    if mfma_pattern:
-        tile_info["mfma_m"] = int(mfma_pattern.group(1))
-        tile_info["mfma_n"] = int(mfma_pattern.group(2))
-
-    # Alternative: Extract from amdgpu.mfma intrinsic (e.g., amdgpu.mfma 32x32x8)
-    if "mfma_m" not in tile_info:
-        mfma_intrinsic_pattern = re.search(
-            r"amdgpu\.mfma.*?(\d+)x(\d+)x(\d+)",
-            ir_content,
-        )
-        if mfma_intrinsic_pattern:
-            tile_info["mfma_m"] = int(mfma_intrinsic_pattern.group(1))
-            tile_info["mfma_n"] = int(mfma_intrinsic_pattern.group(2))
-            tile_info["mfma_k"] = int(mfma_intrinsic_pattern.group(3))
-
-    return tile_info
+    return info
 
 
 def _get_dtype_bits(dtype_str: str) -> int | None:
@@ -560,12 +502,13 @@ def find_procedures_with_patterns(
             for cfg in procedure_configs
         }
 
-    # Extract tile size info from TTIR content if ttir_key is provided
+    # Extract dot shape info from TTIR content if ttir_key is provided
+    # (TTIR may have cleaner dot shape info than TTGIR)
     tile_info = {}
     if ttir_key:
         ttir_content = load_ir_contents(ttir_key, file_content, file_path)
         if ttir_content:
-            tile_info = _extract_tile_size_info(ttir_content)
+            tile_info = _extract_dot_shape(ttir_content)
 
     results = {}
     for cfg in procedure_configs:
