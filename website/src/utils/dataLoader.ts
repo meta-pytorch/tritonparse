@@ -212,8 +212,15 @@ export interface DisplayAttribute {
     label: string;
     type?: 'number' | 'string' | 'boolean';
     source?: 'module_attrs' | 'ir_content' | 'computed';
-    pattern?: string;
     group?: 'parameters' | 'tile_info' | 'counters';
+    // Extraction configuration (used by Python backend, passed through for reference)
+    extract_rule?: 'regex' | 'count' | 'dot_shape' | 'mfma_shape';
+    extract_pattern?: string;
+    extract_field?: string;
+    extract_group?: number;
+    // Computation configuration (for source="computed")
+    compute_rule?: string;
+    compute_from?: string[];
 }
 
 export interface IRAnalysisData {

@@ -13,6 +13,8 @@
           "label": "Warps",
           "type": "number",
           "source": "module_attrs",
+          "extract_rule": "regex",
+          "extract_pattern": "\"ttg\\.num-warps\"\\s*=\\s*(\\d+)",
           "group": "parameters"
         },
         {
@@ -20,6 +22,8 @@
           "label": "Stages",
           "type": "number",
           "source": "module_attrs",
+          "extract_rule": "regex",
+          "extract_pattern": "\"ttg\\.num-stages\"\\s*=\\s*(\\d+)",
           "group": "parameters"
         },
         {
@@ -27,6 +31,8 @@
           "label": "PP Clusters",
           "type": "number",
           "source": "computed",
+          "compute_rule": "pp_clusters",
+          "compute_from": ["num_warps", "cond_barrier_count", "dot_count"],
           "group": "parameters"
         },
         {
@@ -34,6 +40,8 @@
           "label": "SetPrio Ops",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "rocdl.s.setprio",
           "group": "counters"
         },
         {
@@ -41,6 +49,8 @@
           "label": "Dot Operations",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "tt.dot",
           "group": "counters"
         },
         {
@@ -48,6 +58,8 @@
           "label": "Tile M",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_m",
           "group": "tile_info"
         },
         {
@@ -55,6 +67,8 @@
           "label": "Tile N",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_n",
           "group": "tile_info"
         },
         {
@@ -62,6 +76,8 @@
           "label": "Tile K",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_k",
           "group": "tile_info"
         },
         {
@@ -69,6 +85,8 @@
           "label": "Tile Size (bits)",
           "type": "number",
           "source": "computed",
+          "compute_rule": "tile_size_bits",
+          "compute_from": ["tile_m", "tile_n", "tile_k", "input_dtype"],
           "group": "tile_info"
         }
       ]
@@ -85,6 +103,8 @@
           "label": "Warps",
           "type": "number",
           "source": "module_attrs",
+          "extract_rule": "regex",
+          "extract_pattern": "\"ttg\\.num-warps\"\\s*=\\s*(\\d+)",
           "group": "parameters"
         },
         {
@@ -92,6 +112,8 @@
           "label": "Stages",
           "type": "number",
           "source": "module_attrs",
+          "extract_rule": "regex",
+          "extract_pattern": "\"ttg\\.num-stages\"\\s*=\\s*(\\d+)",
           "group": "parameters"
         },
         {
@@ -99,6 +121,8 @@
           "label": "PP Clusters",
           "type": "number",
           "source": "computed",
+          "compute_rule": "pp_clusters",
+          "compute_from": ["num_warps", "cond_barrier_count", "dot_count"],
           "group": "parameters"
         },
         {
@@ -106,6 +130,8 @@
           "label": "Cond Barriers",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "amdgpu.cond_barrier",
           "group": "counters"
         },
         {
@@ -113,6 +139,8 @@
           "label": "SetPrio Ops",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "rocdl.s.setprio",
           "group": "counters"
         },
         {
@@ -120,6 +148,8 @@
           "label": "Dot Operations",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "tt.dot",
           "group": "counters"
         },
         {
@@ -127,6 +157,8 @@
           "label": "Tile M",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_m",
           "group": "tile_info"
         },
         {
@@ -134,6 +166,8 @@
           "label": "Tile N",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_n",
           "group": "tile_info"
         },
         {
@@ -141,6 +175,8 @@
           "label": "Tile K",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_k",
           "group": "tile_info"
         },
         {
@@ -148,6 +184,8 @@
           "label": "Tile Size (bits)",
           "type": "number",
           "source": "computed",
+          "compute_rule": "tile_size_bits",
+          "compute_from": ["tile_m", "tile_n", "tile_k", "input_dtype"],
           "group": "tile_info"
         }
       ]
@@ -164,6 +202,8 @@
           "label": "Warps",
           "type": "number",
           "source": "module_attrs",
+          "extract_rule": "regex",
+          "extract_pattern": "\"ttg\\.num-warps\"\\s*=\\s*(\\d+)",
           "group": "parameters"
         },
         {
@@ -171,6 +211,8 @@
           "label": "Stages",
           "type": "number",
           "source": "module_attrs",
+          "extract_rule": "regex",
+          "extract_pattern": "\"ttg\\.num-stages\"\\s*=\\s*(\\d+)",
           "group": "parameters"
         },
         {
@@ -178,6 +220,8 @@
           "label": "PP Clusters",
           "type": "number",
           "source": "computed",
+          "compute_rule": "pp_clusters",
+          "compute_from": ["num_warps", "cond_barrier_count", "dot_count"],
           "group": "parameters"
         },
         {
@@ -185,6 +229,8 @@
           "label": "Cond Barriers",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "amdgpu.cond_barrier",
           "group": "counters"
         },
         {
@@ -192,6 +238,8 @@
           "label": "SetPrio Ops",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "rocdl.s.setprio",
           "group": "counters"
         },
         {
@@ -199,6 +247,8 @@
           "label": "Dot Operations",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "count",
+          "extract_pattern": "tt.dot",
           "group": "counters"
         },
         {
@@ -206,6 +256,8 @@
           "label": "Tile M",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_m",
           "group": "tile_info"
         },
         {
@@ -213,6 +265,8 @@
           "label": "Tile N",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_n",
           "group": "tile_info"
         },
         {
@@ -220,6 +274,8 @@
           "label": "Tile K",
           "type": "number",
           "source": "ir_content",
+          "extract_rule": "dot_shape",
+          "extract_field": "tile_k",
           "group": "tile_info"
         },
         {
@@ -227,6 +283,8 @@
           "label": "Tile Size (bits)",
           "type": "number",
           "source": "computed",
+          "compute_rule": "tile_size_bits",
+          "compute_from": ["tile_m", "tile_n", "tile_k", "input_dtype"],
           "group": "tile_info"
         }
       ]

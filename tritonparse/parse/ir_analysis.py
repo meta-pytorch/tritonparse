@@ -223,17 +223,17 @@ def extract_ir_metadata(
     """
     Extract metadata from IR content based on display_attributes configuration.
 
-    Extracts module_attributes string and then extracts specific attributes
-    based on display_attributes config from JSON. Attributes are extracted
-    from different sources:
-    - "module_attrs": extracted from module attributes in the IR
-    - "ir_content": counted or extracted from the IR content body
-    - "computed": derived from other extracted values
+    Each display_attribute specifies how to extract its value:
+    - source "module_attrs" + extract_rule "regex": regex search on IR content
+    - source "ir_content" + extract_rule "count": count occurrences of extract_pattern
+    - source "ir_content" + extract_rule "regex": regex search, return capture group
+    - source "ir_content" + extract_rule "dot_shape": extract from tt.dot tensor shape
+    - source "ir_content" + extract_rule "mfma_shape": extract from MFMA encoding
+    - source "computed" + compute_rule: named computation from other attributes
 
     Args:
         ir_content: The IR content string to extract metadata from.
         display_attributes: List of display attribute configs from JSON.
-            Each has "key", "source", "label", "type", etc.
 
     Returns:
         Dictionary of extracted metadata values.
@@ -253,79 +253,136 @@ def extract_ir_metadata(
     if not display_attributes:
         return metadata
 
-    # Build sets of attribute keys by source for efficient lookup
-    module_attr_keys = set()
-    ir_content_keys = set()
-    computed_keys = set()
+    # Index attributes by key for dependency resolution
+    attr_by_key: dict[str, dict[str, Any]] = {}
+    for attr in display_attributes:
+        attr_by_key[attr.get("key", "")] = attr
+
+    # Lazy-cache for complex extractions (run once, use for multiple keys)
+    _dot_shape_cache: dict[str, Any] | None = None
+    _mfma_shape_cache: dict[str, Any] | None = None
+
+    def _get_dot_shape() -> dict[str, Any]:
+        nonlocal _dot_shape_cache
+        if _dot_shape_cache is None:
+            _dot_shape_cache = _extract_tile_size_info(ir_content)
+        return _dot_shape_cache
+
+    def _get_mfma_shape() -> dict[str, Any]:
+        nonlocal _mfma_shape_cache
+        if _mfma_shape_cache is None:
+            _mfma_shape_cache = _extract_tile_size_info(ir_content)
+        return _mfma_shape_cache
+
+    # Pass 1: Extract non-computed attributes
     for attr in display_attributes:
         source = attr.get("source", "")
         key = attr.get("key", "")
+        extract_rule = attr.get("extract_rule", "")
+        extract_pattern = attr.get("extract_pattern", "")
+
+        if source == "computed":
+            continue  # handled in pass 2
+
         if source == "module_attrs":
-            module_attr_keys.add(key)
+            if extract_rule == "regex" and extract_pattern:
+                match = re.search(extract_pattern, ir_content)
+                if match:
+                    value = match.group(1)
+                    if attr.get("type") == "number":
+                        metadata[key] = int(value)
+                    else:
+                        metadata[key] = value
+
         elif source == "ir_content":
-            ir_content_keys.add(key)
-        elif source == "computed":
-            computed_keys.add(key)
+            if extract_rule == "count" and extract_pattern:
+                metadata[key] = ir_content.count(extract_pattern)
+            elif extract_rule == "regex" and extract_pattern:
+                match = re.search(extract_pattern, ir_content)
+                if match:
+                    group_idx = attr.get("extract_group", 1)
+                    value = match.group(group_idx)
+                    if attr.get("type") == "number":
+                        metadata[key] = int(value)
+                    else:
+                        metadata[key] = value
+            elif extract_rule == "dot_shape":
+                extract_field = attr.get("extract_field", key)
+                dot_shape = _get_dot_shape()
+                if extract_field in dot_shape:
+                    metadata[key] = dot_shape[extract_field]
+            elif extract_rule == "mfma_shape":
+                extract_field = attr.get("extract_field", key)
+                mfma_shape = _get_mfma_shape()
+                if extract_field in mfma_shape:
+                    metadata[key] = mfma_shape[extract_field]
 
-    # Extract module_attrs source attributes using known patterns
-    _MODULE_ATTR_PATTERNS = {
-        "num_warps": r'"ttg\.num-warps"\s*=\s*(\d+)',
-        "num_stages": r'"ttg\.num-stages"\s*=\s*(\d+)',
-        "num_ctas": r'"ttg\.num-ctas"\s*=\s*(\d+)',
-    }
-    for key in module_attr_keys:
-        if key in _MODULE_ATTR_PATTERNS:
-            match = re.search(_MODULE_ATTR_PATTERNS[key], ir_content)
-            if match:
-                metadata[key] = int(match.group(1))
+    # Pass 2: Resolve computed attributes (may depend on pass 1 results)
+    for attr in display_attributes:
+        if attr.get("source") != "computed":
+            continue
+        key = attr.get("key", "")
+        if key in metadata:
+            continue
 
-    # Extract ir_content source attributes (counts and patterns)
-    _IR_CONTENT_COUNT_PATTERNS = {
-        "cond_barrier_count": "amdgpu.cond_barrier",
-        "setprio_count": "rocdl.s.setprio",
-        "dot_count": "tt.dot",
-    }
-    for key in ir_content_keys:
-        if key in _IR_CONTENT_COUNT_PATTERNS:
-            metadata[key] = ir_content.count(_IR_CONTENT_COUNT_PATTERNS[key])
+        compute_rule = attr.get("compute_rule", "")
+        # Ensure dependencies are resolved first
+        compute_from = attr.get("compute_from", [])
+        for dep_key in compute_from:
+            if dep_key not in metadata and dep_key in attr_by_key:
+                dep_attr = attr_by_key[dep_key]
+                _extract_single_attr(dep_attr, ir_content, metadata, _get_dot_shape)
 
-    # Extract tile size info from IR content if any tile-related keys are requested
-    _TILE_KEYS = {
-        "tile_m",
-        "tile_n",
-        "tile_k",
-        "tile_size_bits",
-        "input_dtype",
-        "output_dtype",
-        "mfma_m",
-        "mfma_n",
-        "mfma_k",
-    }
-    if ir_content_keys & _TILE_KEYS or computed_keys & _TILE_KEYS:
-        tile_info = _extract_tile_size_info(ir_content)
-        if tile_info:
-            for key in ir_content_keys | computed_keys:
-                if key in tile_info:
-                    metadata[key] = tile_info[key]
-
-    # Compute derived attributes
-    for key in computed_keys:
-        if key not in metadata:
-            value = _compute_attribute(key, metadata, ir_content)
-            if value is not None:
-                metadata[key] = value
+        value = _run_compute_rule(compute_rule, metadata, ir_content)
+        if value is not None:
+            metadata[key] = value
 
     return metadata
 
 
-def _compute_attribute(
-    key: str, metadata: dict[str, Any], ir_content: str
+def _extract_single_attr(
+    attr: dict[str, Any],
+    ir_content: str,
+    metadata: dict[str, Any],
+    get_dot_shape: Any,
+) -> None:
+    """Extract a single attribute value and store in metadata. Used for dependency resolution."""
+    key = attr.get("key", "")
+    if key in metadata:
+        return
+    source = attr.get("source", "")
+    extract_rule = attr.get("extract_rule", "")
+    extract_pattern = attr.get("extract_pattern", "")
+
+    if source == "module_attrs" and extract_rule == "regex" and extract_pattern:
+        match = re.search(extract_pattern, ir_content)
+        if match:
+            value = match.group(1)
+            metadata[key] = int(value) if attr.get("type") == "number" else value
+    elif source == "ir_content":
+        if extract_rule == "count" and extract_pattern:
+            metadata[key] = ir_content.count(extract_pattern)
+        elif extract_rule == "regex" and extract_pattern:
+            match = re.search(extract_pattern, ir_content)
+            if match:
+                group_idx = attr.get("extract_group", 1)
+                value = match.group(group_idx)
+                metadata[key] = int(value) if attr.get("type") == "number" else value
+        elif extract_rule == "dot_shape":
+            extract_field = attr.get("extract_field", key)
+            dot_shape = get_dot_shape()
+            if extract_field in dot_shape:
+                metadata[key] = dot_shape[extract_field]
+
+
+def _run_compute_rule(
+    rule: str, metadata: dict[str, Any], ir_content: str
 ) -> Any | None:
-    """Compute a derived attribute value from existing metadata and IR content."""
-    if key == "num_pp_clusters":
+    """Run a named computation rule to derive an attribute value."""
+    if rule == "pp_clusters":
         return _compute_pp_clusters(metadata, ir_content)
-    elif key == "tile_size_bits":
-        return metadata.get("tile_size_bits")
+    elif rule == "tile_size_bits":
+        return _compute_tile_size_bits(metadata)
     return None
 
 
@@ -355,6 +412,20 @@ def _compute_pp_clusters(metadata: dict[str, Any], ir_content: str) -> int | Non
         else:
             return 2
     return None
+
+
+def _compute_tile_size_bits(metadata: dict[str, Any]) -> int | None:
+    """Compute tile size in bits from tile dimensions and input dtype."""
+    tile_m = metadata.get("tile_m")
+    tile_n = metadata.get("tile_n")
+    tile_k = metadata.get("tile_k")
+    input_dtype = metadata.get("input_dtype")
+    if tile_m is None or tile_n is None or tile_k is None or input_dtype is None:
+        return None
+    input_bits = _get_dtype_bits(input_dtype)
+    if input_bits is None:
+        return None
+    return tile_m * tile_n * tile_k * input_bits
 
 
 def _extract_tile_size_info(ir_content: str) -> dict[str, Any]:
