@@ -212,6 +212,19 @@ def build_context_bundle(
     kernel_info = get_kernel_info(comp_event)
     grid = launch_event.get("grid")
     extracted_args = launch_event.get("extracted_args", {})
+
+    # Check if this launch event was captured during CUDA graph capture,
+    # which means argument extraction was skipped and we cannot generate
+    # a reproducer. See D86722827 for context on why extraction is skipped.
+    if "_note" in extracted_args:
+        raise RuntimeError(
+            f"Cannot generate reproducer for kernel "
+            f"'{kernel_info.function_name}' at line {line_index}: "
+            f"{extracted_args['_note']}. "
+            f"Kernel launches during CUDA graph capture do not have "
+            f"extracted argument data needed for reproducer generation."
+        )
+
     comp_meta = launch_event.get("compilation_metadata", {})
 
     # Compile metadata subset we care about.

@@ -203,5 +203,91 @@ class TestBuildContextBundleScratchSize(unittest.TestCase):
         self.assertIsNone(bundle.compile["global_scratch_size"])
 
 
+class TestBuildContextBundleCudaGraphCapture(unittest.TestCase):
+    """Tests that build_context_bundle raises RuntimeError for CUDA graph capture launches.
+
+    When a kernel is launched during CUDA graph capture, argument extraction
+    is skipped (see D86722827) and extracted_args contains only a _note string
+    instead of per-argument dicts. build_context_bundle should detect this and
+    raise a clear RuntimeError.
+    """
+
+    def _make_events_with_note(self, note_message):
+        """Create launch + compilation events where extracted_args has a _note sentinel."""
+        launch_event = {
+            "event_type": "launch",
+            "grid": [1, 1, 1],
+            "extracted_args": {
+                "_note": note_message,
+            },
+            "compilation_metadata": {
+                "hash": "abc123",
+                "num_warps": 4,
+                "num_stages": 2,
+            },
+        }
+        comp_event = {
+            "event_type": "compilation",
+            "payload": {
+                "metadata": {"hash": "abc123", "name": "my_kernel"},
+                "python_source": {
+                    "file_path": "/tmp/kernel.py",
+                    "code": "@triton.jit\ndef my_kernel(): pass",
+                },
+            },
+            "stack": [],
+        }
+        return [launch_event, comp_event]
+
+    def test_note_sentinel_raises_runtime_error(self):
+        """Test that _note in extracted_args raises RuntimeError."""
+        from tritonparse.reproducer.ingestion.ndjson import build_context_bundle
+
+        note = "Argument extraction skipped during CUDA graph capture"
+        events = self._make_events_with_note(note)
+
+        with self.assertRaises(RuntimeError) as cm:
+            build_context_bundle(events, line_index=0)
+
+        error_msg = str(cm.exception)
+        self.assertIn("Cannot generate reproducer", error_msg)
+        self.assertIn("my_kernel", error_msg)
+        self.assertIn(note, error_msg)
+
+    def test_no_note_sentinel_succeeds(self):
+        """Test that normal extracted_args without _note works fine."""
+        from tritonparse.reproducer.ingestion.ndjson import build_context_bundle
+
+        launch_event = {
+            "event_type": "launch",
+            "grid": [1, 1, 1],
+            "extracted_args": {
+                "x": {"type": "tensor", "shape": [4, 4], "dtype": "float32"},
+                "BLOCK_SIZE": {"type": "int", "value": 128},
+            },
+            "compilation_metadata": {
+                "hash": "abc123",
+                "num_warps": 4,
+                "num_stages": 2,
+            },
+        }
+        comp_event = {
+            "event_type": "compilation",
+            "payload": {
+                "metadata": {"hash": "abc123", "name": "my_kernel"},
+                "python_source": {
+                    "file_path": "/tmp/kernel.py",
+                    "code": "@triton.jit\ndef my_kernel(): pass",
+                },
+            },
+            "stack": [],
+        }
+        events = [launch_event, comp_event]
+
+        # Should not raise
+        bundle = build_context_bundle(events, line_index=0)
+        self.assertEqual(bundle.kernel_info.function_name, "my_kernel")
+
+
 if __name__ == "__main__":
     unittest.main()
