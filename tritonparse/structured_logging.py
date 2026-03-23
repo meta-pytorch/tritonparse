@@ -120,6 +120,8 @@ TRITONPARSE_TENSOR_SAVE_SKIP_RUNS = int(
 TRITONPARSE_TENSOR_SAVE_MAX_RUNS = int(
     os.getenv("TRITONPARSE_TENSOR_SAVE_MAX_RUNS", "0")
 )
+# Whether upload to Manifold
+TRITONPARSE_TRACE_MANIFOLD = bool(os.getenv("TRITONPARSE_TRACE_MANIFOLD", None))
 
 TRITON_TRACE_HANDLER = None
 # Global tensor blob manager instance
@@ -1097,19 +1099,19 @@ class TritonTraceHandler(logging.StreamHandler):
                     else:
                         file_extension = ".ndjson"
                         file_mode = "a+"
-                    log_file_name = os.path.abspath(
+                    self.log_file_name = os.path.abspath(
                         os.path.join(root_dir, f"{filename}{file_extension}")
                     )
                     if TRITON_TRACE_COMPRESSION == "clp":
-                        self.stream = clp_open(log_file_name, file_mode)
+                        self.stream = clp_open(self.log_file_name, file_mode)
                     else:
                         self.stream = open(
-                            log_file_name,
+                            self.log_file_name,
                             mode=file_mode,
                         )
                     # Update _last_rank after successfully creating the file
                     self._last_rank = current_rank
-                    log.debug("TritonTraceHandler: logging to %s", log_file_name)
+                    log.debug("TritonTraceHandler: logging to %s", self.log_file_name)
                 else:
                     triton_trace_log.removeHandler(self)
                     return
@@ -1159,6 +1161,16 @@ class TritonTraceHandler(logging.StreamHandler):
         """Ensure proper cleanup on program exit"""
         if self.stream is not None:
             self.close()
+        if (
+            TRITONPARSE_TRACE_MANIFOLD
+            and hasattr(self, "log_file_name")
+            and self.log_file_name
+            and os.path.exists(self.log_file_name)
+        ):
+            from tritonparse.fb.uploader import ManifoldTraceUploader
+
+            manifold_uploader = ManifoldTraceUploader()
+            manifold_uploader.upload(self.log_file_name)
 
     def _ensure_stream_closed(self):
         """ensure stream is closed"""
@@ -1192,6 +1204,8 @@ def init_logs():
     if TRITON_TRACE_HANDLER is None:
         TRITON_TRACE_HANDLER = TritonTraceHandler(triton_trace_folder)
     if triton_trace_folder is not None:
+        if TRITON_TRACE_HANDLER.root_dir != triton_trace_folder:
+            TRITON_TRACE_HANDLER._ensure_stream_closed()
         TRITON_TRACE_HANDLER.root_dir = triton_trace_folder
     # 2) Re-evaluate whether we have a writable directory
     #    (`get_root_dir()` also checks /logs logic, permissions, etc.)

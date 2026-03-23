@@ -242,7 +242,8 @@ def gzip_single_file(file_path: str, verbose: bool = False) -> str:
             shutil.copyfileobj(f_in, f_out)
 
     # Delete the original file after successful compression
-    os.remove(file_path)
+    if os.path.exists(file_path):
+        os.remove(file_path)
     if verbose:
         logger.info(f"Deleted original file {file_path}")
 
