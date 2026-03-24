@@ -119,6 +119,10 @@ def create_args_from_json_file(json_path):
     """
     Load and parse a reproducer JSON file.
 
+    NOTE: This function is extracted verbatim via AST by function_extractor.py
+    and embedded into generated reproducer scripts. Those scripts only have
+    ``import json`` (stdlib) available — do NOT use ``orjson`` here.
+
     Args:
         json_path (str): Path to the JSON file describing the kernel launch.
 
@@ -126,7 +130,7 @@ def create_args_from_json_file(json_path):
         tuple[list, dict]: Grid specification list and map of argument name to value.
     """
     with open(json_path, "r") as f:
-        data = json.load(f)
+        data = json.loads(f.read())
     return create_args_from_json(data)
 
 

@@ -10,16 +10,33 @@ Output format: Consolidated ndjson with unique compilation events first,
 followed by diff events that reference them by hash.
 """
 
-import json
+import math
 from dataclasses import asdict
 from typing import Any
 
+import orjson
 from tritonparse.diff.core.diff_types import (
     CompilationDiffResult,
     PythonLineDiff,
     TraceDiffResult,
 )
 from tritonparse.diff.core.event_matcher import get_kernel_hash
+
+
+def _sanitize_non_finite_floats(obj: Any) -> Any:
+    """Replace NaN/Inf/-Inf floats with None for JSON serialization.
+
+    orjson raises TypeError on non-finite floats, unlike stdlib json which
+    outputs non-standard NaN/Infinity tokens. This function ensures safe
+    serialization by converting non-finite floats to None.
+    """
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_non_finite_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_non_finite_floats(v) for v in obj]
+    return obj
 
 
 def _get_event_hash(event: dict[str, Any]) -> str:
@@ -156,7 +173,12 @@ def append_diff_to_file(file_path: str, diff_event: dict[str, Any]) -> None:
         diff_event: The compilation_diff event to append.
     """
     with open(file_path, "a") as f:
-        f.write(json.dumps(diff_event) + "\n")
+        f.write(
+            orjson.dumps(
+                _sanitize_non_finite_floats(diff_event), option=orjson.OPT_NON_STR_KEYS
+            ).decode()
+            + "\n"
+        )
 
 
 class ConsolidatedDiffWriter:
@@ -275,10 +297,22 @@ class ConsolidatedDiffWriter:
         with open(path, "w") as f:
             # Write all unique compilation events first
             for event in self._events.values():
-                f.write(json.dumps(event) + "\n")
+                f.write(
+                    orjson.dumps(
+                        _sanitize_non_finite_floats(event),
+                        option=orjson.OPT_NON_STR_KEYS,
+                    ).decode()
+                    + "\n"
+                )
             # Then write all diff events
             for diff in self._diffs:
-                f.write(json.dumps(diff) + "\n")
+                f.write(
+                    orjson.dumps(
+                        _sanitize_non_finite_floats(diff),
+                        option=orjson.OPT_NON_STR_KEYS,
+                    ).decode()
+                    + "\n"
+                )
 
     @property
     def event_count(self) -> int:

@@ -1,7 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import gzip
-import json
 import os
 import re
 import shutil
@@ -10,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import orjson
 from tritonparse.shared_vars import (
     DEFAULT_TRACE_FILE_PREFIX_WITHOUT_USER as LOG_PREFIX,
     is_fbcode,
@@ -518,7 +518,11 @@ def parse_logs(
     # Save file mapping to parsed_log_dir
     log_file_list_path = os.path.join(parsed_log_dir, "log_file_list.json")
     with open(log_file_list_path, "w") as f:
-        json.dump(file_mapping, f, indent=2)
+        f.write(
+            orjson.dumps(
+                file_mapping, option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS
+            ).decode()
+        )
 
     # NOTICE: this print is required for tlparser-tritonparse integration
     # DON'T REMOVE THIS PRINT
