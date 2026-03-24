@@ -169,11 +169,11 @@ def _parse_value(value: str) -> Any:
 
     # Check for list (e.g., "[3024, 10752]")
     if value.startswith("[") and value.endswith("]"):
-        import json
+        import orjson
 
         try:
-            return json.loads(value)
-        except json.JSONDecodeError:
+            return orjson.loads(value)
+        except orjson.JSONDecodeError:
             return value
 
     # Try to convert to int

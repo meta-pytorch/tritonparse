@@ -11,10 +11,10 @@ Known limitations of this lightweight validator:
   other JSON Pointer paths (e.g., ``#/properties/...``) are not resolved.
 """
 
-import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+import orjson
 from tritonparse.tools.compression import open_compressed_file
 
 from .schema_loader import get_schema, get_supported_event_types
@@ -244,8 +244,8 @@ def validate_trace_file(filepath: str, max_errors: int = 50) -> Dict[str, Any]:
 
                 # Parse JSON
                 try:
-                    record = json.loads(line)
-                except json.JSONDecodeError as e:
+                    record = orjson.loads(line)
+                except orjson.JSONDecodeError as e:
                     result["valid"] = False
                     result["errors"].append(
                         {

@@ -9,9 +9,10 @@ They are primarily used as backup when LLM doesn't use tools to write files dire
 All parsers return None on invalid input (fail-safe design).
 """
 
-import json
 import re
 from typing import Optional
+
+import orjson
 
 
 def extract_json(text: str) -> Optional[dict]:
@@ -33,8 +34,8 @@ def extract_json(text: str) -> Optional[dict]:
 
     # Try direct JSON parsing
     try:
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
+        return orjson.loads(text.strip())
+    except orjson.JSONDecodeError:
         pass
 
     # Try extracting from markdown code block
@@ -42,8 +43,8 @@ def extract_json(text: str) -> Optional[dict]:
     match = re.search(pattern, text, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
+            return orjson.loads(match.group(1).strip())
+        except orjson.JSONDecodeError:
             pass
 
     return None

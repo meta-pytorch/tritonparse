@@ -9,13 +9,14 @@ This module provides:
 - MockClient for testing without actual LLM calls
 """
 
-import json
 import os
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Iterator, List, Optional, Tuple
+
+import orjson
 
 
 @dataclass
@@ -291,9 +292,9 @@ class ClaudeCodeClient(LLMClient):
             stdout_snippet = ""
             if result and result.stdout:
                 try:
-                    data = json.loads(result.stdout)
+                    data = orjson.loads(result.stdout)
                     stdout_snippet = data.get("result", result.stdout[:500])
-                except (json.JSONDecodeError, AttributeError):
+                except (orjson.JSONDecodeError, AttributeError):
                     stdout_snippet = result.stdout[:500]
             stderr_snippet = (
                 result.stderr[:500] if result and result.stderr else "(empty)"
@@ -383,7 +384,7 @@ class ClaudeCodeClient(LLMClient):
                         continue
 
                     try:
-                        event = json.loads(line)
+                        event = orjson.loads(line)
                         event_type = event.get("type")
 
                         if event_type == "assistant":
@@ -397,7 +398,7 @@ class ClaudeCodeClient(LLMClient):
                             if "session_id" in event:
                                 self.session_id = event["session_id"]
 
-                    except json.JSONDecodeError:
+                    except orjson.JSONDecodeError:
                         continue
 
                 process.wait(timeout=self.timeout)
@@ -440,7 +441,7 @@ class ClaudeCodeClient(LLMClient):
             Parsed Response object
         """
         try:
-            data = json.loads(stdout)
+            data = orjson.loads(stdout)
             self.session_id = data.get("session_id")
             return Response(
                 content=data.get("result", stdout),
@@ -448,6 +449,6 @@ class ClaudeCodeClient(LLMClient):
                 cost_usd=data.get("total_cost_usd"),
                 raw=data,
             )
-        except json.JSONDecodeError:
+        except orjson.JSONDecodeError:
             # Non-JSON output, return as-is
             return Response(content=stdout.strip())

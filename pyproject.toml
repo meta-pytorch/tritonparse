@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tritonparse"
 dynamic = ["version"]
-dependencies = []
+dependencies = ["orjson>=3.9"]
 requires-python = ">=3.10"
 description = "TritonParse: A Compiler Tracer, Visualizer, and mini-Reproducer Generator for Triton Kernels"
 readme = "README.md"

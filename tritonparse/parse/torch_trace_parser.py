@@ -9,12 +9,12 @@ kernels to their originating PyTorch compilation frame when pt_info is missing
 (e.g., in multi-process Triton JIT compilation scenarios).
 """
 
-import json
 import os
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+import orjson
 from tritonparse.tp_logger import get_logger
 
 logger = get_logger("TorchTraceParser")
@@ -116,8 +116,8 @@ def _parse_torch_trace_log(log_path: str) -> Dict[str, CompileInfo]:
                     continue
 
                 try:
-                    metadata = json.loads(json_str)
-                except (json.JSONDecodeError, ValueError):
+                    metadata = orjson.loads(json_str)
+                except (orjson.JSONDecodeError, ValueError):
                     continue
 
                 # Check if this is an inductor_output_code event

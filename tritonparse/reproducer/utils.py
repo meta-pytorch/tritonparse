@@ -3,13 +3,13 @@
 import ast
 import importlib
 import importlib.util
-import json
 import logging
 import sys
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
+import orjson
 import torch
 import triton.language as tl
 from tritonparse.tools.load_tensor import load_tensor
@@ -126,7 +126,7 @@ def create_args_from_json_file(json_path):
         tuple[list, dict]: Grid specification list and map of argument name to value.
     """
     with open(json_path, "r") as f:
-        data = json.load(f)
+        data = orjson.loads(f.read())
     return create_args_from_json(data)
 
 
