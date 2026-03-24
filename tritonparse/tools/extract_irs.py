@@ -20,10 +20,11 @@ Usage:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+import orjson
 
 
 def read_ndjson_line(file_path: Path, line_number: int) -> Optional[Dict[str, Any]]:
@@ -52,7 +53,7 @@ def read_ndjson_line(file_path: Path, line_number: int) -> Optional[Dict[str, An
                     if not line:
                         print(f"Warning: Line {line_number} is empty", file=sys.stderr)
                         return None
-                    return json.loads(line)
+                    return orjson.loads(line)
 
         print(
             f"Error: Line {line_number} not found in file (file has fewer lines)",
@@ -60,7 +61,7 @@ def read_ndjson_line(file_path: Path, line_number: int) -> Optional[Dict[str, An
         )
         return None
 
-    except json.JSONDecodeError as e:
+    except orjson.JSONDecodeError as e:
         print(f"Error: Invalid JSON on line {line_number}: {e}", file=sys.stderr)
         raise
 
@@ -232,7 +233,7 @@ Examples:
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    except json.JSONDecodeError as e:
+    except orjson.JSONDecodeError as e:
         print(f"Error: Failed to parse JSON - {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:

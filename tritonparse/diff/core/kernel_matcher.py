@@ -1,7 +1,5 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-from __future__ import annotations
-
 """
 Multi-strategy kernel matcher for trace-level diff.
 
@@ -16,6 +14,8 @@ Phase 2 — Within-group config pairing:
   similarity (num_stages, num_warps, shared memory). Unpaired compilations
   are reported as autotuning extras rather than "only in trace A/B".
 """
+
+from __future__ import annotations
 
 import difflib
 from typing import Any

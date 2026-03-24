@@ -50,6 +50,9 @@ def compute_launch_event_hash(launch_event: Dict[str, Any]) -> str:
     stable_event = _remove_keys_recursive(launch_event, excluded)
 
     # Sort keys for stable serialization
+    # NOTE: We use stdlib json here (not orjson) to preserve hash stability
+    # across versions, since json and orjson produce different byte output
+    # for the same data (Unicode escaping, float rendering).
     stable_json = json.dumps(stable_event, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(stable_json.encode()).hexdigest()[:16]
 

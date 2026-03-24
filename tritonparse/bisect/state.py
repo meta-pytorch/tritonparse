@@ -8,12 +8,13 @@ checkpoint/resume functionality. The state is saved as JSON and can be
 loaded to continue from where the workflow left off.
 """
 
-import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+import orjson
 
 
 class BisectPhase(Enum):
@@ -321,7 +322,12 @@ class StateManager:
 
         # Write JSON
         with open(save_path, "w") as f:
-            json.dump(state.to_dict(), f, indent=2)
+            f.write(
+                orjson.dumps(
+                    state.to_dict(),
+                    option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS,
+                ).decode()
+            )
 
         return save_path
 
@@ -338,11 +344,11 @@ class StateManager:
 
         Raises:
             FileNotFoundError: If state file doesn't exist.
-            json.JSONDecodeError: If file is not valid JSON.
+            orjson.JSONDecodeError: If file is not valid JSON.
             ValueError: If state data is invalid.
         """
         with open(path, "r") as f:
-            data = json.load(f)
+            data = orjson.loads(f.read())
         return BisectState.from_dict(data)
 
     @staticmethod

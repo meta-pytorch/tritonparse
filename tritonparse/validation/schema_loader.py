@@ -6,9 +6,10 @@ Works in both normal filesystem and PAR (Python Archive) environments
 by using importlib.resources for schema file access.
 """
 
-import json
 from importlib.resources import files as pkg_files
 from typing import Any, Dict, List, Optional
+
+import orjson
 
 _SCHEMAS_PACKAGE = "tritonparse.validation.schemas"
 
@@ -27,7 +28,7 @@ _loaded_schemas: Dict[str, Any] = {}
 def _load_schema_file(filename: str) -> Any:
     """Load a JSON schema file from the schemas package."""
     ref = pkg_files(_SCHEMAS_PACKAGE).joinpath(filename)
-    return json.loads(ref.read_text(encoding="utf-8"))
+    return orjson.loads(ref.read_bytes())
 
 
 def get_schema(event_type: str) -> Optional[Any]:
