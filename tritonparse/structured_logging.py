@@ -21,8 +21,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import orjson
 from triton.knobs import JITHook, LaunchHook
+from tritonparse._json_compat import dumps, loads
 
 from .shared_vars import DEFAULT_TRACE_FILE_PREFIX
 
@@ -961,12 +961,10 @@ class TritonJsonFormatter(logging.Formatter):
 
         log_entry["timestamp"] = self.formatTime(record, "%Y-%m-%dT%H:%M:%S.%fZ")
         if payload is not None:
-            log_entry["payload"] = orjson.loads(payload)
+            log_entry["payload"] = loads(payload)
         clean_log_entry = convert(log_entry)
         # NDJSON format requires a newline at the end of each line
-        json_str = orjson.dumps(
-            clean_log_entry, option=orjson.OPT_NON_STR_KEYS
-        ).decode()
+        json_str = dumps(clean_log_entry)
         return json_str + "\n"
 
 
@@ -1331,7 +1329,7 @@ def maybe_trace_triton(
             (Path(p) for c, p in metadata_group.items() if c.endswith(".json"))
         )
         with open(metadata_path, "r") as f:
-            metadata = orjson.loads(f.read())
+            metadata = loads(f.read())
             trace_data["metadata"].update(metadata)
     else:
         trace_data["metadata"].update(metadata)
@@ -1360,9 +1358,7 @@ def maybe_trace_triton(
     # Log the collected information through the tracing system
     trace_structured_triton(
         event_type,
-        payload_fn=lambda: orjson.dumps(
-            convert(trace_data), option=orjson.OPT_NON_STR_KEYS
-        ).decode(),
+        payload_fn=lambda: dumps(convert(trace_data)),
     )
 
     return trace_data

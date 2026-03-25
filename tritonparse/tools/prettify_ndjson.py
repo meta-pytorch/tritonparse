@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Union
 
-import orjson
+from tritonparse._json_compat import dumps, JSONDecodeError, loads
 
 from .compression import open_compressed_file
 
@@ -164,7 +164,7 @@ def load_ndjson(
                 total_lines_processed += 1
 
                 try:
-                    json_obj = orjson.loads(line)
+                    json_obj = loads(line)
 
                     # Filter out file_content and python_source for compilation events if not_save_irs is True
                     if not_save_irs and isinstance(json_obj, dict):
@@ -192,7 +192,7 @@ def load_ndjson(
                                     filtered_compilation_events += 1
 
                     json_objects.append(json_obj)
-                except orjson.JSONDecodeError as e:
+                except JSONDecodeError as e:
                     print(
                         f"Error parsing JSON on line {line_num}: {e}", file=sys.stderr
                     )
@@ -241,14 +241,7 @@ def save_prettified_json(
     """
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            f.write(
-                orjson.dumps(
-                    json_objects,
-                    option=orjson.OPT_INDENT_2
-                    | orjson.OPT_SORT_KEYS
-                    | orjson.OPT_NON_STR_KEYS,
-                ).decode()
-            )
+            f.write(dumps(json_objects, indent=True, sort_keys=True))
         print(f"Successfully converted to prettified JSON: {output_path}")
     except OSError as e:
         print(f"Error writing to file '{output_path}': {e}", file=sys.stderr)

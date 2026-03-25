@@ -10,7 +10,7 @@ ensure they have source_mappings, and match events by index or kernel name.
 from collections import defaultdict
 from typing import Any
 
-import orjson
+from tritonparse._json_compat import dumps, loads
 from tritonparse.tools.prettify_ndjson import load_ndjson
 
 
@@ -89,9 +89,9 @@ def ensure_source_mappings(event: dict[str, Any]) -> dict[str, Any]:
     # Reuse parse module function to generate source_mappings
     from tritonparse.parse.trace_processor import parse_single_trace_content
 
-    event_str = orjson.dumps(event, option=orjson.OPT_NON_STR_KEYS).decode()
+    event_str = dumps(event)
     parsed_str = parse_single_trace_content(event_str)
-    return orjson.loads(parsed_str.strip())
+    return loads(parsed_str.strip())
 
 
 def match_events_by_index(

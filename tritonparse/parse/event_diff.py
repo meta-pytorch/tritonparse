@@ -3,7 +3,7 @@
 from collections import defaultdict, OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
-import orjson
+from tritonparse._json_compat import dumps, loads
 
 from .sourcemap_utils import _flatten_dict, _to_ranges, _unflatten_dict
 
@@ -205,12 +205,12 @@ def _generate_autotune_analysis_events(
                 config_bucket = per_config_aggregates.setdefault(comp_hash, {})
                 for arg_name, arg_val in extracted.items():
                     try:
-                        value_key = orjson.dumps(
+                        value_key = dumps(
                             arg_val,
-                            option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS,
-                        ).decode()
+                            sort_keys=True,
+                        )
                     except TypeError:
-                        value_key = orjson.dumps(str(arg_val)).decode()
+                        value_key = dumps(str(arg_val))
                     arg_bucket = config_bucket.setdefault(arg_name, {})
                     if value_key not in arg_bucket:
                         arg_bucket[value_key] = {
@@ -264,7 +264,7 @@ def _generate_autotune_analysis_events(
                             if isinstance(comp_data, dict):
                                 comp_event = comp_data
                             else:
-                                comp_event = orjson.loads(comp_data)
+                                comp_event = loads(comp_data)
                             meta = comp_event.get("payload", {}).get("metadata", {})
                             config_params = {}
                             for key in (
@@ -470,9 +470,7 @@ def _generate_autotune_analysis_events(
         if autotune_args_summary is not None:
             analysis_event["autotune_args_summary"] = autotune_args_summary
 
-        output_events[output_file].append(
-            orjson.dumps(analysis_event, option=orjson.OPT_NON_STR_KEYS).decode() + "\n"
-        )
+        output_events[output_file].append(dumps(analysis_event) + "\n")
 
     # Third pass: Generate autotune_summary event with winner usage statistics
     # This provides a global view of how often each winner was used
@@ -507,9 +505,7 @@ def _generate_autotune_analysis_events(
             "event_type": "autotune_summary",
             "winner_run_counts": dict(winner_run_counts),
         }
-        summary_line = (
-            orjson.dumps(summary_event, option=orjson.OPT_NON_STR_KEYS).decode() + "\n"
-        )
+        summary_line = dumps(summary_event) + "\n"
         for output_file in output_events.keys():
             output_events[output_file].append(summary_line)
 
@@ -541,9 +537,10 @@ def _generate_launch_diff(
         launch_flat = _flatten_dict(launch)
         for key, value in launch_flat.items():
             # JSON doesn't support all Python types as values directly, str is safer
-            value_str = orjson.dumps(
-                value, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS
-            ).decode()
+            value_str = dumps(
+                value,
+                sort_keys=True,
+            )
             data_by_key[key][value_str].append(i)
 
     sames_flat = {}
@@ -556,7 +553,7 @@ def _generate_launch_diff(
         if len(value_groups) == 1:
             # This key has the same value across all launches
             value_str = list(value_groups.keys())[0]
-            sames_flat[key] = orjson.loads(value_str)
+            sames_flat[key] = loads(value_str)
         else:
             # This key has different values
             is_summary = any(summary_key in key for summary_key in SUMMARY_FIELDS)
@@ -570,7 +567,7 @@ def _generate_launch_diff(
                 for value_str, indices in value_groups.items():
                     values_dist.append(
                         {
-                            "value": orjson.loads(value_str),
+                            "value": loads(value_str),
                             "count": len(indices),
                             "launches": _to_ranges(indices),
                         }

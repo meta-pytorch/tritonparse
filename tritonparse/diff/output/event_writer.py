@@ -14,7 +14,7 @@ import math
 from dataclasses import asdict
 from typing import Any
 
-import orjson
+from tritonparse._json_compat import dumps
 from tritonparse.diff.core.diff_types import (
     CompilationDiffResult,
     PythonLineDiff,
@@ -173,12 +173,7 @@ def append_diff_to_file(file_path: str, diff_event: dict[str, Any]) -> None:
         diff_event: The compilation_diff event to append.
     """
     with open(file_path, "a") as f:
-        f.write(
-            orjson.dumps(
-                _sanitize_non_finite_floats(diff_event), option=orjson.OPT_NON_STR_KEYS
-            ).decode()
-            + "\n"
-        )
+        f.write(dumps(_sanitize_non_finite_floats(diff_event)) + "\n")
 
 
 class ConsolidatedDiffWriter:
@@ -297,22 +292,10 @@ class ConsolidatedDiffWriter:
         with open(path, "w") as f:
             # Write all unique compilation events first
             for event in self._events.values():
-                f.write(
-                    orjson.dumps(
-                        _sanitize_non_finite_floats(event),
-                        option=orjson.OPT_NON_STR_KEYS,
-                    ).decode()
-                    + "\n"
-                )
+                f.write(dumps(_sanitize_non_finite_floats(event)) + "\n")
             # Then write all diff events
             for diff in self._diffs:
-                f.write(
-                    orjson.dumps(
-                        _sanitize_non_finite_floats(diff),
-                        option=orjson.OPT_NON_STR_KEYS,
-                    ).decode()
-                    + "\n"
-                )
+                f.write(dumps(_sanitize_non_finite_floats(diff)) + "\n")
 
     @property
     def event_count(self) -> int:

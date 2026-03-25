@@ -5,7 +5,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import orjson
+from tritonparse._json_compat import dumps, JSONDecodeError, loads
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -67,7 +67,7 @@ def load_procedure_checks_from_file(file_path: str) -> List[Dict[str, Any]]:
 
     Raises:
         FileNotFoundError: If the file does not exist.
-        orjson.JSONDecodeError: If the file is not valid JSON.
+        JSONDecodeError: If the file is not valid JSON.
         ValueError: If the file structure is invalid.
     """
     path = Path(file_path)
@@ -75,7 +75,7 @@ def load_procedure_checks_from_file(file_path: str) -> List[Dict[str, Any]]:
         raise FileNotFoundError(f"Procedure checks file not found: {file_path}")
 
     with open(path, "r", encoding="utf-8") as f:
-        data = orjson.loads(f.read())
+        data = loads(f.read())
 
     # Validate structure
     if not isinstance(data, dict):
@@ -127,7 +127,7 @@ def get_default_procedure_checks() -> List[Dict[str, Any]]:
     default_path = get_default_procedure_checks_path()
     try:
         return load_procedure_checks_from_file(default_path)
-    except (FileNotFoundError, orjson.JSONDecodeError, ValueError) as e:
+    except (FileNotFoundError, JSONDecodeError, ValueError) as e:
         logger.warning(
             f"Failed to load default procedure checks from {default_path}: {e}"
         )
@@ -288,8 +288,8 @@ def _prescan_for_fake_compilations(
                 continue
 
             try:
-                parsed = orjson.loads(json_str)
-            except orjson.JSONDecodeError:
+                parsed = loads(json_str)
+            except JSONDecodeError:
                 continue
 
             event_type = parsed.get("event_type")
@@ -372,7 +372,7 @@ def parse_single_trace_content(trace_content: str) -> str:
         str: The updated trace content with source mappings as a JSON string.
     """
 
-    entry = orjson.loads(trace_content)
+    entry = loads(trace_content)
     if entry.get("event_type") == "compilation":
         payload = entry.setdefault("payload", {})
         file_content = payload.get("file_content", {})
@@ -388,7 +388,7 @@ def parse_single_trace_content(trace_content: str) -> str:
         if not (ttir_key or ttgir_key or ptx_key or amdgcn_key or sass_key):
             logger.warning("No IR files found in the payload.")
             # Still return with proper NDJSON format (with newline)
-            return orjson.dumps(entry, option=orjson.OPT_NON_STR_KEYS).decode() + "\n"
+            return dumps(entry) + "\n"
 
         # generate ttir->source, ttgir->source, ptx->source, sass->source
         ttir_map = process_ir(ttir_key, file_content, file_path)
@@ -454,7 +454,7 @@ def parse_single_trace_content(trace_content: str) -> str:
             "python": py_map,
         }
     # NDJSON format requires a newline at the end of each line
-    return orjson.dumps(entry, option=orjson.OPT_NON_STR_KEYS).decode() + "\n"
+    return dumps(entry) + "\n"
 
 
 def _resolve_compile_info(
@@ -672,8 +672,8 @@ def parse_single_file(
             # We don't need to generate full mappings for every line here,
             # just enough to get the event type and necessary IDs.
             try:
-                parsed_json = orjson.loads(json_str)
-            except orjson.JSONDecodeError:
+                parsed_json = loads(json_str)
+            except JSONDecodeError:
                 logger.warning(f"Failed to parse JSON on line {i + 1} in {file_path}")
                 continue
 
@@ -795,23 +795,18 @@ def parse_single_file(
                 compilation_data["occurrence_id"] = next_occurrence_id
                 next_occurrence_id += 1
 
-            compilation_json_str = orjson.dumps(
-                compilation_data, option=orjson.OPT_NON_STR_KEYS
-            ).decode()
+            compilation_json_str = dumps(compilation_data)
 
             processed_compilation_line = parse_single_trace_content(
                 compilation_json_str
             )
             all_output_lines[output_file].append(processed_compilation_line)
-            compilation_event = orjson.loads(processed_compilation_line)
+            compilation_event = loads(processed_compilation_line)
         else:
             compilation_event = None
 
         for launch_event, _ in launches_with_indices:
-            all_output_lines[output_file].append(
-                orjson.dumps(launch_event, option=orjson.OPT_NON_STR_KEYS).decode()
-                + "\n"
-            )
+            all_output_lines[output_file].append(dumps(launch_event) + "\n")
 
         if compilation_event:
             ir_analysis = _generate_ir_analysis(
@@ -823,12 +818,7 @@ def parse_single_file(
                     "hash": _kernel_hash,
                     "ir_analysis": ir_analysis,
                 }
-                all_output_lines[output_file].append(
-                    orjson.dumps(
-                        ir_analysis_event, option=orjson.OPT_NON_STR_KEYS
-                    ).decode()
-                    + "\n"
-                )
+                all_output_lines[output_file].append(dumps(ir_analysis_event) + "\n")
 
         if compilation_event and launches_with_indices:
             sames, diffs, launch_index_map = _generate_launch_diff(
@@ -848,10 +838,7 @@ def parse_single_file(
             # Assign occurrence_id to launch_diff event
             launch_diff_event["occurrence_id"] = next_occurrence_id
             next_occurrence_id += 1
-            all_output_lines[output_file].append(
-                orjson.dumps(launch_diff_event, option=orjson.OPT_NON_STR_KEYS).decode()
-                + "\n"
-            )
+            all_output_lines[output_file].append(dumps(launch_diff_event) + "\n")
 
     # Generate autotune analysis events
     autotune_events_by_file = _generate_autotune_analysis_events(
@@ -863,12 +850,10 @@ def parse_single_file(
     )
     for output_file, events in autotune_events_by_file.items():
         for ev_str in events:
-            ev = orjson.loads(ev_str)
+            ev = loads(ev_str)
             ev["occurrence_id"] = next_occurrence_id
             next_occurrence_id += 1
-            all_output_lines[output_file].append(
-                orjson.dumps(ev, option=orjson.OPT_NON_STR_KEYS).decode() + "\n"
-            )
+            all_output_lines[output_file].append(dumps(ev) + "\n")
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)

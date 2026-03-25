@@ -14,7 +14,7 @@ Known limitations of this lightweight validator:
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-import orjson
+from tritonparse._json_compat import JSONDecodeError, loads
 from tritonparse.tools.compression import open_compressed_file
 
 from .schema_loader import get_schema, get_supported_event_types
@@ -244,8 +244,8 @@ def validate_trace_file(filepath: str, max_errors: int = 50) -> Dict[str, Any]:
 
                 # Parse JSON
                 try:
-                    record = orjson.loads(line)
-                except orjson.JSONDecodeError as e:
+                    record = loads(line)
+                except JSONDecodeError as e:
                     result["valid"] = False
                     result["errors"].append(
                         {

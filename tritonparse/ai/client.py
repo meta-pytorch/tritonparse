@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Iterator, List, Optional, Tuple
 
-import orjson
+from tritonparse._json_compat import JSONDecodeError, loads
 
 
 @dataclass
@@ -292,9 +292,9 @@ class ClaudeCodeClient(LLMClient):
             stdout_snippet = ""
             if result and result.stdout:
                 try:
-                    data = orjson.loads(result.stdout)
+                    data = loads(result.stdout)
                     stdout_snippet = data.get("result", result.stdout[:500])
-                except (orjson.JSONDecodeError, AttributeError):
+                except (JSONDecodeError, AttributeError):
                     stdout_snippet = result.stdout[:500]
             stderr_snippet = (
                 result.stderr[:500] if result and result.stderr else "(empty)"
@@ -384,7 +384,7 @@ class ClaudeCodeClient(LLMClient):
                         continue
 
                     try:
-                        event = orjson.loads(line)
+                        event = loads(line)
                         event_type = event.get("type")
 
                         if event_type == "assistant":
@@ -398,7 +398,7 @@ class ClaudeCodeClient(LLMClient):
                             if "session_id" in event:
                                 self.session_id = event["session_id"]
 
-                    except orjson.JSONDecodeError:
+                    except JSONDecodeError:
                         continue
 
                 process.wait(timeout=self.timeout)
@@ -441,7 +441,7 @@ class ClaudeCodeClient(LLMClient):
             Parsed Response object
         """
         try:
-            data = orjson.loads(stdout)
+            data = loads(stdout)
             self.session_id = data.get("session_id")
             return Response(
                 content=data.get("result", stdout),
@@ -449,6 +449,6 @@ class ClaudeCodeClient(LLMClient):
                 cost_usd=data.get("total_cost_usd"),
                 raw=data,
             )
-        except orjson.JSONDecodeError:
+        except JSONDecodeError:
             # Non-JSON output, return as-is
             return Response(content=stdout.strip())

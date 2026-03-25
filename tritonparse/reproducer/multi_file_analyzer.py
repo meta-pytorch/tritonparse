@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Set
 
-import orjson
+from tritonparse._json_compat import dumps
 from tritonparse.reproducer.ast_analyzer import CallGraph, Edge
 from tritonparse.reproducer.consolidated_result import AnalysisStats, ConsolidatedResult
 from tritonparse.reproducer.import_info import ImportInfo
@@ -829,9 +829,5 @@ if __name__ == "__main__":
         output_path = temp_path
 
     with open(output_path, "w") as f:
-        f.write(
-            orjson.dumps(
-                output_data, option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS
-            ).decode()
-        )
+        f.write(dumps(output_data, indent=True))
     logger.info("Detailed results written to: %s", output_path)

@@ -12,7 +12,7 @@ All parsers return None on invalid input (fail-safe design).
 import re
 from typing import Optional
 
-import orjson
+from tritonparse._json_compat import JSONDecodeError, loads
 
 
 def extract_json(text: str) -> Optional[dict]:
@@ -34,8 +34,8 @@ def extract_json(text: str) -> Optional[dict]:
 
     # Try direct JSON parsing
     try:
-        return orjson.loads(text.strip())
-    except orjson.JSONDecodeError:
+        return loads(text.strip())
+    except JSONDecodeError:
         pass
 
     # Try extracting from markdown code block
@@ -43,8 +43,8 @@ def extract_json(text: str) -> Optional[dict]:
     match = re.search(pattern, text, re.DOTALL)
     if match:
         try:
-            return orjson.loads(match.group(1).strip())
-        except orjson.JSONDecodeError:
+            return loads(match.group(1).strip())
+        except JSONDecodeError:
             pass
 
     return None
