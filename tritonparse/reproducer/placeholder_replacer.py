@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
-import orjson
+from tritonparse._json_compat import dumps
 from tritonparse.reproducer.function_extractor import (
     extract_autotune_config_params,
     extract_function_with_decorators,
@@ -618,10 +618,10 @@ triton.autotune = _patched_autotune
             return code.replace(self.CONTEXT_JSON_PLACEHOLDER, "")
 
         # Serialize launch event to JSON
-        json_str = orjson.dumps(
+        json_str = dumps(
             context_bundle.raw_launch_event,
-            option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS,
-        ).decode()
+            indent=True,
+        )
 
         # Warn if blob_path detected (external tensor dependencies)
         self._warn_if_blob_path_present(context_bundle.raw_launch_event)
@@ -648,10 +648,10 @@ triton.autotune = _patched_autotune
         if not embed_context or kernel_import != KernelImportMode.OVERRIDE_TTIR:
             return code.replace(self.COMPILATION_JSON_PLACEHOLDER, "")
 
-        json_str = orjson.dumps(
+        json_str = dumps(
             context_bundle.raw_comp_event,
-            option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS,
-        ).decode()
+            indent=True,
+        )
         embedded = f'COMPILATION_JSON = r"""\n{json_str}\n"""'
         return code.replace(self.COMPILATION_JSON_PLACEHOLDER, embedded)
 

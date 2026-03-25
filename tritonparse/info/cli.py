@@ -169,11 +169,11 @@ def _parse_value(value: str) -> Any:
 
     # Check for list (e.g., "[3024, 10752]")
     if value.startswith("[") and value.endswith("]"):
-        import orjson
+        from tritonparse._json_compat import JSONDecodeError, loads
 
         try:
-            return orjson.loads(value)
-        except orjson.JSONDecodeError:
+            return loads(value)
+        except JSONDecodeError:
             return value
 
     # Try to convert to int

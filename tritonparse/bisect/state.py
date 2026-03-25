@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import orjson
+from tritonparse._json_compat import dumps, loads
 
 
 class BisectPhase(Enum):
@@ -322,12 +322,7 @@ class StateManager:
 
         # Write JSON
         with open(save_path, "w") as f:
-            f.write(
-                orjson.dumps(
-                    state.to_dict(),
-                    option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS,
-                ).decode()
-            )
+            f.write(dumps(state.to_dict(), indent=True))
 
         return save_path
 
@@ -344,11 +339,11 @@ class StateManager:
 
         Raises:
             FileNotFoundError: If state file doesn't exist.
-            orjson.JSONDecodeError: If file is not valid JSON.
+            JSONDecodeError: If file is not valid JSON.
             ValueError: If state data is invalid.
         """
         with open(path, "r") as f:
-            data = orjson.loads(f.read())
+            data = loads(f.read())
         return BisectState.from_dict(data)
 
     @staticmethod
