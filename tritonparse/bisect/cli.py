@@ -621,6 +621,7 @@ def _orchestrate_workflow(
         command_log=str(logger.command_log_path) if logger else None,
         elapsed_time=ui.progress.elapsed_seconds,
         logger=logger,
+        use_rich=ui._rich_enabled,
     )
 
     return 0 if state and state.phase == BisectPhase.COMPLETED else 1
@@ -838,6 +839,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
         command_log=str(logger.command_log_path) if logger else None,
         elapsed_time=ui.progress.elapsed_seconds,
         logger=logger,
+        use_rich=ui._rich_enabled,
     )
 
     return 0 if culprit else 1
@@ -1006,6 +1008,7 @@ def _handle_pair_test(args: argparse.Namespace) -> int:
         command_log=str(logger.command_log_path) if logger else None,
         elapsed_time=ui.progress.elapsed_seconds,
         logger=logger,
+        use_rich=ui._rich_enabled,
     )
 
     # Return success if we found a failing pair or all passed
@@ -1135,6 +1138,7 @@ def _handle_llvm_only(args: argparse.Namespace) -> int:
         command_log=str(logger.command_log_path) if logger else None,
         elapsed_time=ui.progress.elapsed_seconds,
         logger=logger,
+        use_rich=ui._rich_enabled,
     )
 
     return 0 if culprit else 1
