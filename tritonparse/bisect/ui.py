@@ -4,8 +4,8 @@
 Rich TUI interface for bisect operations.
 
 This module provides a split-screen terminal UI for displaying bisect progress
-and real-time command output. It gracefully falls back to plain text when
-Rich is not available or when running in non-TTY environments.
+and real-time command output. It falls back to plain text when running in
+non-TTY environments or when Rich TUI is disabled via --no-tui.
 """
 
 import re
@@ -18,17 +18,11 @@ from typing import Callable, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from tritonparse.bisect.logger import BisectLogger
 
-# Graceful fallback if rich not installed
-try:
-    from rich.console import Console
-    from rich.layout import Layout
-    from rich.live import Live
-    from rich.panel import Panel
-    from rich.text import Text
-
-    RICH_AVAILABLE = True
-except ImportError:
-    RICH_AVAILABLE = False
+from rich.console import Console
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
 
 # GitHub commit URL mapping - for generating clickable links
 GITHUB_COMMIT_URLS = {
@@ -178,9 +172,6 @@ class BisectUI:
         if not enabled:
             self._rich_enabled = False
             self._disabled_reason = "disabled by --no-tui flag"
-        elif not RICH_AVAILABLE:
-            self._rich_enabled = False
-            self._disabled_reason = "rich library not installed (pip install rich)"
         elif not sys.stdout.isatty() or not sys.stderr.isatty():
             self._rich_enabled = False
             self._disabled_reason = "not running in a TTY (e.g., piped output or CI)"
@@ -576,11 +567,6 @@ class BisectUI:
             self.update_progress(steps_remaining=steps_remaining)
 
 
-def is_rich_available() -> bool:
-    """Check if Rich library is available."""
-    return RICH_AVAILABLE
-
-
 def _generate_title(mode: SummaryMode, success: bool = True) -> str:
     """
     Generate panel title based on mode.
@@ -618,6 +604,7 @@ def _print_pair_test_summary(
     command_log: Optional[str],
     elapsed_time: Optional[float],
     logger: Optional["BisectLogger"],
+    use_rich: bool = True,
 ) -> None:
     """
     Print pair test summary with Rich formatting (or plain text fallback).
@@ -630,8 +617,9 @@ def _print_pair_test_summary(
         command_log: Command log file path.
         elapsed_time: Total execution time in seconds.
         logger: Optional BisectLogger to write summary to log file.
+        use_rich: Whether to use Rich formatting. If False, uses plain text.
     """
-    if RICH_AVAILABLE:
+    if use_rich:
         console = Console(record=True)
         _print_pair_test_summary_rich(
             result, error_msg, log_dir, log_file, command_log, elapsed_time, console
@@ -853,6 +841,7 @@ def print_final_summary(
     command_log: Optional[str] = None,
     elapsed_time: Optional[float] = None,
     logger: Optional["BisectLogger"] = None,
+    use_rich: bool = True,
 ) -> None:
     """
     Print final bisect summary with Rich formatting (or plain text fallback).
@@ -870,6 +859,7 @@ def print_final_summary(
         command_log: Command log file path (shown on error).
         elapsed_time: Total execution time in seconds.
         logger: Optional BisectLogger to write summary to log file.
+        use_rich: Whether to use Rich formatting. If False, uses plain text.
     """
     # Handle pair test mode separately
     if mode == SummaryMode.PAIR_TEST:
@@ -881,6 +871,7 @@ def print_final_summary(
             command_log,
             elapsed_time,
             logger,
+            use_rich=use_rich,
         )
         return
 
@@ -897,7 +888,7 @@ def print_final_summary(
         and llvm_bump_info.is_llvm_bump
     )
 
-    if RICH_AVAILABLE:
+    if use_rich:
         # Use record=True to capture output for logging
         console = Console(record=True)
         _print_final_summary_rich(

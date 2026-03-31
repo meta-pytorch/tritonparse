@@ -27,9 +27,7 @@ from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 from tritonparse.bisect.ui import (
     BisectProgress,
     BisectUI,
-    is_rich_available,
     print_final_summary,
-    RICH_AVAILABLE,
     SummaryMode,
 )
 
@@ -46,7 +44,6 @@ __all__ = [
     "CommitDetectorError",
     "CommitPair",
     "EnvironmentManager",
-    "is_rich_available",
     "LLVMBisectError",
     "LLVMBisector",
     "LLVMBumpInfo",
@@ -54,7 +51,6 @@ __all__ = [
     "PairTesterError",
     "PairTestResult",
     "print_final_summary",
-    "RICH_AVAILABLE",
     "ShellExecutor",
     "StateManager",
     "SummaryMode",
