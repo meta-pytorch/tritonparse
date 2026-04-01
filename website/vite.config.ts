@@ -76,6 +76,10 @@ export default defineConfig({
   build: {
     sourcemap: true,
     rollupOptions: {
+      onwarn(warning, defaultHandler) {
+        if (warning.code === 'EMPTY_IMPORT_META') return
+        defaultHandler(warning)
+      },
       output: {
         format: 'iife',
         entryFileNames: 'assets/[name]-[hash].js',
