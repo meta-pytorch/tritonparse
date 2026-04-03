@@ -1,4 +1,22 @@
-import { ClpArchiveReader } from "clp-ffi-js/sfa";
+import ClpModuleFactory from "clp-ffi-js/worker";
+import type { ClpSfaReader, MainModule } from "clp-ffi-js/worker";
+
+const CLP_WASM_URL = new URL(
+    "../../node_modules/clp-ffi-js/dist/ClpFfiJs-worker.wasm",
+    import.meta.url
+).href;
+
+let clpModulePromise: Promise<MainModule> | null = null;
+
+function getClpModule(): Promise<MainModule> {
+    if (clpModulePromise === null) {
+        clpModulePromise = ClpModuleFactory({
+            locateFile: (path: string, prefix: string) =>
+                path === "ClpFfiJs-worker.wasm" ? CLP_WASM_URL : `${prefix}${path}`,
+        });
+    }
+    return clpModulePromise;
+}
 
 /**
  * Source mapping information that connects lines in IR code to source code
@@ -489,15 +507,18 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
  */
 export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[]> {
     if (isClpFile(buffer)) {
-        let reader: ClpArchiveReader | null = null;
+        let reader: ClpSfaReader | null = null;
         try {
-            reader = await ClpArchiveReader.create(new Uint8Array(buffer));
+            const clpModule = await getClpModule();
+            reader = new clpModule.ClpSfaReader(new Uint8Array(buffer));
             const entries: LogEntry[] = [];
 
             // TODO: Replace decodeAll() with a streaming API once clp-ffi-js supports it.
             for (const event of reader.decodeAll()) {
-                const parsedLine = event.getKvPairs() as unknown as LogEntry | null;
-                if (parsedLine === null) {
+                let parsedLine: LogEntry;
+                try {
+                    parsedLine = JSON.parse(event.message) as LogEntry;
+                } catch {
                     console.warn(`Failed to parse CLP log event ${event.logEventIdx.toString()} as JSON`);
                     continue;
                 }
@@ -510,7 +531,7 @@ export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[
             const message = error instanceof Error ? error.message : String(error);
             throw new Error(`Failed to process clp stream: ${message}`);
         } finally {
-            reader?.close();
+            reader?.delete();
         }
     } else if (isGzipFile(buffer)) {
         try {
