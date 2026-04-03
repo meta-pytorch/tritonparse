@@ -42,7 +42,10 @@ const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({
       // Support NDJSON and compressed files only
       const fileName = file.name.toLowerCase();
       const isValidFile =
-        fileName.endsWith(".ndjson") || fileName.endsWith(".gz") || file.type === "application/x-ndjson";
+        fileName.endsWith(".ndjson") ||
+        fileName.endsWith(".gz") ||
+        fileName.endsWith(".clp") ||
+        file.type === "application/x-ndjson";
 
       if (isValidFile) {
         setError(null);

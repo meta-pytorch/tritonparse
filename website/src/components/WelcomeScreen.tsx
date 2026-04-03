@@ -21,7 +21,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
 
       // Support NDJSON and compressed files only
       const fileName = file.name.toLowerCase();
-      const isValidFile = fileName.endsWith(".ndjson") || fileName.endsWith(".gz");
+      const isValidFile =
+        fileName.endsWith(".ndjson") ||
+        fileName.endsWith(".gz") ||
+        fileName.endsWith(".clp");
 
       if (isValidFile) {
         handleFileSelected(file);
@@ -53,7 +56,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
 
       // Support NDJSON and compressed files only
       const fileName = file.name.toLowerCase();
-      const isValidFile = fileName.endsWith(".ndjson") || fileName.endsWith(".gz");
+      const isValidFile =
+        fileName.endsWith(".ndjson") ||
+        fileName.endsWith(".gz") ||
+        fileName.endsWith(".clp");
 
       if (isValidFile) {
         handleFileSelected(file);
