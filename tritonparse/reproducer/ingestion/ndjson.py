@@ -1,5 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -191,6 +192,55 @@ def _pack_args(args: Dict[str, Any]) -> Dict[str, Any]:
     return packed
 
 
+def _get_num_warps(
+    launch_event: Dict[str, Any], comp_event: Dict[str, Any]
+) -> Optional[int]:
+    """
+    Get the correct input num_warps for a kernel launch.
+
+    For warp-specialized kernels, the Triton compiler overwrites
+    metadata["num_warps"] with ttg.total-num-warps (the post-expansion
+    warp count). Feeding this back as input inflates the warp count and
+    breaks register allocation. This function recovers the original value
+    from the TTGIR module attribute "ttg.num-warps".
+
+    If a correction is made, the raw launch event's compilation_metadata
+    is also updated so the saved context JSON stays consistent.
+
+    Returns the original num_warps if found in TTGIR, otherwise falls back
+    to the value from compilation_metadata.
+    """
+    comp_meta = launch_event.get("compilation_metadata", {})
+    metadata_num_warps = comp_meta.get("num_warps")
+    if metadata_num_warps is None:
+        return None
+
+    # Search TTGIR content in the compilation event for the original value
+    payload = comp_event.get("payload", {})
+    file_content = payload.get("file_content", {})
+    for filename, content in file_content.items():
+        if not filename.endswith(".ttgir") or not isinstance(content, str):
+            continue
+        match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', content)
+        if match:
+            original = int(match.group(1))
+            if original != metadata_num_warps:
+                logger.warning(
+                    "Warp-specialized kernel: correcting num_warps=%d "
+                    "(post-expansion) to ttg.num-warps=%d (original input)",
+                    metadata_num_warps,
+                    original,
+                )
+                # Fix the raw launch event so the saved context JSON
+                # is consistent with the reproducer script.
+                comp_meta["total_num_warps"] = metadata_num_warps
+                comp_meta["num_warps"] = original
+                return original
+            break
+
+    return metadata_num_warps
+
+
 def build_context_bundle(
     events: List[Dict[str, Any]], line_index: Optional[int] = None
 ):
@@ -226,13 +276,14 @@ def build_context_bundle(
         )
 
     comp_meta = launch_event.get("compilation_metadata", {})
+    num_warps = _get_num_warps(launch_event, comp_event)
 
     # Compile metadata subset we care about.
     # Compile parameters reference: triton.Config class in triton/runtime/autotuner.py
     # https://github.com/triton-lang/triton/blob/main/python/triton/runtime/autotuner.py
     compile_block = {
         # Core compile parameters
-        "num_warps": comp_meta.get("num_warps"),
+        "num_warps": num_warps,
         "num_stages": comp_meta.get("num_stages"),
         "num_ctas": comp_meta.get("num_ctas"),
         "maxnreg": comp_meta.get("maxnreg"),
