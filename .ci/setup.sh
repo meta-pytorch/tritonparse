@@ -174,6 +174,7 @@ sudo -E bash -c "source /tmp/install_cuda.sh && install_cudnn \"${CUDA_MAJOR_VER
 # Install PyTorch nightly
 echo "Installing PyTorch nightly..."
 pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+pip install packaging  # Workaround: PyTorch nightly missing packaging dependency
 
 # Verify PyTorch installation
 echo "Verifying PyTorch installation..."
