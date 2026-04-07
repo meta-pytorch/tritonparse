@@ -1,22 +1,4 @@
-import ClpModuleFactory from "clp-ffi-js/worker";
-import type { ClpSfaReader, MainModule } from "clp-ffi-js/worker";
-
-const CLP_WASM_URL = new URL(
-    "../../node_modules/clp-ffi-js/dist/ClpFfiJs-worker.wasm",
-    import.meta.url
-).href;
-
-let clpModulePromise: Promise<MainModule> | null = null;
-
-function getClpModule(): Promise<MainModule> {
-    if (clpModulePromise === null) {
-        clpModulePromise = ClpModuleFactory({
-            locateFile: (path: string, prefix: string) =>
-                path === "ClpFfiJs-worker.wasm" ? CLP_WASM_URL : `${prefix}${path}`,
-        });
-    }
-    return clpModulePromise;
-}
+import { ClpArchiveReader } from "clp-ffi-js/sfa";
 
 /**
  * Source mapping information that connects lines in IR code to source code
@@ -507,10 +489,9 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
  */
 export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[]> {
     if (isClpFile(buffer)) {
-        let reader: ClpSfaReader | null = null;
+        let reader: ClpArchiveReader | null = null;
         try {
-            const clpModule = await getClpModule();
-            reader = new clpModule.ClpSfaReader(new Uint8Array(buffer));
+            reader = await ClpArchiveReader.create(new Uint8Array(buffer));
             const entries: LogEntry[] = [];
 
             // TODO: Replace decodeAll() with a streaming API once clp-ffi-js supports it.
@@ -531,7 +512,7 @@ export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[
             const message = error instanceof Error ? error.message : String(error);
             throw new Error(`Failed to process clp stream: ${message}`);
         } finally {
-            reader?.delete();
+            reader?.close();
         }
     } else if (isGzipFile(buffer)) {
         try {
