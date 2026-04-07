@@ -120,8 +120,17 @@ TRITONPARSE_TENSOR_SAVE_SKIP_RUNS = int(
 TRITONPARSE_TENSOR_SAVE_MAX_RUNS = int(
     os.getenv("TRITONPARSE_TENSOR_SAVE_MAX_RUNS", "0")
 )
-# Whether upload raw logs to Manifold (ON by default)
-TRITONPARSE_TRACE_MANIFOLD = bool(os.getenv("TRITONPARSE_TRACE_MANIFOLD", "1"))
+# Whether upload raw logs to Manifold (ON only in fbcode MAST environment by default)
+_trace_manifold_default = (
+    "1" if is_fbcode() and os.getenv("MAST_HPC_JOB_NAME") is not None else "0"
+)
+TRITONPARSE_TRACE_MANIFOLD = os.getenv(
+    "TRITONPARSE_TRACE_MANIFOLD", _trace_manifold_default
+).lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 TRITON_TRACE_HANDLER = None
 # Global tensor blob manager instance
