@@ -91,7 +91,7 @@ const DataSourceSelector: React.FC<DataSourceSelectorProps> = ({
           <input
             type="file"
             id="fileInput"
-            accept=".ndjson,.gz,application/x-ndjson,application/gzip"
+            accept=".clp,.gz,.ndjson,application/gzip,application/x-ndjson"
             onChange={handleFileChange}
             disabled={isLoading}
             className="hidden"

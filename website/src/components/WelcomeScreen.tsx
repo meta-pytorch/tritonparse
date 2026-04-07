@@ -108,7 +108,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
           <input
             type="file"
             id="welcomeFileInput"
-            accept=".ndjson,.gz,application/x-ndjson,application/gzip"
+            accept=".clp,.gz,.ndjson,application/gzip,application/x-ndjson"
             onChange={handleFileChange}
             className="hidden"
           />
