@@ -120,8 +120,8 @@ TRITONPARSE_TENSOR_SAVE_SKIP_RUNS = int(
 TRITONPARSE_TENSOR_SAVE_MAX_RUNS = int(
     os.getenv("TRITONPARSE_TENSOR_SAVE_MAX_RUNS", "0")
 )
-# Whether upload to Manifold
-TRITONPARSE_TRACE_MANIFOLD = bool(os.getenv("TRITONPARSE_TRACE_MANIFOLD", None))
+# Whether upload raw logs to Manifold (ON by default)
+TRITONPARSE_TRACE_MANIFOLD = bool(os.getenv("TRITONPARSE_TRACE_MANIFOLD", "1"))
 
 TRITON_TRACE_HANDLER = None
 # Global tensor blob manager instance
