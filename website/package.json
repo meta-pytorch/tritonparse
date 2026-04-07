@@ -14,7 +14,6 @@
     "@heroicons/react": "^2.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/react-syntax-highlighter": "^15.5.13",
-    "clp-ffi-js": "file:../../clp/components/core/build/clp-ffi-js/clp-ffi-js-0.7.0-beta.1.tgz",
     "monaco-editor": "^0.55.1",
     "prismjs": "^1.30.0",
     "react": "^19.2.4",
