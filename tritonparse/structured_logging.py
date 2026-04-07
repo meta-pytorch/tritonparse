@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from triton.knobs import JITHook, LaunchHook
 from tritonparse._json_compat import dumps, loads
 
-from .shared_vars import DEFAULT_TRACE_FILE_PREFIX
+from .shared_vars import DEFAULT_TRACE_FILE_PREFIX, is_fbcode
 
 
 log = logging.getLogger(__name__)
@@ -1163,6 +1163,7 @@ class TritonTraceHandler(logging.StreamHandler):
             self.close()
         if (
             TRITONPARSE_TRACE_MANIFOLD
+            and is_fbcode()
             and hasattr(self, "log_file_name")
             and self.log_file_name
             and os.path.exists(self.log_file_name)
