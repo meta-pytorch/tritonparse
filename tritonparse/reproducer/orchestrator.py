@@ -11,7 +11,11 @@ from tritonparse.reproducer.placeholder_replacer import (
 )
 from tritonparse.reproducer.templates.loader import load_template_code
 from tritonparse.reproducer.types import KernelImportMode
-from tritonparse.reproducer.utils import determine_output_paths, format_python_code
+from tritonparse.reproducer.utils import (
+    determine_output_paths,
+    format_python_code,
+    save_captured_irs,
+)
 from tritonparse.shared_vars import is_fbcode
 from tritonparse.tools.prettify_ndjson import load_ndjson, save_prettified_json
 from tritonparse.tp_logger import logger
@@ -101,6 +105,10 @@ def reproduce(
             temp_json_path.parent / f"{temp_json_path.stem}_compilation.json"
         )
         save_prettified_json(context_bundle.raw_comp_event, comp_json_path)
+
+    # Save IR files for OVERRIDE_TTIR mode
+    if kernel_import == KernelImportMode.OVERRIDE_TTIR:
+        save_captured_irs(context_bundle.raw_comp_event, out_py_path.parent)
 
     logger.debug("Loading reproducer template.")
     template_code = load_template_code(template)
