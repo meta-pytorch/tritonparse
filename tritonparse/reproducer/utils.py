@@ -447,6 +447,36 @@ def _create_arg_from_info(arg_info):
         return None
 
 
+def save_captured_irs(raw_comp_event: dict, output_dir: Path) -> None:
+    """Save IR files from a compilation event to a ``captured_irs/`` directory.
+
+    The compilation event's ``payload.file_content`` contains all text IR stages
+    (TTIR, TTGIR, LLIR, PTX) as strings.  We save them to disk so the stub
+    reproducer can use them with ``ir_override`` on a ``triton.Config``.
+    """
+    file_content = raw_comp_event.get("payload", {}).get("file_content", {})
+    if not file_content:
+        logger.warning(
+            "No IR file_content found in compilation event. "
+            "OVERRIDE_TTIR mode reproducer may not work correctly."
+        )
+        return
+
+    ir_dir = output_dir / "captured_irs"
+    ir_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for filename, content in file_content.items():
+        # Sanitize filename to prevent path traversal from untrusted input.
+        safe_name = Path(filename).name
+        ir_path = ir_dir / safe_name
+        ir_path.write_text(content, encoding="utf-8")
+        saved.append(safe_name)
+
+    if saved:
+        logger.info("Saved %d IR files to %s: %s", len(saved), ir_dir, saved)
+
+
 def determine_output_paths(
     out_dir: str, kernel_name: str, template: str, line_index: int
 ):

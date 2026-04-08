@@ -12,7 +12,7 @@ class KernelImportMode(str, Enum):
     Attributes:
         DEFAULT: Import kernel from original file (current behavior).
         COPY: Embed kernel source code directly in reproducer.
-        OVERRIDE_TTIR: Use TTIR from compilation event with monkeypatch.
+        OVERRIDE_TTIR: Generate a stub kernel with captured IR override.
     """
 
     DEFAULT = "default"

@@ -15,6 +15,11 @@ from tritonparse.reproducer.function_extractor import (
     match_autotune_config,
 )
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
+from tritonparse.reproducer.stub_generator import (
+    _find_ir_override_file,
+    generate_stub_source,
+    get_constexpr_values,
+)
 from tritonparse.reproducer.templates.utils import (
     _disable_triton_autotune,
     get_function_source,
@@ -242,60 +247,7 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
         """Replace the IR override setup placeholder."""
-        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
-
-        if kernel_import != KernelImportMode.OVERRIDE_TTIR:
-            return code.replace(self.IR_OVERRIDE_SETUP_PLACEHOLDER, "")
-
-        comp_json_filename = kwargs.get("comp_json_filename")
-        if not comp_json_filename:
-            raise ValueError("comp_json_filename is required for OVERRIDE_TTIR mode")
-
-        setup_code = f'''
-def create_ttir_tempfile():
-    """Extract TTIR from compilation event and create temporary file."""
-    script_dir = Path(__file__).resolve().parent
-    comp_json_file = script_dir / "{comp_json_filename}"
-
-    with open(comp_json_file, 'r') as f:
-        comp_data = json.load(f)
-
-    # Extract TTIR content
-    kernel_name = comp_data['payload']['metadata']['name']
-    ttir_key = f"{{kernel_name}}.ttir"
-    ttir_content = comp_data['payload']['file_content'][ttir_key]
-
-    # Create temporary file
-    temp_file = tempfile.NamedTemporaryFile(
-        mode='w',
-        suffix='.ttir',
-        delete=False,
-        prefix=f'{{kernel_name}}_'
-    )
-    temp_file.write(ttir_content)
-    temp_file.close()
-    return temp_file.name
-
-
-# Monkeypatch triton.autotune to use our TTIR
-_ttir_file = create_ttir_tempfile()
-_original_autotune = None
-
-def _patched_autotune(configs, key=None, **kwargs):
-    """Patched autotune that uses our TTIR file."""
-    import triton
-    # Replace configs with our single config using ir_override
-    new_configs = [triton.Config(kwargs={{}}, ir_override=_ttir_file)]
-    # Call original autotune with our config
-    return _original_autotune(new_configs, key=[], **kwargs)
-
-# Apply the monkeypatch before importing the kernel
-import triton
-_original_autotune = triton.autotune
-triton.autotune = _patched_autotune
-'''
-
-        return code.replace(self.IR_OVERRIDE_SETUP_PLACEHOLDER, setup_code)
+        return code.replace(self.IR_OVERRIDE_SETUP_PLACEHOLDER, "")
 
     def _replace_kernel_syspath(
         self, code: str, context_bundle: ContextBundle, **kwargs
@@ -312,7 +264,7 @@ triton.autotune = _patched_autotune
             )
             return code.replace(self.KERNEL_SYSPATH_PLACEHOLDER, comment)
         elif kernel_import == KernelImportMode.OVERRIDE_TTIR:
-            comment = "# Kernel sys.path setup skipped - using IR override mode"
+            comment = "# Kernel sys.path setup skipped - using stub with IR override"
             return code.replace(self.KERNEL_SYSPATH_PLACEHOLDER, comment)
         else:
             raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
@@ -425,8 +377,96 @@ triton.autotune = _patched_autotune
 
             return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, embedded_code)
         elif kernel_import == KernelImportMode.OVERRIDE_TTIR:
-            comment = "# Kernel import skipped - using IR override mode with TTIR"
-            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, comment)
+            source_code = context_bundle.kernel_info.source_code
+            func_name = context_bundle.kernel_info.function_name
+
+            if not source_code or not source_code.strip():
+                raise ValueError(
+                    "Kernel source code is empty, cannot use 'override-ttir' mode"
+                )
+            if not func_name:
+                raise ValueError(
+                    "Cannot determine kernel function name for 'override-ttir' mode"
+                )
+
+            # Build the autotune config with ir_override + constexpr values
+            constexpr_vals = get_constexpr_values(context_bundle)
+            compile_meta = context_bundle.compile
+
+            config_parts = []
+            # Constexpr kwargs
+            kwargs_repr = repr(constexpr_vals)
+            config_parts.append(f"kwargs={kwargs_repr}")
+            # Compile params
+            for param in TRITON_COMPILE_PARAMS:
+                value = compile_meta.get(param)
+                if value is not None:
+                    config_parts.append(f"{param}={value!r}")
+            # ir_override — find the best available IR file
+            config_parts.append("ir_override=_IR_OVERRIDE_FILE")
+
+            config_str = ", ".join(config_parts)
+
+            # Generate imports + IR file discovery + stub function + autotune wrapper
+            import_lines = list(_BASE_IMPORT_LINES) + [""]
+
+            # Scan original source for extra imports (e.g., tlx)
+            extra_imports = _detect_extra_imports(source_code)
+            if extra_imports:
+                import_lines.extend(extra_imports)
+                import_lines.append("")
+
+            import_lines.extend(
+                [
+                    "import os",
+                    "",
+                ]
+                + get_function_source(_find_ir_override_file, with_invocation=False)
+                + [
+                    "",
+                    "# Find the best captured IR file for ir_override",
+                    "_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))",
+                    "_IR_DIR = os.path.join(_SCRIPT_DIR, 'captured_irs')",
+                    "_IR_OVERRIDE_FILE = _find_ir_override_file(_IR_DIR) if os.path.isdir(_IR_DIR) else None",
+                    "",
+                ]
+            )
+
+            # Generate the stub function source
+            stub_code = generate_stub_source(func_name, source_code)
+
+            # Wrap with autotune carrying ir_override + constexpr values.
+            # Apply @triton.autotune programmatically so we can conditionally
+            # include ir_override only when the IR file exists.
+            # Detect indent of the import placeholder for the if/else block.
+            placeholder = self.KERNEL_IMPORT_PLACEHOLDER
+            indent = next(
+                (
+                    line[: len(line) - len(line.lstrip())]
+                    for line in code.splitlines()
+                    if line.lstrip().startswith(placeholder)
+                ),
+                "",
+            )
+            inner = indent + "    "
+
+            import_lines.extend(
+                [
+                    "# Stub kernel — body is replaced by captured IR via ir_override",
+                    stub_code,
+                    "",
+                    f"{indent}if _IR_OVERRIDE_FILE:",
+                    f"{inner}{func_name} = triton.autotune(",
+                    f"{inner}    configs=[triton.Config({config_str})],",
+                    f"{inner}    key=[],",
+                    f"{inner})({func_name})",
+                    "",
+                    f"{indent}imported_kernel_function = {func_name}",
+                ]
+            )
+
+            embedded_code = "\n".join(import_lines)
+            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, embedded_code)
         else:
             raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
 
@@ -452,8 +492,45 @@ triton.autotune = _patched_autotune
 
         Otherwise, passes all args plus compile params as usual.
         """
+        kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
         source_code = context_bundle.kernel_info.source_code
         pos_args, kw_args = _parse_kernel_signature(source_code)
+
+        if kernel_import == KernelImportMode.OVERRIDE_TTIR:
+            # When ir_override is active, autotune provides constexpr values
+            # and compile params — only pass non-constexpr args.
+            # When ir_override is missing (no captured_irs/), the stub runs
+            # as a plain @triton.jit and needs all args + compile params.
+            constexpr_vals = get_constexpr_values(context_bundle)
+            filtered_pos = [a for a in pos_args if a not in constexpr_vals]
+            filtered_kw = [a for a in kw_args if a not in constexpr_vals]
+            override_snippet = _generate_invocation_snippet(
+                filtered_pos, filtered_kw, compile_params=None
+            )
+            compile_params = _get_compile_params_for_invocation(
+                context_bundle.compile, kw_args
+            )
+            fallback_snippet = _generate_invocation_snippet(
+                pos_args, kw_args, compile_params
+            )
+            # Find the placeholder's indent so the if/else aligns in any template.
+            placeholder = self.KERNEL_INVOCATION_PLACEHOLDER
+            indent = next(
+                (
+                    line[: len(line) - len(line.lstrip())]
+                    for line in code.splitlines()
+                    if line.lstrip().startswith(placeholder)
+                ),
+                "    ",
+            )
+            inner = indent + "    "
+            invocation_snippet = (
+                f"if _IR_OVERRIDE_FILE:\n"
+                f"{inner}{override_snippet}\n"
+                f"{indent}else:\n"
+                f"{inner}{fallback_snippet}"
+            )
+            return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
 
         if self.preserve_autotune:
             # Get full kernel source with decorators to find autotune config params
