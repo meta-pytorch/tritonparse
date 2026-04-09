@@ -53,83 +53,88 @@ function getContentByIRType(kernel: ProcessedKernel | undefined, irType: string)
 
 const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIndex, leftLoadedUrl }) => {
   const sess = useFileDiffSession();
+  const initialParams = new URLSearchParams(window.location.search);
+
   // Left source state (URL/local) – overrides props when present
   const [leftKernelsFromUrl, setLeftKernelsFromUrl] = useState<ProcessedKernel[]>([]);
   const [leftKernelsFromLocal, setLeftKernelsFromLocal] = useState<ProcessedKernel[]>([]);
-  const [leftLoadedUrlLocal, setLeftLoadedUrlLocal] = useState<string | null>(null);
+  const [leftLoadedUrlLocal, setLeftLoadedUrlLocal] = useState<string | null>(() => {
+    const aUrl = initialParams.get("json_url");
+    if (aUrl) return aUrl;
+    if (leftLoadedUrl) return leftLoadedUrl;
+    return null;
+  });
   const [leftLoadedFromLocal, setLeftLoadedFromLocal] = useState<boolean>(false);
   const [loadingLeft, setLoadingLeft] = useState<boolean>(false);
   const [errorLeft, setErrorLeft] = useState<string | null>(null);
 
-  // Right source state
-  const [kernelsRight, setKernelsRight] = useState<ProcessedKernel[]>([]);
-  const [rightLoadedUrl, setRightLoadedUrl] = useState<string | null>(null);
+  // Right source state (lazy init from session or URL params)
+  const [kernelsRight, setKernelsRight] = useState<ProcessedKernel[]>(() =>
+    sess.right?.kernels?.length > 0 ? [...sess.right.kernels] : []
+  );
+  const [rightLoadedUrl, setRightLoadedUrl] = useState<string | null>(() => {
+    if (sess.right?.sourceType === 'url' && sess.right.url) return sess.right.url;
+    return initialParams.get(PARAM_JSON_B_URL);
+  });
   const [loadingRight, setLoadingRight] = useState<boolean>(false);
   const [errorRight, setErrorRight] = useState<string | null>(null);
+  const [rightLoadedFromLocal, setRightLoadedFromLocal] = useState<boolean>(() =>
+    sess.right?.sourceType === 'local'
+  );
 
   // Selection state
   const [leftIdx, setLeftIdx] = useState<number>(Math.max(0, selectedLeftIndex));
-  const [rightIdx, setRightIdx] = useState<number>(0);
-  const [mode, setMode] = useState<DiffMode>("single");
-  const [irType, setIrType] = useState<string>("ttgir");
+  const [rightIdx, setRightIdx] = useState<number>(() =>
+    sess.right?.kernels?.length > 0 ? Math.max(0, sess.right.selectedIdx) : 0
+  );
+  const [mode, setMode] = useState<DiffMode>(() => {
+    const m = initialParams.get(PARAM_MODE);
+    return (m === "single" || m === "all") ? m : "single";
+  });
+  const [irType, setIrType] = useState<string>(() =>
+    initialParams.get(PARAM_IR) || "ttgir"
+  );
 
-  // Diff options
-  const [ignoreWs, setIgnoreWs] = useState<boolean>(true);
-  const [wordLevel, setWordLevel] = useState<boolean>(true);
-  const [contextLines, setContextLines] = useState<number>(3);
-  const [wordWrap, setWordWrap] = useState<"off" | "on">("on");
-  const [onlyChanged, setOnlyChanged] = useState<boolean>(false);
+  // Diff options (lazy init from URL params)
+  const [ignoreWs, setIgnoreWs] = useState<boolean>(() =>
+    initialParams.get(PARAM_IGNORE_WS) !== "0"
+  );
+  const [wordLevel, setWordLevel] = useState<boolean>(() =>
+    initialParams.get(PARAM_WORD_LEVEL) === "1"
+  );
+  const [contextLines, setContextLines] = useState<number>(() => {
+    const ctx = parseInt(initialParams.get(PARAM_CONTEXT) || "");
+    return !Number.isNaN(ctx) ? ctx : 3;
+  });
+  const [wordWrap, setWordWrap] = useState<"off" | "on">(() => {
+    const w = initialParams.get(PARAM_WRAP);
+    return (w === "on" || w === "off") ? w : "on";
+  });
+  const [onlyChanged, setOnlyChanged] = useState<boolean>(() =>
+    initialParams.get(PARAM_ONLY_CHANGED) === "1"
+  );
 
-  // Read URL on mount
+  // Render-time state adjustment: update leftIdx when kernelsLeft changes and URL has a kernel hash
+  const [prevKernelsLeftLen, setPrevKernelsLeftLen] = useState(kernelsLeft.length);
+  const urlLeftHash = initialParams.get(PARAM_KERNEL_HASH_A);
+  if (kernelsLeft.length !== prevKernelsLeftLen) {
+    setPrevKernelsLeftLen(kernelsLeft.length);
+    if (urlLeftHash) {
+      const li = findKernelIndexByHash(urlLeftHash, kernelsLeft);
+      if (li >= 0) setLeftIdx(li);
+    }
+  }
+
+  // Store URL hashes in window for cross-effect access
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-
-    // Right URL
-    const bUrl = params.get(PARAM_JSON_B_URL);
-    if (bUrl) {
-      setRightLoadedUrl(bUrl);
-    }
-
-    // Left URL – use json_url only (no json_a_url)
-    const aUrl = params.get("json_url");
-    if (aUrl) {
-      setLeftLoadedUrlLocal(aUrl);
-    } else if (leftLoadedUrl) {
-      // Prop from App: treat as initial left URL
-      setLeftLoadedUrlLocal(leftLoadedUrl);
-    }
-
-    // Mode and IR
-    const modeParam = (params.get(PARAM_MODE) as DiffMode) || undefined;
-    if (modeParam === "single" || modeParam === "all") setMode(modeParam);
-    const irParam = params.get(PARAM_IR);
-    if (irParam) setIrType(irParam);
-
-    // Options
-    setIgnoreWs(params.get(PARAM_IGNORE_WS) === "0" ? false : true);
-    setWordLevel(params.get(PARAM_WORD_LEVEL) === "1");
-    const ctx = parseInt(params.get(PARAM_CONTEXT) || "");
-    if (!Number.isNaN(ctx)) setContextLines(ctx);
-    const wrap = params.get(PARAM_WRAP);
-    if (wrap === "on" || wrap === "off") setWordWrap(wrap);
-    setOnlyChanged(params.get(PARAM_ONLY_CHANGED) === "1");
-
-    // Left/Right kernel index by hash
     const leftHash = params.get(PARAM_KERNEL_HASH_A);
     const rightHash = params.get(PARAM_KERNEL_HASH_B);
     if (leftHash) window.__TRITONPARSE_leftHash = leftHash;
-    const li = findKernelIndexByHash(leftHash, kernelsLeft);
-    if (li >= 0) setLeftIdx(li);
-
-    // right index will be set after right kernels loaded
     if (rightHash) {
-      // store temporarily in dataset
       window.__TRITONPARSE_rightHash = rightHash;
     }
-    // Note: leftLoadedUrl is intentionally omitted - we only read URL params on mount
-    // and when kernelsLeft changes, not when the prop changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kernelsLeft]);
+  }, []);
 
   // Load left URL when set (internal to FileDiffView)
   useEffect(() => {
@@ -212,23 +217,6 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     } catch { /* Ignore hydration errors - session state may be stale */ }
   }, [sess, kernelsLeft, leftLoadedUrl, leftIdx]);
 
-  // Hydrate right from session when returning from preview (ensure right side is restored without reloading URL)
-  useEffect(() => {
-    try {
-      if (sess.right?.kernels?.length > 0) {
-        setKernelsRight(sess.right.kernels);
-        setRightIdx(Math.max(0, sess.right.selectedIdx));
-        if (sess.right.sourceType === 'url') {
-          setRightLoadedUrl(sess.right.url);
-          setRightLoadedFromLocal(false);
-        } else if (sess.right.sourceType === 'local') {
-          setRightLoadedUrl(null);
-          setRightLoadedFromLocal(true);
-        }
-      }
-    } catch { /* Ignore session restore errors */ }
-  }, [sess.right]);
-
   // Compute union ir types and choose default ir if needed
   const unionIrTypes = useMemo(() => {
     const leftArray = leftLoadedFromLocal
@@ -243,9 +231,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     return Array.from(set);
   }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, leftLoadedFromLocal, leftKernelsFromLocal, leftLoadedUrlLocal, leftKernelsFromUrl]);
 
-  useEffect(() => {
-    if (!irType && unionIrTypes.length > 0) setIrType(unionIrTypes[0]);
-  }, [unionIrTypes, irType]);
+  const effectiveIrType = irType || (unionIrTypes.length > 0 ? unionIrTypes[0] : "ttgir");
 
   // Update URL on state changes (File Diff owns its params)
   const syncUrl = useCallback(() => {
@@ -268,7 +254,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     else if (leftLoadedUrl) params.set("json_url", leftLoadedUrl); else params.delete("json_url");
     // mode/ir
     params.set(PARAM_MODE, mode);
-    if (mode === "single" && irType) params.set(PARAM_IR, irType);
+    if (mode === "single" && effectiveIrType) params.set(PARAM_IR, effectiveIrType);
     else params.delete(PARAM_IR);
     // options
     params.set(PARAM_IGNORE_WS, ignoreWs ? "1" : "0");
@@ -279,7 +265,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     const newUrl = new URL(window.location.href);
     newUrl.search = params.toString();
     window.history.replaceState({}, "", newUrl.toString());
-  }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, irType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl, leftKernelsFromLocal, leftKernelsFromUrl]);
+  }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl, leftKernelsFromLocal, leftKernelsFromUrl]);
 
   // Debounce URL updates to reduce history churn
   useEffect(() => {
@@ -300,20 +286,22 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
 
   // When navigating away, temporarily hide diff editors to avoid Monaco dispose race
   const [hideDiff, setHideDiff] = useState<boolean>(false);
-  useEffect(() => {
-    // Reset when view state changes
+  const resetKey = `${mode}-${effectiveIrType}-${leftIdx}-${rightIdx}`;
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
     setHideDiff(false);
-  }, [mode, irType, leftIdx, rightIdx]);
+  }
 
   const renderSingle = () => {
-    const leftContent = getContentByIRType(leftKernel, irType);
-    const rightContent = getContentByIRType(rightKernel, irType);
+    const leftContent = getContentByIRType(leftKernel, effectiveIrType);
+    const rightContent = getContentByIRType(rightKernel, effectiveIrType);
     const missingLeft = !leftContent;
     const missingRight = !rightContent;
     return (
       <div>
         <div className="flex items-center justify-between mb-3">
-          <div className="text-gray-700 font-medium">IR Type: <span className="text-blue-700">{irType}</span></div>
+          <div className="text-gray-700 font-medium">IR Type: <span className="text-blue-700">{effectiveIrType}</span></div>
           <div className="text-sm text-gray-500">
             {missingLeft && <span className="mr-2">Left: Not available</span>}
             {missingRight && <span>Right: Not available</span>}
@@ -321,11 +309,11 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         </div>
         {!hideDiff && (
           <DiffComparisonView
-            key={`single-${leftIdx}-${rightIdx}-${irType}`}
+            key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
             leftContent={leftContent}
             rightContent={rightContent}
             height="calc(100vh - 14rem)"
-            language={irType === "python" ? "python" : "plaintext"}
+            language={effectiveIrType === "python" ? "python" : "plaintext"}
             options={{
               ignoreWhitespace: ignoreWs,
               wordLevel,
@@ -392,7 +380,6 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
 
   // Left and Right source loaders
   const [pendingUrl, setPendingUrl] = useState<string>("");
-  const [rightLoadedFromLocal, setRightLoadedFromLocal] = useState<boolean>(false);
   const handleLoadRight = async () => {
     if (!pendingUrl) return;
     setRightLoadedFromLocal(false);
@@ -625,7 +612,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               <label className="block text-sm font-medium text-gray-700 mb-1">IR Type</label>
               <select
                 className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
-                value={irType}
+                value={effectiveIrType}
                 onChange={(e) => setIrType(e.target.value)}
               >
                 {unionIrTypes.map(t => (

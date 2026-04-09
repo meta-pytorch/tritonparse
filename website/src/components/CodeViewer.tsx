@@ -5,6 +5,7 @@ import {
   oneDark,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SourceMapping } from "../utils/dataLoader";
+import { mapLanguageToHighlighter } from "../utils/languageUtils";
 import "./CodeViewer.css";
 
 // Import language support
@@ -132,7 +133,7 @@ const useScrollManagement = (
 
     // Update previous highlights
     previousHighlightedLinesRef.current = [...currentLines];
-  }, [highlightedLines, scrollKey, customScrollToLine, resetScrollFlag, performDirectScroll]);
+  }, [highlightedLines, scrollKey, customScrollToLine, resetScrollFlag, performDirectScroll, containerRef]);
 
   return {
     saveScrollPosition
@@ -161,32 +162,7 @@ interface CodeViewerProps {
   startingLineNumber?: number; // Starting line number for display (default: 1)
 }
 
-/**
- * Maps our internal language names to syntax highlighter languages
- * Note: Exported for use by other components.
- * @param language Internal language identifier
- * @returns Syntax highlighter language identifier
- */
-export const mapLanguageToHighlighter = (language: string): string => {
-  const lowerCaseLanguage = language.toLowerCase();
-
-  // Handle language types with endsWith for better accuracy
-  if (lowerCaseLanguage.endsWith("ttgir") || lowerCaseLanguage.endsWith("ttir")) {
-    return 'mlir';
-  } else if (lowerCaseLanguage.endsWith("llir")) {
-    return 'llvm';
-  } else if (lowerCaseLanguage.endsWith("ptx")) {
-    return 'ptx';
-  } else if (lowerCaseLanguage.endsWith("amdgcn")) {
-    return 'amdgcn';
-  } else if (lowerCaseLanguage.endsWith("sass")) {
-    return 'asm';  // SASS is NVIDIA assembly, use generic asm highlighting
-  } else if (lowerCaseLanguage === "python") {
-    return 'python';
-  }
-
-  return 'plaintext';
-};
+// mapLanguageToHighlighter moved to ../utils/languageUtils.ts
 
 /**
  * Split code into lines

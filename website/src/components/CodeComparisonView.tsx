@@ -411,7 +411,6 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             updateHighlights('right', rightLines);
             updateHighlights('python', [lineNumber]);
         },
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- updateHighlights is stable via refs
         [
             pythonMapping,
             calculateMappedLines,
