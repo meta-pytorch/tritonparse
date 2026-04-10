@@ -215,8 +215,21 @@ def _get_num_warps(
     if metadata_num_warps is None:
         return None
 
-    # Search TTGIR content in the compilation event for the original value
+    # Fast path: use pre-computed num_warps_base from parse phase or upstream Triton
     payload = comp_event.get("payload", {})
+    payload_meta = payload.get("metadata", {})
+    if "num_warps_base" in payload_meta:
+        original = payload_meta["num_warps_base"]
+        logger.info(
+            "Using pre-computed num_warps_base=%d (metadata num_warps=%d)",
+            original,
+            metadata_num_warps,
+        )
+        comp_meta["total_num_warps"] = metadata_num_warps
+        comp_meta["num_warps"] = original
+        return original
+
+    # Fallback: extract from TTGIR for raw traces that haven't been parsed
     file_content = payload.get("file_content", {})
     for filename, content in file_content.items():
         if not filename.endswith(".ttgir") or not isinstance(content, str):

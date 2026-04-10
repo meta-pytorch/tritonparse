@@ -1,6 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import os
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -384,6 +385,21 @@ def parse_single_trace_content(trace_content: str) -> str:
         ptx_key = next((k for k in file_content if k.endswith(".ptx")), None)
         amdgcn_key = next((k for k in file_content if k.endswith(".amdgcn")), None)
         sass_key = next((k for k in file_content if k.endswith(".sass")), None)
+
+        # Extract original num_warps from TTGIR for warp-specialized kernels.
+        # If upstream Triton already set num_warps_base, trust it; otherwise
+        # recover the value from the TTGIR "ttg.num-warps" module attribute.
+        metadata = payload.setdefault("metadata", {})
+        if "num_warps_base" not in metadata and ttgir_key and ttgir_key in file_content:
+            ttgir_content = file_content[ttgir_key]
+            if isinstance(ttgir_content, str):
+                match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', ttgir_content)
+                if match:
+                    original = int(match.group(1))
+                    current = metadata.get("num_warps")
+                    if current is not None and original != current:
+                        metadata["num_warps_base"] = original
+
         # Skip if no IR files found
         if not (ttir_key or ttgir_key or ptx_key or amdgcn_key or sass_key):
             logger.warning("No IR files found in the payload.")

@@ -96,7 +96,12 @@
             "num_warps": {
               "type": "integer",
               "minimum": 1,
-              "description": "Number of warps per CTA."
+              "description": "Number of warps per CTA (post-expansion for warp-specialized kernels)."
+            },
+            "num_warps_base": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Original num_warps before warp specialization expansion. Only present when different from num_warps."
             },
             "num_stages": {
               "type": "integer",
