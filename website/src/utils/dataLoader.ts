@@ -1,3 +1,5 @@
+import { ClpArchiveReader } from "clp-ffi-js/sfa";
+
 /**
  * Source mapping information that connects lines in IR code to source code
  */
@@ -411,6 +413,22 @@ function isGzipFile(buffer: ArrayBuffer): boolean {
 }
 
 /**
+ * Detects if a file is in clp-json single-file archive format by checking its header bytes.
+ * @param buffer - ArrayBuffer containing the file data
+ * @returns Boolean indicating if the file is a clp-json single-file archive
+ */
+function isClpFile(buffer: ArrayBuffer): boolean {
+    // Check for clp-s sfa magic number: 0xFD 0x2F 0xC5 0x30
+    const header = new Uint8Array(buffer.slice(0, 4));
+    return (
+        header[0] === 0xFD &&
+        header[1] === 0x2F &&
+        header[2] === 0xC5 &&
+        header[3] === 0x30
+    );
+}
+
+/**
  * Parses log data from a stream, handling line-by-line NDJSON parsing.
  * This is memory-efficient and suitable for very large files.
  * @param stream - A ReadableStream of Uint8Array (e.g., from a decompressed file)
@@ -470,8 +488,32 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
  * @returns Promise resolving to an array of LogEntry objects
  */
 export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[]> {
-    // Check if file is gzip compressed
-    if (isGzipFile(buffer)) {
+    if (isClpFile(buffer)) {
+        let reader: ClpArchiveReader | null = null;
+        try {
+            reader = await ClpArchiveReader.create(new Uint8Array(buffer));
+            const entries: LogEntry[] = [];
+
+            for (const event of reader.decodeAll()) {
+                let parsedLine: LogEntry;
+                try {
+                    parsedLine = JSON.parse(event.message) as LogEntry;
+                } catch {
+                    console.warn(`Failed to parse CLP log event ${event.logEventIdx.toString()} as JSON`);
+                    continue;
+                }
+                entries.push(parsedLine);
+            }
+
+            return entries;
+        } catch (error) {
+            console.error('Error decompressing or parsing clp stream:', error);
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Failed to process clp stream: ${message}`);
+        } finally {
+            reader?.close();
+        }
+    } else if (isGzipFile(buffer)) {
         try {
             if (!('DecompressionStream' in window)) {
                 throw new Error('DecompressionStream API is not supported in this browser');
