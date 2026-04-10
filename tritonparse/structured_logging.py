@@ -89,8 +89,8 @@ TRITONPARSE_DUMP_SASS = os.getenv("TRITONPARSE_DUMP_SASS", None) in [
 
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
-# Kernel run counter and per-launch blob save flag for skip/max runs gating
-_kernel_run_count = 0
+# Per-hash run counter and per-launch blob save flag for skip/max runs gating
+_kernel_run_counts_per_hash: dict[str, int] = {}
 _save_blobs_for_current_launch = True
 # Enable tensor blob storage
 TRITONPARSE_SAVE_TENSOR_BLOBS = os.getenv("TRITONPARSE_SAVE_TENSOR_BLOBS", "0") in [
@@ -1467,7 +1467,7 @@ def extract_arg_info(arg_dict):
 
 
 def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
-    global _kernel_run_count, _save_blobs_for_current_launch
+    global _save_blobs_for_current_launch
 
     # Check if we're in CUDA graph capture mode - if so, skip detailed argument extraction
     # to avoid CUDA errors (cudaErrorStreamCaptureUnsupported)
@@ -1489,19 +1489,22 @@ def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
             )
         }
 
-    # Gate tensor blob saving based on skip/max runs
+    # Gate tensor blob saving: always skip benchmark launches, then apply
+    # per-compilation-hash skip/max_runs so each autotuned config gets its
+    # own budget (e.g. max_runs=1 saves one set of blobs per config).
     if TRITONPARSE_SAVE_TENSOR_BLOBS:
         skip = TRITONPARSE_TENSOR_SAVE_SKIP_RUNS
         max_runs = TRITONPARSE_TENSOR_SAVE_MAX_RUNS
-        if skip > 0 or max_runs > 0:
-            # Only capture the stack when we actually need kernel run counting
-            from .parse.sourcemap_utils import _is_autotune_benchmark_launch
+        from .parse.sourcemap_utils import _is_autotune_benchmark_launch
 
-            if not _is_autotune_benchmark_launch(get_stack_trace()):
-                _kernel_run_count += 1
+        if _is_autotune_benchmark_launch(get_stack_trace()):
+            _save_blobs_for_current_launch = False
+        elif skip > 0 or max_runs > 0:
+            kernel_hash = metadata._asdict().get("hash", "")
+            count = _kernel_run_counts_per_hash.get(kernel_hash, 0) + 1
+            _kernel_run_counts_per_hash[kernel_hash] = count
             _save_blobs_for_current_launch = not (
-                _kernel_run_count <= skip
-                or (max_runs > 0 and _kernel_run_count > skip + max_runs)
+                count <= skip or (max_runs > 0 and count > skip + max_runs)
             )
         else:
             _save_blobs_for_current_launch = True
@@ -1850,7 +1853,7 @@ def clear_logging_config():
     global TRITON_TRACE_HANDLER, triton_trace_folder, _KERNEL_ALLOWLIST_PATTERNS
     global _trace_launch_enabled
     global TENSOR_BLOB_MANAGER
-    global _kernel_run_count, _save_blobs_for_current_launch
+    global _kernel_run_counts_per_hash, _save_blobs_for_current_launch
     # 1. Clean up the log handler
     if TRITON_TRACE_HANDLER is not None:
         if TRITON_TRACE_HANDLER in triton_trace_log.handlers:
@@ -1865,7 +1868,7 @@ def clear_logging_config():
 
     # 3. Reset tensor blob manager and related flags
     TENSOR_BLOB_MANAGER = None
-    _kernel_run_count = 0
+    _kernel_run_counts_per_hash = {}
     _save_blobs_for_current_launch = True
 
     # 4. Reset Triton knobs
