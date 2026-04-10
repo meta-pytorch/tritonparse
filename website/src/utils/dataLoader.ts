@@ -482,7 +482,7 @@ export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[
         } catch (error) {
             console.error('Error decompressing or parsing gzip stream:', error);
             const message = error instanceof Error ? error.message : String(error);
-            throw new Error(`Failed to process gzip stream: ${message}`);
+            throw new Error(`Failed to process gzip stream: ${message}`, { cause: error });
         }
     } else {
         // For non-gzipped files that are small enough to fit in memory
