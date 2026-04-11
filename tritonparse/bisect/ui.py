@@ -28,13 +28,15 @@ from rich.text import Text
 GITHUB_COMMIT_URLS = {
     "triton": "https://github.com/triton-lang/triton/commit/",
     "llvm": "https://github.com/llvm/llvm-project/commit/",
+    "torch": "https://github.com/pytorch/pytorch/commit/",
 }
 
 # Display order - from upper layer to lower layer (call stack order)
-CULPRIT_DISPLAY_ORDER = ["triton", "llvm"]
+CULPRIT_DISPLAY_ORDER = ["torch", "triton", "llvm"]
 
 # Display names for each component
 CULPRIT_DISPLAY_NAMES = {
+    "torch": "PyTorch",
     "triton": "Triton",
     "llvm": "LLVM",
 }
@@ -48,6 +50,7 @@ class SummaryMode(Enum):
     """
 
     TRITON_BISECT = "triton_bisect"
+    TORCH_BISECT = "torch_bisect"
     LLVM_BISECT = "llvm_bisect"
     FULL_WORKFLOW = "full_workflow"
     PAIR_TEST = "pair_test"
@@ -586,6 +589,8 @@ def _generate_title(mode: SummaryMode, success: bool = True) -> str:
 
     if mode == SummaryMode.TRITON_BISECT:
         return "Triton Bisect Result"
+    elif mode == SummaryMode.TORCH_BISECT:
+        return "PyTorch Bisect Result"
     elif mode == SummaryMode.LLVM_BISECT:
         return "LLVM Bisect Result"
     elif mode == SummaryMode.FULL_WORKFLOW:
@@ -875,7 +880,7 @@ def print_final_summary(
         )
         return
 
-    # Bisect modes (TRITON_BISECT, LLVM_BISECT, FULL_WORKFLOW)
+    # Bisect modes (TRITON_BISECT, TORCH_BISECT, LLVM_BISECT, FULL_WORKFLOW)
     success = culprits is not None and len(culprits) > 0
 
     # Generate title based on mode

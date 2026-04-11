@@ -107,6 +107,7 @@ def main():
             "Bisect Triton and LLVM commits to find regression-causing changes.\n\n"
             "Modes:\n"
             "  Default (no flags): Triton bisect only\n"
+            "  --target torch:     PyTorch bisect only\n"
             "  --commits-csv:      Full workflow (Triton -> LLVM if needed)\n"
             "  --llvm-only:        LLVM bisect only\n"
             "  --resume:           Resume from saved state\n"

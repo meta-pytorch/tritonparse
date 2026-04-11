@@ -68,6 +68,21 @@ def get_bisect_llvm_script() -> Path:
     return get_script_path("bisect_llvm.sh")
 
 
+def get_bisect_torch_script() -> Path:
+    """Get the path to bisect_torch.sh script."""
+    return get_script_path("bisect_torch.sh")
+
+
+def get_build_pytorch_script() -> Path:
+    """Get the path to build_pytorch.sh script."""
+    return get_script_path("build_pytorch.sh")
+
+
+def get_prepare_build_pytorch_script() -> Path:
+    """Get the path to prepare_build_pytorch.sh script."""
+    return get_script_path("prepare_build_pytorch.sh")
+
+
 def get_test_commit_pairs_script() -> Path:
     """Get the path to test_commit_pairs.sh script."""
     return get_script_path("test_commit_pairs.sh")

@@ -11,6 +11,10 @@ Usage Examples:
     tritonparseoss bisect --triton-dir /path/to/triton --test-script test.py \\
         --good v2.0.0 --bad HEAD
 
+    # PyTorch bisect
+    tritonparseoss bisect --target torch --torch-dir /path/to/pytorch \\
+        --test-script test.py --good v2.6.0 --bad HEAD
+
     # Full workflow (Triton -> detect LLVM bump -> LLVM bisect if needed)
     tritonparseoss bisect --triton-dir /path/to/triton --test-script test.py \\
         --good v2.0.0 --bad HEAD --commits-csv pairs.csv
@@ -52,6 +56,7 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
 
     This implements smart defaults with switches:
     - Default (no special flags) = Triton bisect only
+    - --target torch = PyTorch bisect only
     - --commits-csv = Full workflow (Triton -> detect LLVM bump -> LLVM bisect if needed)
     - --llvm-only = LLVM bisect only
     - --resume = Resume from saved state
@@ -83,9 +88,20 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
 
     # Common arguments
     parser.add_argument(
+        "--target",
+        choices=["triton", "torch"],
+        default="triton",
+        help="Repository to bisect in default mode: triton (default) or torch",
+    )
+    parser.add_argument(
         "--triton-dir",
         type=str,
         help="Path to Triton repository",
+    )
+    parser.add_argument(
+        "--torch-dir",
+        type=str,
+        help="Optional path to a PyTorch checkout to prepend to PYTHONPATH",
     )
     parser.add_argument(
         "--test-script",
@@ -109,6 +125,11 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         type=str,
         default=None,
         help="Custom build command (default: 'pip install -e .' for Triton)",
+    )
+    parser.add_argument(
+        "--per-commit-log",
+        action="store_true",
+        help="Create a separate log file for each commit",
     )
 
     # Triton bisect arguments
@@ -202,6 +223,23 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
 
     if args.resume:
         # Resume mode: --state is optional (will use default if not specified)
+        return
+
+    if args.target == "torch":
+        missing = []
+        if not args.torch_dir:
+            missing.append("--torch-dir")
+        if not args.test_script:
+            missing.append("--test-script")
+        if not args.good:
+            missing.append("--good")
+        if not args.bad:
+            missing.append("--bad")
+
+        if missing:
+            parser.error(
+                f"--target torch requires the following arguments: {', '.join(missing)}"
+            )
         return
 
     if args.llvm_only:
@@ -780,6 +818,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 logger=logger,
                 conda_env=args.conda_env,
                 build_command=args.build_command,
+                per_commit_log=args.per_commit_log,
             )
 
             # Run bisect
@@ -845,6 +884,88 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
     return 0 if culprit else 1
 
 
+def _handle_torch_bisect(args: argparse.Namespace) -> int:
+    """
+    Handle PyTorch bisect mode.
+
+    Args:
+        args: Parsed arguments including torch_dir, test_script, good, bad, etc.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
+    from .torch_bisector import TorchBisectError, TorchBisector
+    from .ui import BisectUI, print_final_summary, SummaryMode
+
+    ui = BisectUI(enabled=args.tui)
+
+    culprit = None
+    error_msg = None
+    logger = None
+
+    with ui:
+        try:
+            logger = _create_logger(args.log_dir)
+
+            if ui.is_tui_enabled:
+                logger.configure_for_tui(ui.create_output_callback())
+
+            ui.append_output(ui.get_tui_status_message())
+            ui.update_progress(
+                phase="PyTorch Bisect",
+                phase_number=1,
+                total_phases=1,
+                log_dir=str(logger.log_dir),
+                log_file=logger.module_log_path.name,
+                command_log=logger.command_log_path.name,
+            )
+
+            bisector = TorchBisector(
+                torch_dir=args.torch_dir,
+                test_script=args.test_script,
+                logger=logger,
+                conda_env=args.conda_env,
+                build_command=args.build_command,
+                per_commit_log=args.per_commit_log,
+            )
+
+            culprit = bisector.run(
+                good_commit=args.good,
+                bad_commit=args.bad,
+                output_callback=ui.create_output_callback(),
+            )
+
+            ui.append_output("")
+            ui.append_output("=" * 60)
+            ui.append_output("PyTorch Bisect Result")
+            ui.append_output("=" * 60)
+            ui.append_output(f"Culprit commit: {culprit}")
+            ui.append_output(f"Log directory: {args.log_dir}")
+            ui.append_output("=" * 60)
+
+        except TorchBisectError as e:
+            error_msg = str(e)
+            ui.append_output(f"\nPyTorch bisect failed: {e}")
+        except Exception as e:
+            error_msg = str(e)
+            ui.append_output(f"\nUnexpected error: {e}")
+
+    print_final_summary(
+        mode=SummaryMode.TORCH_BISECT,
+        culprits={"torch": culprit} if culprit else None,
+        llvm_bump_info=None,
+        error_msg=error_msg,
+        log_dir=args.log_dir,
+        log_file=str(logger.module_log_path) if logger else None,
+        command_log=str(logger.command_log_path) if logger else None,
+        elapsed_time=ui.progress.elapsed_seconds,
+        logger=logger,
+        use_rich=ui._rich_enabled,
+    )
+
+    return 0 if culprit else 1
+
+
 def bisect_command(args: argparse.Namespace) -> int:
     """
     Execute the bisect command based on parsed arguments.
@@ -853,11 +974,12 @@ def bisect_command(args: argparse.Namespace) -> int:
     to the appropriate handler based on the mode flags.
 
     Mode priority (checked in order):
-    1. --status: Show current bisect status
-    2. --resume: Resume from saved state
-    3. --llvm-only: LLVM-only bisect
-    4. --pair-test: Test commit pairs from CSV
-    5. Default: Triton bisect (or full workflow with --commits-csv)
+    1. --target torch: PyTorch bisect
+    2. --status: Show current bisect status
+    3. --resume: Resume from saved state
+    4. --llvm-only: LLVM-only bisect
+    5. --pair-test: Test commit pairs from CSV
+    6. Default: Triton bisect (or full workflow with --commits-csv)
 
     The mode flags are mutually exclusive (enforced by argparse).
 
@@ -867,6 +989,10 @@ def bisect_command(args: argparse.Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
+    # Handle --target torch mode (no triton-repo URL needed)
+    if args.target == "torch" and args.torch_dir:
+        return _handle_torch_bisect(args)
+
     # Apply --triton-repo selection to commit URL mapping
     _apply_triton_repo(args.triton_repo)
 

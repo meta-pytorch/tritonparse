@@ -75,7 +75,13 @@ class LLVMBisector(BaseBisector):
         """
         # LLVM bisect doesn't use build_command - the build is handled
         # by bisect_llvm.sh with fixed two-phase build process
-        super().__init__(triton_dir, test_script, conda_env, logger, build_command=None)
+        super().__init__(
+            triton_dir,
+            test_script,
+            conda_env,
+            logger,
+            build_command=None,
+        )
         self.llvm_dir = self.triton_dir / "llvm-project"
         # Store triton_commit for use in _prepare_before_bisect
         self._triton_commit: Optional[str] = None
