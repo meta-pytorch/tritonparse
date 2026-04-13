@@ -494,7 +494,6 @@ export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[
             reader = await ClpArchiveReader.create(new Uint8Array(buffer));
             const entries: LogEntry[] = [];
 
-            // TODO: Replace decodeAll() with a streaming API once clp-ffi-js supports it.
             for (const event of reader.decodeAll()) {
                 let parsedLine: LogEntry;
                 try {
