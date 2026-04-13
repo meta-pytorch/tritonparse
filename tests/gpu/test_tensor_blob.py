@@ -333,6 +333,47 @@ class TestTensorBlob(GPUTestBase):
             )
             print(f"✓ skip=1, max=2: {blobs_5b} blob(s) saved (runs 2 and 3 only)")
 
+        # Test 5c: max_runs=1 with different BLOCK_SIZE (different hash per config)
+        # Verifies per-hash counting: each unique compilation gets its own budget
+        print("\n--- Test 5c: max_runs=1 per hash ---")
+        temp_output_dir_5c = tempfile.mkdtemp()
+
+        with tritonparse.context_manager.TritonParseManager(
+            enable_trace_launch=True,
+            enable_tensor_blob_storage=True,
+            tensor_save_max_runs=1,
+            out=temp_output_dir_5c,
+        ) as manager:
+            # Run kernel with BLOCK_SIZE=256 twice — same hash, only 1st saves
+            for i in range(2):
+                x = torch.randn(
+                    (512,), device=self.cuda_device, dtype=torch.float32
+                ) * (i + 1)
+                run_kernel(x)
+            # Run kernel with BLOCK_SIZE=128 twice — different hash, only 1st saves
+            for i in range(2):
+                x = torch.randn(
+                    (512,), device=self.cuda_device, dtype=torch.float32
+                ) * (i + 1)
+                n_elements = x.numel()
+                output = torch.empty_like(x)
+                grid = (triton.cdiv(n_elements, 128),)
+                tensor_input_kernel[grid](x, output, n_elements, 128)
+            torch.cuda.synchronize()
+
+            blobs_5c = count_all_blobs(manager.dir_path)
+            print(f"  Blobs with max_runs=1, 2 hashes x 2 launches: {blobs_5c}")
+            # 2 unique hashes, each saves 1 run → 2 runs save blobs
+            # Each run has input + output = 2 blobs, but dedup may reduce
+            # Expect 2-4 blobs (1-2 per hash)
+            self.assertGreaterEqual(blobs_5c, 2, "Should save blobs from both hashes")
+            self.assertLessEqual(
+                blobs_5c,
+                4,
+                "Should save at most 4 blobs (input+output per hash)",
+            )
+            print(f"✓ max_runs=1 per hash: {blobs_5c} blob(s) from 2 hashes")
+
         # Clean up all test outputs
         try:
             if TEST_KEEP_OUTPUT:
@@ -343,7 +384,8 @@ class TestTensorBlob(GPUTestBase):
                     f"  Test 3: {temp_output_dir_3}\n"
                     f"  Test 4: {temp_output_dir_4}\n"
                     f"  Test 5a: {temp_output_dir_5a}\n"
-                    f"  Test 5b: {temp_output_dir_5b}"
+                    f"  Test 5b: {temp_output_dir_5b}\n"
+                    f"  Test 5c: {temp_output_dir_5c}"
                 )
             else:
                 for temp_dir in [
@@ -353,6 +395,7 @@ class TestTensorBlob(GPUTestBase):
                     temp_output_dir_4,
                     temp_output_dir_5a,
                     temp_output_dir_5b,
+                    temp_output_dir_5c,
                 ]:
                     if os.path.exists(temp_dir):
                         shutil.rmtree(temp_dir)

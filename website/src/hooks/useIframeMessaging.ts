@@ -143,6 +143,5 @@ export function useIframeMessaging(options: UseIframeMessagingOptions) {
 
   return {
     sendMessage,
-    isReady: isReadyRef.current
   };
 }

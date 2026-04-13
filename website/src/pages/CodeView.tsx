@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { ProcessedKernel, getIRType } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
 import { getDisplayLanguage } from "../utils/irLanguage";
-import { mapLanguageToHighlighter } from "../components/CodeViewer";
+import { mapLanguageToHighlighter } from "../utils/languageUtils";
 import { ArrowsRightLeftIcon } from "../components/icons";
 
 /**

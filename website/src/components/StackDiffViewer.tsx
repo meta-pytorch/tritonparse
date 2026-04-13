@@ -46,12 +46,12 @@ const StackTraceFrame: React.FC<{ frame: StackFrame }> = ({ frame }) => (
     <span className="font-semibold text-green-700">{frame.name}</span>
     {frame.line_code && (
        <div className="pl-6 mt-1 bg-gray-100 rounded">
-        <SyntaxHighlighter 
-            language="python" 
-            style={oneLight} 
-            customStyle={{ 
-                margin: 0, 
-                padding: '0.25em 0.5em', 
+        <SyntaxHighlighter
+            language="python"
+            style={oneLight}
+            customStyle={{
+                margin: 0,
+                padding: '0.25em 0.5em',
                 fontSize: '0.75rem',
                 background: 'transparent'
              }}
@@ -64,7 +64,6 @@ const StackTraceFrame: React.FC<{ frame: StackFrame }> = ({ frame }) => (
 );
 
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- stackDiff contains dynamic data from trace
 const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = ({ stackDiff }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
@@ -74,7 +73,7 @@ const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = (
 
   return (
     <div>
-      <h5 
+      <h5
         className="text-md font-semibold mb-2 text-gray-700 cursor-pointer flex items-center"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
@@ -90,7 +89,7 @@ const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = (
             const launchRanges = item.launches
               .map((r: LaunchRange) => (r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`))
               .join(", ");
-            
+
             return (
               <div key={index} className="bg-white p-2 rounded border border-gray-200">
                 <p className="text-xs font-semibold text-gray-600 mb-1">
@@ -110,4 +109,4 @@ const StackDiffViewer: React.FC<{ stackDiff: StackDiff | null | undefined }> = (
   );
 };
 
-export default StackDiffViewer; 
+export default StackDiffViewer;

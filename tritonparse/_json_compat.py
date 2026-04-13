@@ -9,6 +9,7 @@ e.g. CPython 3.14 free-threading builds).
 
 ``loads()`` accepts ``str | bytes | bytearray | memoryview`` inputs.
 ``dumps()`` returns ``str``.
+``load()`` and ``dump()`` provide file-like object I/O convenience wrappers.
 """
 
 try:
@@ -85,3 +86,20 @@ else:
         if sort_keys:
             kwargs["sort_keys"] = True
         return _json.dumps(obj, **kwargs)
+
+
+def load(f):
+    """Deserialize a file-like object containing JSON to a Python object."""
+    return loads(f.read())
+
+
+def dump(obj, f, *, indent=False, sort_keys=False):
+    """Serialize a Python object as JSON to a file-like object.
+
+    Args:
+        obj: The object to serialize.
+        f: A file-like object with a ``write()`` method.
+        indent: If True, pretty-print with 2-space indent.
+        sort_keys: If True, sort dictionary keys.
+    """
+    f.write(dumps(obj, indent=indent, sort_keys=sort_keys))

@@ -17,9 +17,18 @@ import IRAnalysis from "./pages/IRAnalysis";
 import DataSourceSelector from "./components/DataSourceSelector";
 import WelcomeScreen from "./components/WelcomeScreen";
 import ExternalLink from "./components/ExternalLink";
-import { mapLanguageToHighlighter } from "./components/CodeViewer";
+import { mapLanguageToHighlighter } from "./utils/languageUtils";
 import { useFileDiffSession } from "./context/FileDiffSession";
 import { GitHubIcon, BookOpenIcon, ShareIcon } from "./components/icons";
+
+/**
+ * Helper function to find a kernel by its hash
+ */
+const findKernelByHash = (hash: string, kernels: ProcessedKernel[]): number => {
+  return kernels.findIndex(kernel =>
+    kernel.metadata?.hash === hash
+  );
+};
 
 /**
  * Main application component that handles data loading,
@@ -27,14 +36,17 @@ import { GitHubIcon, BookOpenIcon, ShareIcon } from "./components/icons";
  */
 function App() {
   const sess = useFileDiffSession();
+  const initialParams = new URLSearchParams(window.location.search);
+  const initialJsonUrl = initialParams.get("json_url");
+  const initialView = initialParams.get("view");
   // Store processed kernel data from log file
   const [kernels, setKernels] = useState<ProcessedKernel[]>([]);
   // Track loading state for displaying loading indicator
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(() => !!initialJsonUrl);
   // Store error message if data loading fails
   const [error, setError] = useState<string | null>(null);
   // Track active tab (overview or code comparison)
-  const [activeTab, setActiveTab] = useState<string>("overview");
+  const [activeTab, setActiveTab] = useState<string>(() => initialView === "file_diff" ? "file_diff" : "overview");
   // Track which IR file is selected for viewing
   const [selectedIR, setSelectedIR] = useState<string | null>(null);
   // Track which kernel is currently selected
@@ -42,7 +54,7 @@ function App() {
   // Track if data has been loaded
   const [dataLoaded, setDataLoaded] = useState<boolean>(false);
   // Track if welcome screen should be shown (even when data is loaded)
-  const [showWelcome, setShowWelcome] = useState<boolean>(true);
+  const [showWelcome, setShowWelcome] = useState<boolean>(() => !initialJsonUrl && initialView !== "file_diff");
   // Track the loaded data source URL
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   // Track if URL input is shown
@@ -86,35 +98,130 @@ function App() {
   });
 
   /**
-   * Helper function to find a kernel by its hash
+   * Core URL loading logic — all setState happens after await (safe for effects)
    */
-  const findKernelByHash = (hash: string, kernels: ProcessedKernel[]): number => {
-    return kernels.findIndex(kernel =>
-      kernel.metadata?.hash === hash
-    );
-  };
+  const loadUrlData = useCallback(async (url: string, view?: string | null, kernelHash?: string | null) => {
+    const logEntries = await loadLogData(url);
+    const processedKernels = processKernelData(logEntries);
 
-  // Check URL parameters and fb directory when component mounts
-  useEffect(() => {
-    // Parse URL parameters
-    const params = new URLSearchParams(window.location.search);
-    const jsonUrl = params.get("json_url");
-    const view = params.get("view");
-    const kernelHash = params.get("kernel_hash");
+    if (processedKernels.length > 0) {
+      setKernels(processedKernels);
 
-    // If json_url parameter exists, load the data from it
-    if (jsonUrl) {
-      handleUrlSelected(jsonUrl, view, kernelHash);
-      // Update the browser URL to include the json_url parameter
-      const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set("json_url", jsonUrl);
-      window.history.replaceState({}, "", newUrl.toString());
-    } else if (view === "file_diff") {
-      // Allow direct navigation to File Diff even without json_url
+      let kernelIndex = 0;
+      if (kernelHash) {
+        const foundIndex = findKernelByHash(kernelHash, processedKernels);
+        if (foundIndex >= 0) {
+          kernelIndex = foundIndex;
+        } else {
+          console.log(`Kernel hash ${kernelHash} not found, selected first kernel`);
+        }
+      }
+
+      setSelectedKernel(kernelIndex);
+
+      if (view === "ir_code_comparison") {
+        setActiveTab("comparison");
+      } else if (view === "file_diff") {
+        setActiveTab("file_diff");
+      }
+      setDataLoaded(true);
       setShowWelcome(false);
-      setActiveTab("file_diff");
+      setLoadedUrl(url);
+
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set("json_url", url);
+      if (view === "ir_code_comparison") {
+        newUrl.searchParams.set("view", "ir_code_comparison");
+      } else if (view === "file_diff") {
+        newUrl.searchParams.set("view", "file_diff");
+      }
+      if (kernelHash) {
+        const foundIndex = findKernelByHash(kernelHash, processedKernels);
+        if (foundIndex >= 0) {
+          newUrl.searchParams.set("kernel_hash", kernelHash);
+        }
+      }
+      window.history.replaceState({}, "", newUrl.toString());
+    } else {
+      console.warn("No kernels found in the URL data");
+      setError("No kernels found in the URL data. Please check the file format.");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- handleUrlSelected is stable but ESLint cannot verify it
+  }, []);
+
+  /**
+   * Handles loading data from a custom URL (user-triggered, wraps with loading/error state)
+   */
+  const handleUrlSelected = useCallback(async (url: string, initialView?: string | null, kernelHash?: string | null) => {
+    try {
+      setLoading(true);
+      setError(null);
+      await loadUrlData(url, initialView, kernelHash);
+    } catch (err) {
+      console.error("Error loading data from URL:", err);
+      setError(`Failed to load from URL: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [loadUrlData]);
+
+  // Load data from URL on mount (loading state initialized via lazy init)
+  useEffect(() => {
+    if (!initialJsonUrl) return;
+    const view = initialParams.get("view");
+    const kernelHash = initialParams.get("kernel_hash");
+
+    loadLogData(initialJsonUrl)
+      .then(logEntries => {
+        const processedKernels = processKernelData(logEntries);
+        if (processedKernels.length > 0) {
+          setKernels(processedKernels);
+
+          let kernelIndex = 0;
+          if (kernelHash) {
+            const foundIndex = findKernelByHash(kernelHash, processedKernels);
+            if (foundIndex >= 0) {
+              kernelIndex = foundIndex;
+            } else {
+              console.log(`Kernel hash ${kernelHash} not found, selected first kernel`);
+            }
+          }
+          setSelectedKernel(kernelIndex);
+
+          if (view === "ir_code_comparison") {
+            setActiveTab("comparison");
+          } else if (view === "file_diff") {
+            setActiveTab("file_diff");
+          }
+          setDataLoaded(true);
+          setShowWelcome(false);
+          setLoadedUrl(initialJsonUrl);
+
+          const newUrl = new URL(window.location.href);
+          newUrl.searchParams.set("json_url", initialJsonUrl);
+          if (view === "ir_code_comparison") newUrl.searchParams.set("view", "ir_code_comparison");
+          else if (view === "file_diff") newUrl.searchParams.set("view", "file_diff");
+          if (kernelHash) {
+            const fi = findKernelByHash(kernelHash, processedKernels);
+            if (fi >= 0) newUrl.searchParams.set("kernel_hash", kernelHash);
+          }
+          window.history.replaceState({}, "", newUrl.toString());
+        } else {
+          console.warn("No kernels found in the URL data");
+          setError("No kernels found in the URL data. Please check the file format.");
+        }
+      })
+      .catch(err => {
+        console.error("Error loading data from URL:", err);
+        setError(`Failed to load from URL: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("json_url", initialJsonUrl);
+    window.history.replaceState({}, "", newUrl.toString());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -194,77 +301,6 @@ function App() {
    */
   const handleFileSelected = async (file: File) => {
     await loadData(file);
-  };
-
-  /**
-   * Handles loading data from a custom URL
-   */
-  const handleUrlSelected = async (url: string, initialView?: string | null, kernelHash?: string | null) => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const logEntries = await loadLogData(url);
-
-      // Process raw log entries into kernel data structures
-      const processedKernels = processKernelData(logEntries);
-
-      if (processedKernels.length > 0) {
-        setKernels(processedKernels);
-
-        // First, determine which kernel to select
-        let kernelIndex = 0; // Default to first kernel
-        if (kernelHash) {
-          const foundIndex = findKernelByHash(kernelHash, processedKernels);
-          if (foundIndex >= 0) {
-            kernelIndex = foundIndex;
-          } else {
-            console.log(`Kernel hash ${kernelHash} not found, selected first kernel`);
-          }
-        }
-
-        // Set the selected kernel
-        setSelectedKernel(kernelIndex);
-
-        // Then, determine which view to show
-        if (initialView === "ir_code_comparison") {
-          setActiveTab("comparison");
-        } else if (initialView === "file_diff") {
-          setActiveTab("file_diff");
-        }
-        setDataLoaded(true);
-        setShowWelcome(false);
-        setLoadedUrl(url);
-
-        // Update URL parameters
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.set("json_url", url);
-
-        // Add view and kernel_hash parameters if applicable
-        if (initialView === "ir_code_comparison") {
-          newUrl.searchParams.set("view", "ir_code_comparison");
-        } else if (initialView === "file_diff") {
-          newUrl.searchParams.set("view", "file_diff");
-        }
-
-        if (kernelHash) {
-          const foundIndex = findKernelByHash(kernelHash, processedKernels);
-          if (foundIndex >= 0) {
-            newUrl.searchParams.set("kernel_hash", kernelHash);
-          }
-        }
-
-        window.history.replaceState({}, "", newUrl.toString());
-      } else {
-        console.warn("No kernels found in the URL data");
-        setError("No kernels found in the URL data. Please check the file format.");
-      }
-    } catch (err) {
-      console.error("Error loading data from URL:", err);
-      setError(`Failed to load from URL: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setLoading(false);
-    }
   };
 
   /**
