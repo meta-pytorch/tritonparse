@@ -475,7 +475,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <div className="flex items-center gap-2 mb-1">
               <input
                 type="file"
-                accept=".ndjson,.ndjson.gz,.gz,.jsonl"
+                accept=".ndjson,.ndjson.gz,.gz,.jsonl,.clp"
                 className="block w-full text-sm text-gray-700"
                 onChange={(e) => handleLoadLeftLocal(e.target.files?.[0] || null)}
                 disabled={loadingLeft}
@@ -530,7 +530,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <div className="flex items-center gap-2 mb-1">
               <input
                 type="file"
-                accept=".ndjson,.ndjson.gz,.gz,.jsonl"
+                accept=".ndjson,.ndjson.gz,.gz,.jsonl,.clp"
                 className="block w-full text-sm text-gray-700"
                 onChange={(e) => handleLoadRightLocal(e.target.files?.[0] || null)}
                 disabled={loadingRight}

@@ -19,9 +19,12 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
     if (files && files.length > 0) {
       const file = files[0];
 
-      // Support NDJSON and compressed files only
+      // Support NDJSON, gzip-compressed, or CLP files only
       const fileName = file.name.toLowerCase();
-      const isValidFile = fileName.endsWith(".ndjson") || fileName.endsWith(".gz");
+      const isValidFile =
+        fileName.endsWith(".ndjson") ||
+        fileName.endsWith(".gz") ||
+        fileName.endsWith(".clp");
 
       if (isValidFile) {
         handleFileSelected(file);
@@ -51,9 +54,12 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
     if (files && files.length > 0) {
       const file = files[0];
 
-      // Support NDJSON and compressed files only
+      // Support NDJSON, gzip-compressed files, or CLP archives only
       const fileName = file.name.toLowerCase();
-      const isValidFile = fileName.endsWith(".ndjson") || fileName.endsWith(".gz");
+      const isValidFile =
+        fileName.endsWith(".ndjson") ||
+        fileName.endsWith(".gz") ||
+        fileName.endsWith(".clp");
 
       if (isValidFile) {
         handleFileSelected(file);
@@ -65,8 +71,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
     <div className="flex flex-col items-center justify-center px-4 py-16 max-w-4xl mx-auto text-center">
       <h2 className="text-2xl font-bold text-gray-800 mb-6">Welcome to TritonParse</h2>
       <p className="mb-8 text-gray-600">
-        Load a Triton log file to analyze compiled kernels and their IR representations. Supports NDJSON and compressed
-        (.gz) files.
+        Load a Triton log file to analyze compiled kernels and their IR representations. Supports NDJSON,
+        gzip-compressed files, or CLP archives.
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-4xl mb-10">
@@ -96,13 +102,13 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ loadDefaultData, handleFi
           </div>
           <h3 className="text-lg font-medium text-gray-800 mb-2">Local File</h3>
           <p className="text-sm text-gray-600 mb-4">
-            {isDragOver ? 'Drop Triton log file here' : 'Open or drag a Triton log file (NDJSON or .gz)'}
+            {isDragOver ? 'Drop Triton log file here' : 'Open or drag a Triton log file (NDJSON, .gz or .clp)'}
           </p>
           <label htmlFor="welcomeFileInput" className="absolute inset-0 cursor-pointer" aria-label="Open local file" />
           <input
             type="file"
             id="welcomeFileInput"
-            accept=".ndjson,.gz,application/x-ndjson,application/gzip"
+            accept=".clp,.gz,.ndjson,application/gzip,application/x-ndjson"
             onChange={handleFileChange}
             className="hidden"
           />
