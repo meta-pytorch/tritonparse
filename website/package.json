@@ -35,6 +35,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.4.27",
+    "clp-ffi-js": "^0.7.0-beta.2",
     "eslint": "^10.2.0",
     "eslint-plugin-react-hooks": "canary",
     "eslint-plugin-react-refresh": "^0.5.2",
