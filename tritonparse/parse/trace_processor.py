@@ -3,6 +3,7 @@
 import os
 import re
 from collections import defaultdict
+from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -34,9 +35,60 @@ logger = get_logger("SourceMapping")
 # =============================================================================
 
 
-def get_default_procedure_checks_path() -> str:
-    """Get the path to the default procedure checks JSON file."""
-    return str(Path(__file__).parent / "default_procedure_checks.json")
+_DEFAULT_PROCEDURE_CHECKS_RESOURCE = "default_procedure_checks.json"
+_DEFAULT_PROCEDURE_CHECKS_PACKAGE = "tritonparse.parse"
+
+
+def _parse_procedure_checks(data: Any, source: str) -> List[Dict[str, Any]]:
+    """
+    Parse and validate procedure check data.
+
+    Args:
+        data: Parsed JSON data.
+        source: Description of the source (for error messages).
+
+    Returns:
+        List of procedure check configuration dictionaries.
+
+    Raises:
+        ValueError: If the data structure is invalid.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Procedure checks file must contain a JSON object")
+
+    procedures = data.get("procedures", [])
+    if not isinstance(procedures, list):
+        raise ValueError("'procedures' must be an array")
+
+    result = []
+    for i, proc in enumerate(procedures):
+        if not isinstance(proc, dict):
+            raise ValueError(f"Procedure at index {i} must be an object")
+
+        name = proc.get("name")
+        if not name:
+            raise ValueError(f"Procedure at index {i} is missing 'name' field")
+
+        pattern_checks = proc.get("pattern_checks")
+        if not pattern_checks:
+            raise ValueError(f"Procedure '{name}' is missing 'pattern_checks' field")
+
+        config = {
+            "name": name,
+            "heading": proc.get("heading", name),
+            "patterns": pattern_checks,
+            "description": proc.get("description", ""),
+            "message": proc.get("message", ""),
+        }
+
+        display_attrs = proc.get("display_attributes")
+        if display_attrs and isinstance(display_attrs, list):
+            config["display_attributes"] = display_attrs
+
+        result.append(config)
+
+    logger.info(f"Loaded {len(result)} procedure checks from {source}")
+    return result
 
 
 def load_procedure_checks_from_file(file_path: str) -> List[Dict[str, Any]]:
@@ -78,59 +130,29 @@ def load_procedure_checks_from_file(file_path: str) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         data = loads(f.read())
 
-    # Validate structure
-    if not isinstance(data, dict):
-        raise ValueError("Procedure checks file must contain a JSON object")
-
-    procedures = data.get("procedures", [])
-    if not isinstance(procedures, list):
-        raise ValueError("'procedures' must be an array")
-
-    result = []
-    for i, proc in enumerate(procedures):
-        if not isinstance(proc, dict):
-            raise ValueError(f"Procedure at index {i} must be an object")
-
-        name = proc.get("name")
-        if not name:
-            raise ValueError(f"Procedure at index {i} is missing 'name' field")
-
-        pattern_checks = proc.get("pattern_checks")
-        if not pattern_checks:
-            raise ValueError(f"Procedure '{name}' is missing 'pattern_checks' field")
-
-        config = {
-            "name": name,
-            "heading": proc.get("heading", name),
-            "patterns": pattern_checks,
-            "description": proc.get("description", ""),
-            "message": proc.get("message", ""),
-        }
-
-        # Include display_attributes if provided
-        display_attrs = proc.get("display_attributes")
-        if display_attrs and isinstance(display_attrs, list):
-            config["display_attributes"] = display_attrs
-
-        result.append(config)
-
-    logger.info(f"Loaded {len(result)} procedure checks from {file_path}")
-    return result
+    return _parse_procedure_checks(data, file_path)
 
 
 def get_default_procedure_checks() -> List[Dict[str, Any]]:
     """
-    Load the default procedure checks from the bundled JSON file.
+    Load the default procedure checks from the bundled JSON resource.
+
+    Uses importlib.resources to load the JSON file, which works correctly
+    in both filesystem and PAR (Python ARchive) environments.
 
     Returns:
         List of procedure check configuration dictionaries.
     """
-    default_path = get_default_procedure_checks_path()
     try:
-        return load_procedure_checks_from_file(default_path)
+        ref = pkg_files(_DEFAULT_PROCEDURE_CHECKS_PACKAGE).joinpath(
+            _DEFAULT_PROCEDURE_CHECKS_RESOURCE
+        )
+        data = loads(ref.read_bytes())
+        return _parse_procedure_checks(data, _DEFAULT_PROCEDURE_CHECKS_RESOURCE)
     except (FileNotFoundError, JSONDecodeError, ValueError) as e:
         logger.warning(
-            f"Failed to load default procedure checks from {default_path}: {e}"
+            f"Failed to load default procedure checks from "
+            f"{_DEFAULT_PROCEDURE_CHECKS_RESOURCE}: {e}"
         )
         return []
 
