@@ -413,12 +413,13 @@ function isGzipFile(buffer: ArrayBuffer): boolean {
 }
 
 /**
- * Detects if a file is in clp-json single-file archive format by checking its header bytes.
+ * Detects if a file is in CLP JSON single-file archive (SFA) format by checking
+ * its header bytes.
  * @param buffer - ArrayBuffer containing the file data
  * @returns Boolean indicating if the file is a clp-json single-file archive
  */
 function isClpFile(buffer: ArrayBuffer): boolean {
-    // Check for clp-s sfa magic number: 0xFD 0x2F 0xC5 0x30
+    // Check for CLP JSON SFA magic number: 0xFD 0x2F 0xC5 0x30
     const header = new Uint8Array(buffer.slice(0, 4));
     return (
         header[0] === 0xFD &&
