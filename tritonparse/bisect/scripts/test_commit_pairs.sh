@@ -206,7 +206,7 @@ FOUND_BAD=false
   echo "========================================"
   echo "Start Time: $(date)"
   echo "Triton Dir: $TRITON_DIR"
-  echo "LLVM: Managed by Triton (.llvm-project/)"
+  echo "LLVM: Managed by Triton (source: llvm-project/, build: .llvm-project/build)"
   echo "Test Script: $TEST_SCRIPT"
   echo "Test Args: $TEST_ARGS"
   echo "CSV File: $COMMITS_CSV"

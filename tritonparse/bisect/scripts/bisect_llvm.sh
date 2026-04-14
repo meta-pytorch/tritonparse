@@ -9,11 +9,12 @@
 #   directory to let Triton automatically clone an LLVM repository:
 #     $ cd /path/to/triton
 #     $ make dev-install-llvm
-#   This will create llvm-project at /path/to/triton/.llvm-project
+#   This will clone the LLVM source into /path/to/triton/llvm-project
+#   (build output goes to /path/to/triton/.llvm-project/build)
 #
 # USAGE:
 #   Set required environment variables and run git bisect:
-#     $ cd /path/to/triton/.llvm-project  # Use the LLVM cloned by Triton
+#     $ cd /path/to/triton/llvm-project  # LLVM source git clone
 #     $ export TRITON_DIR=/path/to/triton
 #     $ export TEST_SCRIPT=/path/to/test.py
 #     $ git bisect start
