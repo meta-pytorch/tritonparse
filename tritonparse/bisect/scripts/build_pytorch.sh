@@ -37,6 +37,12 @@ else
   PIP="pip"
 fi
 
+
+# Disable some builds to save build time
+export BUILD_TEST=0
+export USE_FLASH_ATTENTION=0
+export USE_MEM_EFF_ATTENTION=0
+
 echo "Setting CUDA HOME and path..."
 
 export PATH=$CUDA_HOME/bin:$PATH
