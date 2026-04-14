@@ -57,9 +57,12 @@ $PIP install mkl-static mkl-include
 echo "Installing MAGMA..."
 bash "${SCRIPT_DIR}/install_magma.sh" "$CUDA_VERSION"
 
-# Step 4: Build Triton (PyTorch's vendored copy)
-echo "Building vendored Triton..."
-make triton
+# Step 4: Install Triton (PyTorch's vendored copy)
+echo "Installing vendored Triton..."
+TRITON_VERSION="triton==$(cat .ci/docker/triton_version.txt)"
+TRITON_COMMIT_ID="$(head -c 8 .ci/docker/ci_commit_pins/triton.txt)"
+DOWNLOAD_PYTORCH_ORG="https://download.pytorch.org/whl"
+$PIP install --index-url ${DOWNLOAD_PYTORCH_ORG}/nightly/ $TRITON_VERSION+git${TRITON_COMMIT_ID}
 
 # Step 5: Install timm and huggingface from commit pins
 PINS_DIR=".ci/docker/ci_commit_pins"
