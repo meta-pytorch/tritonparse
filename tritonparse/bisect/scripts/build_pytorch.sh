@@ -43,6 +43,7 @@ export BUILD_TEST=0
 export USE_FLASH_ATTENTION=0
 export USE_MEM_EFF_ATTENTION=0
 export USE_NCCL=0
+export USE_MKLDNN=0
 
 echo "Setting CUDA HOME and path..."
 
