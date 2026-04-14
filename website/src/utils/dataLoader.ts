@@ -568,15 +568,14 @@ export async function loadLogData(url: string): Promise<LogEntry[]> {
  * @returns Promise resolving to an array of LogEntry objects
  */
 export async function loadLogDataFromFile(file: File): Promise<LogEntry[]> {
-    // For large files, we should use streaming to avoid memory issues
+    // For large NDJSON files, we should use streaming to avoid memory issues.
+    // We read a small header upfront to detect known compression formats (gzip
+    // or CLP). Streaming is only used for files that exceed the size threshold
+    // and are not detected as compressed, since compressed streams require
+    // different handling inside `processArrayBuffer`.
     const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
     const header = await file.slice(0, 4).arrayBuffer();
     if (file.size > LARGE_FILE_THRESHOLD && false === isGzipFile(header) && false === isClpFile(header)) {
-        // For large files, use streaming to avoid high memory usage. We read a
-        // small header upfront to detect known compression formats (gzip or
-        // CLP). Streaming is only used for files that exceed the size threshold
-        // and are not detected as compressed, since compressed streams require
-        // different handling.
         console.log(`NDJSON file size (${file.size} bytes) exceeds threshold, using streaming.`);
         return parseLogDataFromStream(file.stream() as ReadableStream<Uint8Array>);
     }
