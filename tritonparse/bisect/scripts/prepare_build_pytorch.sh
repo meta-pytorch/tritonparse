@@ -86,4 +86,8 @@ else
   exit 1
 fi
 
+# Step 6: Install CI dependencies
+CI_DEPS_FILE=".ci/docker/requirements-ci.txt"
+$PIP install -r "${CI_DEPS_FILE}"
+
 echo "PyTorch build preparation completed successfully."
