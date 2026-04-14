@@ -18,11 +18,14 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from tritonparse.bisect.executor import CommandResult, ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
 from tritonparse.compat_builder.state import CompatBuildPhase, CompatBuildState
+
+if TYPE_CHECKING:
+    from tritonparse.compat_builder.ai_fixer import AICompatFixer
 
 # LLVM hash file location inside Triton repo
 _LLVM_HASH_FILE = "cmake/llvm-hash.txt"
@@ -104,7 +107,7 @@ class CompatBuilder:
         conda_env: str = "triton_bisect",
         worktree_root: str | None = None,
         worktree_path: str | None = None,
-        ai_fixer_factory: Callable[[str], object] | None = None,
+        ai_fixer_factory: Callable[[str], AICompatFixer] | None = None,
     ) -> None:
         self.triton_dir = triton_dir
         self.llvm_bump_commit = llvm_bump_commit
@@ -716,8 +719,7 @@ class CompatBuilder:
             return None
         try:
             ai_fixer = self.ai_fixer_factory(worktree)
-            # pyre-ignore[16]: ai_fixer type is `object` for now (Layer 3 adds AICompatFixer)
-            fix_commit = ai_fixer.attempt_fix(  # type: ignore[attr-defined]
+            fix_commit = ai_fixer.attempt_fix(
                 build_error=state.last_build_error,
                 incompatible_llvm=incompatible_llvm,
                 llvm_bump_commit=state.llvm_bump_commit,

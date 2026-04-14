@@ -8,6 +8,11 @@ from .bisect.cli import (
     _validate_args as _validate_bisect_args,
     bisect_command,
 )
+from .compat_builder.cli import (
+    _add_compat_build_args,
+    _validate_compat_build_args,
+    compat_build_command,
+)
 from .diff.cli import _add_diff_args, diff_command
 from .info.cli import _add_info_args, info_command
 from .parse.utils import _add_parse_args, unified_parse
@@ -118,6 +123,23 @@ def main():
     _add_bisect_args(bisect_parser)
     bisect_parser.set_defaults(func="bisect")
 
+    # compat-build subcommand
+    compat_build_parser = subparsers.add_parser(
+        "compat-build",
+        help="Build LLVM compatibility map for a single LLVM bump",
+        description=(
+            "Build commits.csv mapping Triton/LLVM compatibility.\n\n"
+            "Modes:\n"
+            "  Default (no flags): Build compatibility map\n"
+            "  --resume:           Resume after manual fix\n"
+            "  --verify:           Validate existing CSV\n"
+            "  --status:           Show build status"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_compat_build_args(compat_build_parser)
+    compat_build_parser.set_defaults(func="compat_build")
+
     args = parser.parse_args()
 
     # Log usage for CLI invocations
@@ -181,6 +203,10 @@ def main():
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)
         exit_code = bisect_command(args)
+        raise SystemExit(exit_code)
+    elif args.func == "compat_build":
+        _validate_compat_build_args(args, compat_build_parser)
+        exit_code = compat_build_command(args)
         raise SystemExit(exit_code)
     else:
         raise RuntimeError(f"Unknown command: {args.func}")
