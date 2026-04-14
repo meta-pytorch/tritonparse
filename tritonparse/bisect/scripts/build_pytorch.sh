@@ -37,6 +37,11 @@ else
   PIP="pip"
 fi
 
+echo "Setting CUDA HOME and path..."
+
+export PATH=$CUDA_HOME/bin:$PATH
+nvcc --version
+
 echo "Building PyTorch..."
 cd "$PYTORCH_SRC_DIR"
 if [[ "$USE_UV" == "1" ]]; then
