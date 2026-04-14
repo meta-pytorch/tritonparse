@@ -108,7 +108,6 @@ function install_124 {
 
   install_cudnn 12 $CUDNN_VERSION
 
-  ldconfig
 }
 
 function install_126 {
@@ -120,7 +119,6 @@ function install_126 {
 
   install_nvshmem 12 $NVSHMEM_VERSION
 
-  ldconfig
 }
 
 function install_129 {
@@ -132,7 +130,6 @@ function install_129 {
 
   install_nvshmem 12 $NVSHMEM_VERSION
 
-  ldconfig
 }
 
 function install_128 {
@@ -144,7 +141,6 @@ function install_128 {
 
   install_nvshmem 12 $NVSHMEM_VERSION
 
-  ldconfig
 }
 
 function install_130 {
@@ -156,7 +152,6 @@ function install_130 {
 
   install_nvshmem 13 $NVSHMEM_VERSION
 
-  ldconfig
 }
 
 function install_132 {
@@ -168,7 +163,6 @@ function install_132 {
 
   install_nvshmem 13 $NVSHMEM_VERSION
 
-  ldconfig
 }
 
 # idiomatic parameter and option handling in sh
