@@ -54,10 +54,10 @@ echo "Building PyTorch..."
 cd "$PYTORCH_SRC_DIR"
 if [[ "$USE_UV" == "1" ]]; then
   CMAKE_PREFIX_PATH="${VIRTUAL_ENV}:${CMAKE_PREFIX_PATH}" \
-    $PIP install --no-build-isolation -v -e .
+    $PIP install --no-build-isolation -e .
 else
   CMAKE_PREFIX_PATH="${CONDA_PREFIX:-"$(dirname "$(which conda)")/../"}:${CMAKE_PREFIX_PATH}" \
-    $PIP install --no-build-isolation -v -e .
+    $PIP install --no-build-isolation -e .
 fi
 
 # Build torchvision
@@ -68,6 +68,6 @@ if [ ! -d "$VISION_SRC_DIR" ]; then
 fi
 echo "Building torchvision..."
 cd "$VISION_SRC_DIR"
-$PIP install --no-build-isolation -v -e "$VISION_SRC_DIR"
+$PIP install --no-build-isolation -e "$VISION_SRC_DIR"
 
 echo "PyTorch build completed successfully."
