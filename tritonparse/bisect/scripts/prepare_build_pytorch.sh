@@ -30,7 +30,7 @@ if [ -z "$CUDA_HOME" ]; then
 fi
 
 USE_UV=${USE_UV:-0}
-CUDA_VERSION=${CUDA_VERSION:-12.8}
+CUDA_VERSION=${CUDA_VERSION:-13.0}
 
 if [[ "$USE_UV" == "1" ]]; then
   PIP="uv pip"
