@@ -6,6 +6,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+import torch
 from tritonparse.diff.core.diff_engine import DiffEngine
 from tritonparse.diff.core.diff_types import TensorArgDiff, TensorValueDiff
 from tritonparse.diff.core.event_matcher import find_launches_for_compilation
@@ -169,10 +170,6 @@ class TestTensorValueDiff(unittest.TestCase):
 
     def test_analyzer_with_mocked_blobs_identical(self) -> None:
         """Test analyzer with identical tensors (mocked load_tensor)."""
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch not available")
 
         tensor = torch.ones(1024)
 
@@ -211,10 +208,6 @@ class TestTensorValueDiff(unittest.TestCase):
 
     def test_analyzer_with_mocked_blobs_divergent(self) -> None:
         """Test analyzer with divergent tensors (mocked load_tensor)."""
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch not available")
 
         tensor_a = torch.zeros(1024)
         tensor_b = torch.ones(1024)
@@ -254,10 +247,6 @@ class TestTensorValueDiff(unittest.TestCase):
 
     def test_analyzer_with_mocked_blobs_close(self) -> None:
         """Test analyzer with close tensors (within tolerance)."""
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch not available")
 
         tensor_a = torch.ones(1024)
         tensor_b = torch.ones(1024) + 1e-7  # Within default atol=1e-5
@@ -462,10 +451,6 @@ class TestTensorValueDiffInlineStats(unittest.TestCase):
 
     def test_analyzer_mixed_blob_and_stats(self) -> None:
         """Test analyzer with some args having blobs and some only stats."""
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch not available")
 
         tensor = torch.ones(1024)
         args_a = {

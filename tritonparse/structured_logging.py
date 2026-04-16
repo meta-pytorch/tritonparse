@@ -4,7 +4,6 @@ import atexit
 import fnmatch
 import gzip
 import hashlib
-import importlib
 import inspect
 import io
 import logging
@@ -21,6 +20,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import torch
+from torch.utils._traceback import CapturedTraceback
 from triton.knobs import JITHook, LaunchHook
 from tritonparse._json_compat import dumps, loads
 
@@ -135,13 +136,6 @@ TRITONPARSE_TRACE_MANIFOLD = os.getenv(
 TRITON_TRACE_HANDLER = None
 # Global tensor blob manager instance
 TENSOR_BLOB_MANAGER = None
-
-if importlib.util.find_spec("torch") is not None:
-    TORCH_INSTALLED = True
-    import torch
-    from torch.utils._traceback import CapturedTraceback
-else:
-    TORCH_INSTALLED = False
 
 
 class TensorBlobManager:
@@ -278,13 +272,7 @@ class TensorBlobManager:
             import io
 
             buffer = io.BytesIO()
-            if TORCH_INSTALLED:
-                torch.save(tensor.cpu(), buffer)
-            else:
-                return {
-                    "error": "PyTorch not available for tensor serialization",
-                    "tensor_hash": None,
-                }
+            torch.save(tensor.cpu(), buffer)
 
             blob_data = buffer.getvalue()
             uncompressed_size = len(blob_data)
@@ -545,7 +533,7 @@ def convert(obj):
     if isinstance(obj, dtype):
         return f"triton.language.core.dtype('{str(obj)}')"
 
-    if TORCH_INSTALLED and isinstance(obj, torch.dtype):
+    if isinstance(obj, torch.dtype):
         return str(obj)
 
     log.warning(f"Unknown type: {type(obj)}")
@@ -681,8 +669,6 @@ def get_stack_trace(skip=1):
         List[Dict]: List of frame information dictionaries containing line numbers,
                    function names, filenames, and code snippets
     """
-    if not TORCH_INSTALLED:
-        return []
     frames = []
     for frame in CapturedTraceback.extract(skip=skip).summary():
         frames.append(
@@ -1016,11 +1002,10 @@ class TritonTraceHandler(logging.StreamHandler):
         Returns:
             The rank number if torch.distributed is initialized, None otherwise.
         """
-        if TORCH_INSTALLED:
-            import torch.distributed as dist
+        import torch.distributed as dist
 
-            if dist.is_available() and dist.is_initialized():
-                return dist.get_rank()
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank()
         return None
 
     def get_root_dir(self):
@@ -1031,28 +1016,23 @@ class TritonTraceHandler(logging.StreamHandler):
             return self.root_dir
         TRACE_LOG_DIR = "/logs"
         should_set_root_dir = True
-        if TORCH_INSTALLED:
-            import torch.version as torch_version
+        import torch.version as torch_version
 
-            if (
-                hasattr(torch_version, "git_version")
-                and os.getenv("MAST_HPC_JOB_NAME") is None
-            ):
-                log.info(
-                    "TritonTraceHandler: disabled because not fbcode or conda on mast"
-                )
-                should_set_root_dir = False
-            # TODO: change to tritonparse knob
-            # The following check is necessary because the possible version mismatch between torch and tritonparse
-            elif (
-                hasattr(torch, "_utils_internal")
-                and hasattr(torch._utils_internal, "justknobs_check")
-                and not torch._utils_internal.justknobs_check("pytorch/trace:enable")
-            ):
-                log.info(
-                    "TritonTraceHandler: disabled because justknobs_check('pytorch/trace:enable') returned False"
-                )
-                should_set_root_dir = False
+        if (
+            hasattr(torch_version, "git_version")
+            and os.getenv("MAST_HPC_JOB_NAME") is None
+        ):
+            log.info("TritonTraceHandler: disabled because not fbcode or conda on mast")
+            should_set_root_dir = False
+        elif (
+            hasattr(torch, "_utils_internal")
+            and hasattr(torch._utils_internal, "justknobs_check")
+            and not torch._utils_internal.justknobs_check("pytorch/trace:enable")
+        ):
+            log.info(
+                "TritonTraceHandler: disabled because justknobs_check('pytorch/trace:enable') returned False"
+            )
+            should_set_root_dir = False
         if should_set_root_dir:
             if not os.path.exists(TRACE_LOG_DIR):
                 log.info(
@@ -1344,10 +1324,7 @@ def maybe_trace_triton(
     else:
         trace_data["metadata"].update(metadata)
     # Handle torch._guards which might not be recognized by type checker
-    if TORCH_INSTALLED:
-        trace_id = torch._guards.CompileContext.current_trace_id()  # type: ignore
-    else:
-        trace_id = None
+    trace_id = torch._guards.CompileContext.current_trace_id()  # type: ignore
     cid = trace_id.compile_id if trace_id else None
     if cid is not None:
         for attr_name in ["compiled_autograd_id", "frame_id", "frame_compile_id"]:
@@ -1391,7 +1368,7 @@ def extract_arg_info(arg_dict):
         arg_info = {}
 
         # Check if it's a PyTorch tensor
-        if TORCH_INSTALLED and isinstance(arg_value, torch.Tensor):
+        if isinstance(arg_value, torch.Tensor):
             arg_info["type"] = "tensor"
             arg_info.update(_log_torch_tensor_info(arg_value))
         # Handle custom Tensor/Storage types from triton_kernels
@@ -1415,10 +1392,8 @@ def extract_arg_info(arg_dict):
 
             elif type_name == "Storage":
                 # Dump all attributes needed to reconstruct the Storage object
-                if (
-                    hasattr(arg_value, "data")
-                    and TORCH_INSTALLED
-                    and isinstance(arg_value.data, torch.Tensor)
+                if hasattr(arg_value, "data") and isinstance(
+                    arg_value.data, torch.Tensor
                 ):
                     # The 'data' is a torch.Tensor, log its metadata fully
                     arg_info["data"] = _log_torch_tensor_info(arg_value.data)
@@ -1430,7 +1405,7 @@ def extract_arg_info(arg_dict):
         elif _is_tensor_descriptor(arg_value):
             arg_info["type"] = "TensorDescriptor"
             # Capture all attributes needed for reconstruction
-            if hasattr(arg_value, "base") and TORCH_INSTALLED:
+            if hasattr(arg_value, "base"):
                 base_tensor = arg_value.base
                 if isinstance(base_tensor, torch.Tensor):
                     arg_info["base"] = _log_torch_tensor_info(base_tensor)
@@ -1472,11 +1447,10 @@ def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
     # Check if we're in CUDA graph capture mode - if so, skip detailed argument extraction
     # to avoid CUDA errors (cudaErrorStreamCaptureUnsupported)
     is_capturing = False
-    if TORCH_INSTALLED:
-        try:
-            is_capturing = torch.cuda.is_current_stream_capturing()
-        except (AttributeError, RuntimeError):
-            pass
+    try:
+        is_capturing = torch.cuda.is_current_stream_capturing()
+    except (AttributeError, RuntimeError):
+        pass
 
     if is_capturing:
         # During CUDA graph capture, return minimal metadata without argument extraction

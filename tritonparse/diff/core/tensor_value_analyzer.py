@@ -15,6 +15,7 @@ min/max/mean/std summary statistics.
 import logging
 from typing import Any
 
+import torch
 from tritonparse.diff.core.diff_types import TensorArgDiff, TensorValueDiff
 
 logger = logging.getLogger(__name__)
@@ -461,7 +462,6 @@ class TensorValueAnalyzer:
         Returns:
             Dictionary of computed metrics.
         """
-        import torch
 
         # Cast to float for numeric comparison
         a = tensor_a.float()
