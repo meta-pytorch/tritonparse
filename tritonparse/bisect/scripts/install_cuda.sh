@@ -101,74 +101,100 @@ function install_nvshmem {
   echo "nvSHMEM ${nvshmem_version} for CUDA ${cuda_major_version} (${arch_path}) installed."
 }
 
+function install_cusparselt {
+  cuda_major_version=$1
+  cusparselt_version=$2
+  mkdir tmp_cusparselt && cd tmp_cusparselt
+  # cuSPARSELt license: https://docs.nvidia.com/cuda/cusparselt/license.html
+  cusparselt_minor=$(echo "${cusparselt_version}" | cut -d. -f2)
+  # Starting from 0.8.0, NVIDIA ships separate archives per CUDA major version
+  if [[ "${cusparselt_minor}" -ge 8 ]]; then
+    CUSPARSELT_NAME="libcusparse_lt-linux-${arch_path}-${cusparselt_version}_cuda${cuda_major_version}-archive"
+  else
+    CUSPARSELT_NAME="libcusparse_lt-linux-${arch_path}-${cusparselt_version}-archive"
+  fi
+  curl --retry 3 -OLs "https://developer.download.nvidia.com/compute/cusparselt/redist/libcusparse_lt/linux-${arch_path}/${CUSPARSELT_NAME}.tar.xz"
+  tar xf "${CUSPARSELT_NAME}.tar.xz"
+  cp -a "${CUSPARSELT_NAME}/include/"* "${CUDA_HOME}/include/"
+  cp -a "${CUSPARSELT_NAME}/lib/"* "${CUDA_HOME}/lib64/"
+  cd ..
+  rm -rf tmp_cusparselt
+}
+
 function install_124 {
   CUDNN_VERSION=9.1.0.70
-  echo "Installing CUDA 12.4.1 and cuDNN ${CUDNN_VERSION}"
+  CUSPARSELT_VERSION=0.6.2.3
+  echo "Installing CUDA 12.4.1 and cuDNN ${CUDNN_VERSION} and cuSparseLt-${CUSPARSELT_VERSION}"
   install_cuda 12.4.1 cuda_12.4.1_550.54.15_linux
 
   install_cudnn 12 $CUDNN_VERSION
 
-  ldconfig
+  install_cusparselt 12 $CUSPARSELT_VERSION
 }
 
 function install_126 {
   CUDNN_VERSION=9.10.2.21
-  echo "Installing CUDA 12.6.3 and cuDNN ${CUDNN_VERSION} and NVSHMEM"
+  CUSPARSELT_VERSION=0.7.1.0
+  echo "Installing CUDA 12.6.3 and cuDNN ${CUDNN_VERSION} and NVSHMEM and cuSparseLt-${CUSPARSELT_VERSION}"
   install_cuda 12.6.3 cuda_12.6.3_560.35.05_linux
 
   install_cudnn 12 $CUDNN_VERSION
 
   install_nvshmem 12 $NVSHMEM_VERSION
 
-  ldconfig
+  install_cusparselt 12 $CUSPARSELT_VERSION
 }
 
 function install_129 {
   CUDNN_VERSION=9.20.0.48
-  echo "Installing CUDA 12.9.1 and cuDNN ${CUDNN_VERSION} and NVSHMEM"
+  CUSPARSELT_VERSION=0.8.1.1
+  echo "Installing CUDA 12.9.1 and cuDNN ${CUDNN_VERSION} and NVSHMEM and cuSparseLt-${CUSPARSELT_VERSION}"
   install_cuda 12.9.1 cuda_12.9.1_575.57.08_linux
 
   install_cudnn 12 $CUDNN_VERSION
 
   install_nvshmem 12 $NVSHMEM_VERSION
 
-  ldconfig
+  install_cusparselt 12 $CUSPARSELT_VERSION
 }
 
 function install_128 {
   CUDNN_VERSION=9.20.0.48
-  echo "Installing CUDA 12.8.1 and cuDNN ${CUDNN_VERSION} and NVSHMEM"
+  CUSPARSELT_VERSION=0.7.1.0
+  echo "Installing CUDA 12.8.1 and cuDNN ${CUDNN_VERSION} and NVSHMEM and cuSparseLt-${CUSPARSELT_VERSION}"
   install_cuda 12.8.1 cuda_12.8.1_570.124.06_linux
 
   install_cudnn 12 $CUDNN_VERSION
 
   install_nvshmem 12 $NVSHMEM_VERSION
 
-  ldconfig
+  install_cusparselt 12 $CUSPARSELT_VERSION
 }
 
 function install_130 {
   CUDNN_VERSION=9.20.0.48
-  echo "Installing CUDA 13.0 and cuDNN ${CUDNN_VERSION} and NVSHMEM"
+  CUSPARSELT_VERSION=0.8.1.1
+  echo "Installing CUDA 13.0 and cuDNN ${CUDNN_VERSION} and NVSHMEM and cuSparseLt-${CUSPARSELT_VERSION}"
   install_cuda 13.0.2 cuda_13.0.2_580.95.05_linux
 
   install_cudnn 13 $CUDNN_VERSION
 
   install_nvshmem 13 $NVSHMEM_VERSION
 
-  ldconfig
+  install_cusparselt 13 $CUSPARSELT_VERSION
 }
 
 function install_132 {
   CUDNN_VERSION=9.20.0.48
-  echo "Installing CUDA 13.2 and cuDNN ${CUDNN_VERSION} and NVSHMEM"
+  CUSPARSELT_VERSION=0.8.1.1
+  echo "Installing CUDA 13.2 and cuDNN ${CUDNN_VERSION} and NVSHMEM and cuSparseLt-${CUSPARSELT_VERSION}"
   install_cuda 13.2.0 cuda_13.2.0_595.45.04_linux
 
   install_cudnn 13 $CUDNN_VERSION
 
   install_nvshmem 13 $NVSHMEM_VERSION
 
-  ldconfig
+  install_cusparselt 13 $CUSPARSELT_VERSION
 }
 
 # idiomatic parameter and option handling in sh

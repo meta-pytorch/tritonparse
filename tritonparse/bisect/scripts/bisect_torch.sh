@@ -32,10 +32,12 @@ Usage:
 Required Environment Variables:
   TORCH_DIR           Path to PyTorch repository (can be auto-detected if in repo)
   TEST_SCRIPT         Path to test script that returns 0 for pass, non-0 for fail
+  USE_UV              Set to 0 for conda, 1 for uv
+  VIRTUAL_ENV         Path to uv virtual environment (required when USE_UV=1)
 
 Optional Environment Variables (with defaults):
-  CONDA_ENV           Conda environment name (default: triton_bisect)
-  CONDA_DIR           Conda directory (default: $HOME/miniconda3)
+  CONDA_ENV           Conda environment name (default: triton_bisect, when USE_UV=0)
+  CONDA_DIR           Conda directory (default: $HOME/miniconda3, when USE_UV=0)
   LOG_DIR             Log directory (default: ./bisect_logs)
   TEST_ARGS           Arguments for test script (default: empty)
   BUILD_COMMAND       Build command (default: bash build_pytorch.sh)
@@ -77,15 +79,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Default values
 TORCH_DIR=${TORCH_DIR:-""}
 TEST_SCRIPT=${TEST_SCRIPT:-""}
-CONDA_ENV=${CONDA_ENV:-triton_bisect}
-CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
-USE_UV=${USE_UV:-0}
+USE_UV=${USE_UV:-""}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 TEST_ARGS=${TEST_ARGS:-""}
 BUILD_COMMAND=${BUILD_COMMAND:-"bash ${SCRIPT_DIR}/build_pytorch.sh"}
 PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
 
 # ============ Validation ============
+if [ -z "$USE_UV" ]; then
+  echo "ERROR: USE_UV is not set (set to 0 for conda, 1 for uv)"
+  echo "Run 'bash bisect_torch.sh --help' for usage information"
+  exit 128
+fi
+
 if [ -z "$TORCH_DIR" ]; then
   # Try to auto-detect if we're in a pytorch repo
   if [ -d ".git" ] && [ -f "setup.py" ] && [ -d "torch" ]; then
@@ -103,9 +109,16 @@ if [ -z "$TEST_SCRIPT" ]; then
   exit 128
 fi
 
-if [ ! -d "$TORCH_DIR" ]; then
-  echo "ERROR: TORCH_DIR not found: $TORCH_DIR"
+if [[ "$USE_UV" == "1" ]] && [ -z "$VIRTUAL_ENV" ]; then
+  echo "ERROR: VIRTUAL_ENV is not set (required when USE_UV=1)"
+  echo "Run 'bash bisect_torch.sh --help' for usage information"
   exit 128
+fi
+
+# Set conda defaults after validation
+if [[ "$USE_UV" == "0" ]]; then
+  CONDA_ENV=${CONDA_ENV:-triton_bisect}
+  CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 fi
 
 if [ ! -f "$TEST_SCRIPT" ]; then
@@ -113,10 +126,17 @@ if [ ! -f "$TEST_SCRIPT" ]; then
   exit 128
 fi
 
+if [ ! -d "$TORCH_DIR" ]; then
+  echo "ERROR: TORCH_DIR not found: $TORCH_DIR"
+  exit 128
+fi
+
 # Convert all path variables to absolute paths to avoid issues after cd
 TORCH_DIR=$(realpath "$TORCH_DIR")
 TEST_SCRIPT=$(realpath "$TEST_SCRIPT")
-CONDA_DIR=$(realpath "$CONDA_DIR")
+if [[ "$USE_UV" == "0" ]]; then
+  CONDA_DIR=$(realpath "$CONDA_DIR")
+fi
 
 # Create log directory and get absolute path
 mkdir -p "$LOG_DIR"
@@ -132,7 +152,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Create per-commit log file (optional, controlled by PER_COMMIT_LOG)
 COMMIT_LOG=""
-if [ "$PER_COMMIT_LOG" = "1" ]; then
+if [[ "$PER_COMMIT_LOG" == "1" ]]; then
   COMMIT_LOG="$LOG_DIR/${TIMESTAMP}_bisect_torch_${SHORT_COMMIT}.log"
 fi
 
@@ -154,7 +174,11 @@ log_output() {
   echo "PyTorch Dir: $TORCH_DIR"
   echo "Test Script: $TEST_SCRIPT"
   echo "Test Args: $TEST_ARGS"
-  echo "Conda Env: $CONDA_ENV"
+  echo "Use UV: $USE_UV"
+  if [[ "$USE_UV" == "0" ]]; then
+    echo "Conda Dir: $CONDA_DIR"
+    echo "Conda Env: $CONDA_ENV"
+  fi
   echo "Commit Log: $COMMIT_LOG"
   echo "========================="
   echo ""
@@ -166,14 +190,17 @@ git submodule update --init --recursive 2>&1 | log_output
 echo "" | log_output
 
 # Activate conda or uv (if enabled)
-if [ "$USE_UV" == "0" ]; then
+if [[ "$USE_UV" == "0" ]]; then
   echo "Activating conda environment: $CONDA_ENV" | log_output
-  conda activate "$CONDA_ENV" || true
+  if ! conda activate "$CONDA_ENV"; then
+    echo "ERROR: Cannot activate conda environment: $CONDA_ENV" | log_output
+    exit 128
+  fi
 else
-  echo "Activating uv virtualenv: $CONDA_ENV" | log_output
+  echo "Activating uv virtualenv: $VIRTUAL_ENV" | log_output
   # shellcheck source=/dev/null
-  if ! source "${CONDA_DIR}/bin/activate"; then
-    echo "ERROR: Cannot activate conda or uv" | log_output
+  if ! source "${VIRTUAL_ENV}/bin/activate"; then
+    echo "ERROR: Cannot activate uv virtual environment" | log_output
     exit 128
   fi
 fi
@@ -188,7 +215,7 @@ echo "" | log_output
 # Uninstall any existing pytorch to avoid conflicts
 echo "Uninstalling existing pytorch packages..." | log_output
 if [[ "$USE_UV" == "1" ]]; then
-  uv pip uninstall -y torch pytorch 2>&1 | log_output || true
+  uv pip uninstall torch pytorch 2>&1 | log_output || true
 else
   pip uninstall -y torch pytorch 2>&1 | log_output || true
 fi

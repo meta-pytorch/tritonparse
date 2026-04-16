@@ -37,14 +37,27 @@ else
   PIP="pip"
 fi
 
+
+# Disable some builds to save build time
+export BUILD_TEST=0
+export USE_FLASH_ATTENTION=0
+export USE_MEM_EFF_ATTENTION=0
+export USE_NCCL=0
+export USE_MKLDNN=0
+
+echo "Setting CUDA HOME and path..."
+
+export PATH=$CUDA_HOME/bin:$PATH
+nvcc --version
+
 echo "Building PyTorch..."
 cd "$PYTORCH_SRC_DIR"
 if [[ "$USE_UV" == "1" ]]; then
   CMAKE_PREFIX_PATH="${VIRTUAL_ENV}:${CMAKE_PREFIX_PATH}" \
-    $PIP install --no-build-isolation -v -e .
+    $PIP install --no-build-isolation -e .
 else
   CMAKE_PREFIX_PATH="${CONDA_PREFIX:-"$(dirname "$(which conda)")/../"}:${CMAKE_PREFIX_PATH}" \
-    $PIP install --no-build-isolation -v -e .
+    $PIP install --no-build-isolation -e .
 fi
 
 # Build torchvision
@@ -55,6 +68,6 @@ if [ ! -d "$VISION_SRC_DIR" ]; then
 fi
 echo "Building torchvision..."
 cd "$VISION_SRC_DIR"
-$PIP install --no-build-isolation -v -e "$VISION_SRC_DIR"
+$PIP install --no-build-isolation -e "$VISION_SRC_DIR"
 
 echo "PyTorch build completed successfully."
