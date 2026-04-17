@@ -563,7 +563,7 @@ export async function loadLogData(url: string): Promise<LogEntry[]> {
 
 
 /**
- * Loads log data from a local file using FileReader
+ * Loads log data from a local file using Blob arrayBuffer
  * @param file - The File object to load
  * @returns Promise resolving to an array of LogEntry objects
  */
@@ -575,39 +575,18 @@ export async function loadLogDataFromFile(file: File): Promise<LogEntry[]> {
     // different handling inside `processArrayBuffer`.
     const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
     const header = await file.slice(0, 4).arrayBuffer();
-    if (file.size > LARGE_FILE_THRESHOLD && false === isGzipFile(header) && false === isClpFile(header)) {
+    if (file.size > LARGE_FILE_THRESHOLD && !isGzipFile(header) && !isClpFile(header)) {
         console.log(`NDJSON file size (${file.size} bytes) exceeds threshold, using streaming.`);
         return parseLogDataFromStream(file.stream() as ReadableStream<Uint8Array>);
     }
 
     // For smaller files, reading into memory is faster and simpler.
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-
-        reader.onload = async (event) => {
-            try {
-                if (!event.target || !event.target.result) {
-                    throw new Error("Failed to read file");
-                }
-
-                const result = event.target.result;
-                if (!(result instanceof ArrayBuffer)) {
-                    throw new Error("Expected ArrayBuffer from FileReader");
-                }
-
-                resolve(await processArrayBuffer(result));
-            } catch (error) {
-                console.error("Error parsing data from file:", error);
-                reject(error);
-            }
-        };
-
-        reader.onerror = () => {
-            reject(new Error("Error reading file"));
-        };
-
-        reader.readAsArrayBuffer(file);
-    });
+    try {
+        return await processArrayBuffer(await file.arrayBuffer());
+    } catch (error) {
+        console.error("Error parsing data from file:", error);
+        throw error;
+    }
 }
 
 /**
