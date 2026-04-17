@@ -484,7 +484,8 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
 
 
 /**
- * Processes ArrayBuffer data, handling gzip decompression and parsing if needed
+ * Processes ArrayBuffer data, handling decompression and parsing as needed for
+ * supported compression formats
  * @param buffer - ArrayBuffer containing the data
  * @returns Promise resolving to an array of LogEntry objects
  */
