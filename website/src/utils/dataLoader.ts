@@ -1,4 +1,4 @@
-import { ClpArchiveReader } from "clp-ffi-js/sfa";
+import { ClpArchiveReader, isClpFile } from "clp-ffi-js/sfa";
 
 /**
  * Source mapping information that connects lines in IR code to source code
@@ -410,23 +410,6 @@ function isGzipFile(buffer: ArrayBuffer): boolean {
     // Check for gzip magic number (first two bytes should be 0x1F, 0x8B)
     const header = new Uint8Array(buffer.slice(0, 2));
     return header[0] === 0x1F && header[1] === 0x8B;
-}
-
-/**
- * Detects if a file is in CLP JSON single-file archive (SFA) format by checking
- * its header bytes.
- * @param buffer - ArrayBuffer containing the file data
- * @returns Boolean indicating if the file is a clp-json single-file archive
- */
-function isClpFile(buffer: ArrayBuffer): boolean {
-    // Check for CLP JSON SFA magic number: 0xFD 0x2F 0xC5 0x30
-    const header = new Uint8Array(buffer.slice(0, 4));
-    return (
-        header[0] === 0xFD &&
-        header[1] === 0x2F &&
-        header[2] === 0xC5 &&
-        header[3] === 0x30
-    );
 }
 
 /**
