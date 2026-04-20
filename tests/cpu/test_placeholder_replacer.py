@@ -13,6 +13,7 @@ from tritonparse.reproducer.placeholder_replacer import (
     _SKIP_IMPORTS,
     DefaultPlaceholderReplacer,
 )
+from tritonparse.reproducer.types import KernelImportMode
 
 
 class TestDetectExtraImports(unittest.TestCase):
@@ -287,6 +288,128 @@ class TestBuildContextBundleCudaGraphCapture(unittest.TestCase):
         # Should not raise
         bundle = build_context_bundle(events, line_index=0)
         self.assertEqual(bundle.kernel_info.function_name, "my_kernel")
+
+
+class InterleavedConstexprInvocationTest(unittest.TestCase):
+    """Tests for _replace_kernel_invocation with interleaved constexpr params.
+
+    Regression test for a bug where the OVERRIDE_TTIR path dropped constexpr
+    names from the positional arg list while passing the remaining
+    non-constexpr args positionally. When constexprs are interleaved with
+    regular params (e.g. ``..., N_CTX, is_predict: constexpr, Q_SHAPE_0, ...``),
+    the resulting call shifted later positional args into the constexpr's
+    parameter slot, colliding with the autotune-supplied kwarg for that
+    constexpr ("got multiple values for argument 'is_predict'"). The fix
+    passes all non-constexpr args as keyword args in the override path.
+    """
+
+    _INTERLEAVED_SOURCE = (
+        "@triton.jit\n"
+        "def my_kernel(\n"
+        "    Q,\n"
+        "    K,\n"
+        "    N_CTX,\n"
+        "    is_predict: tl.constexpr,\n"
+        "    Q_SHAPE_0,\n"
+        "    FUSED_QKV: tl.constexpr,\n"
+        "    B,\n"
+        "    BLOCK_M: tl.constexpr,\n"
+        "):\n"
+        "    pass\n"
+    )
+
+    def _make_bundle(self):
+        kernel_info = KernelInfo(
+            file_path="/tmp/kernel.py",
+            function_name="my_kernel",
+            source_code=self._INTERLEAVED_SOURCE,
+            call_stack=[],
+        )
+        args = {
+            "Q": {"value": None},
+            "K": {"value": None},
+            "N_CTX": {"value": 200},
+            "is_predict": {"value": False},
+            "Q_SHAPE_0": {"value": 204800},
+            "FUSED_QKV": {"value": False},
+            "B": {"value": None},
+            "BLOCK_M": {"value": 256},
+        }
+        return ContextBundle(
+            kernel_info=kernel_info,
+            compile={"num_warps": 8, "num_stages": 4},
+            launch={"grid": [1, 1, 1], "kwargs": {}},
+            args=args,
+            tensor_args={},
+            raw_launch_event={},
+            raw_comp_event={},
+        )
+
+    def _render_override_invocation(self):
+        replacer = DefaultPlaceholderReplacer()
+        template = "    # {{KERNEL_INVOCATION_PLACEHOLDER}}"
+        return replacer._replace_kernel_invocation(
+            template,
+            self._make_bundle(),
+            kernel_import=KernelImportMode.OVERRIDE_TTIR,
+        )
+
+    def test_override_snippet_passes_nonconstexpr_as_kwargs(self):
+        """Non-constexpr args in the override branch must be kwargs."""
+        result = self._render_override_invocation()
+        override_branch = result.split("else:")[0]
+        # Non-constexpr args must appear as keyword args, not positional.
+        self.assertIn('Q=args_dict["Q"]', override_branch)
+        self.assertIn('K=args_dict["K"]', override_branch)
+        self.assertIn('N_CTX=args_dict["N_CTX"]', override_branch)
+        self.assertIn('Q_SHAPE_0=args_dict["Q_SHAPE_0"]', override_branch)
+        self.assertIn('B=args_dict["B"]', override_branch)
+
+    def test_override_snippet_omits_constexprs(self):
+        """Constexpr args must not appear in the override branch.
+
+        They are supplied by the autotune Config.kwargs instead.
+        """
+        result = self._render_override_invocation()
+        override_branch = result.split("else:")[0]
+        self.assertNotIn("is_predict", override_branch)
+        self.assertNotIn("FUSED_QKV", override_branch)
+        self.assertNotIn("BLOCK_M", override_branch)
+
+    def test_override_snippet_has_no_positional_args(self):
+        """No positional ``args_dict["X"]`` entries should appear in the
+        override branch — the fix routes everything through kwargs to avoid
+        position shifts when a constexpr is interleaved in the signature.
+        """
+        result = self._render_override_invocation()
+        override_branch = result.split("else:")[0]
+        call_line = next(
+            (
+                line
+                for line in override_branch.splitlines()
+                if "imported_kernel_function" in line
+            ),
+            "",
+        )
+        self.assertIn("imported_kernel_function", call_line)
+        open_paren = call_line.index("(", call_line.index("imported_kernel_function"))
+        arg_text = call_line[open_paren + 1 :]
+        # Every occurrence of args_dict["X"] should be immediately preceded
+        # by 'X=' (keyword form), never appear as a bare positional.
+        for segment in arg_text.split('args_dict["')[1:]:
+            name = segment.split('"]', 1)[0]
+            self.assertIn(f'{name}=args_dict["{name}"]', call_line)
+
+    def test_fallback_branch_still_passes_all_args(self):
+        """The fallback branch (no IR override) keeps passing every arg,
+        including constexprs, so the kernel launches correctly when the
+        captured_irs/ directory is missing.
+        """
+        result = self._render_override_invocation()
+        _, fallback_branch = result.split("else:", 1)
+        self.assertIn('args_dict["is_predict"]', fallback_branch)
+        self.assertIn('args_dict["FUSED_QKV"]', fallback_branch)
+        self.assertIn('args_dict["BLOCK_M"]', fallback_branch)
 
 
 if __name__ == "__main__":
