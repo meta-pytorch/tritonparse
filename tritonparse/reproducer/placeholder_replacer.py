@@ -501,11 +501,20 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
             # and compile params — only pass non-constexpr args.
             # When ir_override is missing (no captured_irs/), the stub runs
             # as a plain @triton.jit and needs all args + compile params.
+            #
+            # Non-constexpr args must be passed as keyword args, not positional:
+            # constexprs can be interleaved with regular params in the kernel
+            # signature (e.g. `..., N_CTX, is_predict: constexpr, Q_SHAPE_0, ...`).
+            # Dropping an interleaved constexpr from the positional list shifts
+            # subsequent args into wrong parameter slots, colliding with the
+            # autotune-provided kwarg for that constexpr ("got multiple values
+            # for argument X"). Passing by name avoids the position shift.
             constexpr_vals = get_constexpr_values(context_bundle)
-            filtered_pos = [a for a in pos_args if a not in constexpr_vals]
-            filtered_kw = [a for a in kw_args if a not in constexpr_vals]
+            override_kw_args = [
+                a for a in pos_args + kw_args if a not in constexpr_vals
+            ]
             override_snippet = _generate_invocation_snippet(
-                filtered_pos, filtered_kw, compile_params=None
+                [], override_kw_args, compile_params=None
             )
             compile_params = _get_compile_params_for_invocation(
                 context_bundle.compile, kw_args
