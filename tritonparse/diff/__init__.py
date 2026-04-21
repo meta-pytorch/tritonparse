@@ -39,6 +39,17 @@ from tritonparse.diff.output import (
     write_consolidated_output,
 )
 
+try:
+    from tritonparse.diff.fb.ai import (
+        AIDiffAnalyzer,
+        build_diff_context,
+        DIFF_ANALYSIS_SYSTEM_PROMPT,
+    )
+
+    _HAS_AI = True
+except ImportError:
+    _HAS_AI = False
+
 __all__ = [
     # CLI
     "_add_diff_args",
@@ -72,3 +83,10 @@ __all__ = [
     "format_trace_summary",
     "write_consolidated_output",
 ]
+
+if _HAS_AI:
+    __all__ += [
+        "AIDiffAnalyzer",
+        "build_diff_context",
+        "DIFF_ANALYSIS_SYSTEM_PROMPT",
+    ]

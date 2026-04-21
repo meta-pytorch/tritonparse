@@ -38,6 +38,7 @@ def format_trace_summary(result: TraceDiffResult) -> str:
         _format_autotuning_extras(
             result.extra_compilations_a, result.extra_compilations_b
         ),
+        _format_trace_notes(result.summary),
     ]
 
     return "\n".join(s for s in sections if s)
@@ -176,6 +177,12 @@ def _format_single_match(match: KernelMatchResult) -> str:
             if section:
                 parts.append(_indent(section.lstrip("\n"), "    "))
 
+        # Per-kernel AI/rule notes
+        if diff.summary.notes:
+            for note in diff.summary.notes:
+                prefix = "[AI]" if note.source == "ai" else "[Rule]"
+                parts.append(f"    {prefix} {note.content}")
+
     return "\n".join(parts)
 
 
@@ -206,5 +213,18 @@ def _format_autotuning_extras(extra_a: int, extra_b: int) -> str:
             f"Autotuning extras in Trace B: "
             f"{extra_b} additional compilation(s) with no counterpart in A"
         )
+
+    return "\n".join(lines)
+
+
+def _format_trace_notes(summary: TraceDiffSummary) -> str:
+    """Format trace-level notes (AI and rule-based insights)."""
+    if not summary.notes:
+        return ""
+
+    lines = ["", "Insights:"]
+    for note in summary.notes:
+        prefix = "[AI]" if note.source == "ai" else "[Rule]"
+        lines.append(f"  {prefix} {note.content}")
 
     return "\n".join(lines)

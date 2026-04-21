@@ -199,6 +199,7 @@ def main():
             atol=args.atol,
             rtol=args.rtol,
             trace=args.trace,
+            ai=args.ai,
         )
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)

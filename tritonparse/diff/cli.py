@@ -106,6 +106,12 @@ def _add_diff_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Compare all kernels across two trace files. Requires two input files.",
     )
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        default=False,
+        help="Run AI analysis to explain the root causes of detected differences.",
+    )
 
 
 def _parse_event_indices(events_str: str) -> tuple[int, int]:
@@ -157,6 +163,7 @@ def trace_diff_command(
     tensor_values: bool = False,
     atol: float = 1e-5,
     rtol: float = 1e-3,
+    ai: bool = False,
 ) -> None:
     """Run trace-level diff comparing all kernels across two trace files.
 
@@ -167,6 +174,7 @@ def trace_diff_command(
         tensor_values: If True, compare tensor values.
         atol: Absolute tolerance for tensor comparison.
         rtol: Relative tolerance for tensor comparison.
+        ai: If True, run AI analysis on qualifying kernels.
     """
     from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
     from tritonparse.diff.output.event_writer import ConsolidatedDiffWriter
@@ -191,9 +199,70 @@ def trace_diff_command(
     )
     result = engine.run()
 
-    # Print summary
+    # Print deterministic diff summary first so user sees results immediately
     if not quiet:
         logger.info(format_trace_summary(result))
+
+    # Run AI analysis on qualifying kernels after showing the diff
+    if ai and result.summary.status != "identical":
+        try:
+            from tritonparse.diff.fb.ai.diff_analyzer import AIDiffAnalyzer
+
+            analyzer = AIDiffAnalyzer()
+            ai_count = 0
+
+            for match in result.matched_kernels:
+                cd = match.compilation_diff
+                if cd is None:
+                    continue
+
+                # Threshold: only analyze significant diffs or tensor divergences
+                is_significant = cd.summary.status == "significant_diff"
+                has_tensor_divergence = cd.tensor_value_diff.status == "divergent"
+
+                if not (is_significant or has_tensor_divergence):
+                    continue
+
+                # Find raw compilation events for context
+                comp_a = TraceDiffEngine._find_event_by_index(
+                    events_a, match.event_index_a
+                )
+                comp_b = TraceDiffEngine._find_event_by_index(
+                    events_b, match.event_index_b
+                )
+                if comp_a is None or comp_b is None:
+                    continue
+
+                ai_count += 1
+                if ai_count == 1:
+                    logger.info("\n=== AI Root Cause Analysis ===")
+                    logger.info("Analyzing kernels with significant differences...\n")
+
+                kernel_label = (
+                    f"{match.kernel_name_a} "
+                    f"(events #{match.event_index_a} ↔ #{match.event_index_b})"
+                )
+                logger.info(f"Analyzing {kernel_label}...")
+                try:
+                    ai_notes = analyzer.analyze(cd, comp_a, comp_b)
+                    cd.summary.notes.extend(ai_notes)
+                    for note in ai_notes:
+                        prefix = "[AI]" if note.source == "ai" else "[Rule]"
+                        logger.info(f"  {prefix} {note.content}\n")
+                except Exception as e:
+                    logger.warning(f"  AI analysis failed: {e}\n")
+
+            if ai_count == 0:
+                logger.info(
+                    "\nNo kernels exceeded AI analysis threshold "
+                    "(need significant_diff or tensor divergence)"
+                )
+        except ImportError as e:
+            logger.warning(
+                f"AI analysis not available (tritonparse.diff.fb.ai not found): {e}"
+            )
+        except Exception as e:
+            logger.warning(f"AI analysis setup failed: {e}")
 
     # Write output
     output_path = output or _generate_output_path(input_paths[0])
@@ -217,6 +286,7 @@ def diff_command(
     atol: float = 1e-5,
     rtol: float = 1e-3,
     trace: bool = False,
+    ai: bool = False,
 ) -> None:
     """
     Main function for the diff command.
@@ -251,6 +321,7 @@ def diff_command(
             tensor_values=tensor_values,
             atol=atol,
             rtol=rtol,
+            ai=ai,
         )
 
     # Validate input paths
@@ -397,9 +468,28 @@ def diff_command(
     )
     result = engine.run()
 
-    # Print CLI summary
+    # Print deterministic diff results immediately
     if not quiet:
         logger.info(format_summary(result))
+
+    # Run AI analysis after showing deterministic results
+    if ai and result.summary.status != "identical":
+        try:
+            from tritonparse.diff.fb.ai.diff_analyzer import AIDiffAnalyzer
+
+            analyzer = AIDiffAnalyzer()
+            ai_notes = analyzer.analyze(result, comp_a, comp_b)
+            result.summary.notes.extend(ai_notes)
+            if not quiet:
+                for note in ai_notes:
+                    prefix = "[AI]" if note.source == "ai" else "[Rule]"
+                    logger.info(f"  {prefix} {note.content}")
+        except ImportError:
+            logger.warning(
+                "AI analysis not available (tritonparse.diff.fb.ai not found)"
+            )
+        except Exception as e:
+            logger.warning(f"AI analysis failed: {e}")
 
     # Create diff event
     diff_event = create_diff_event(result)

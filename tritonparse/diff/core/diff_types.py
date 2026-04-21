@@ -394,6 +394,7 @@ class TraceDiffSummary:
         highlights: List of key differences as human-readable strings.
         match_stats: Count of matches per strategy. Format: {method_value: count}.
         tensor_divergent_kernels: Kernel names with divergent tensor values.
+        notes: List of DiffNote objects with trace-level insights.
     """
 
     status: str = "identical"
@@ -408,6 +409,7 @@ class TraceDiffSummary:
     highlights: list[str] = field(default_factory=list)
     match_stats: dict[str, int] = field(default_factory=dict)
     tensor_divergent_kernels: list[str] = field(default_factory=list)
+    notes: list[DiffNote] = field(default_factory=list)
 
 
 @dataclass

@@ -16,6 +16,7 @@ Per the design document Section 4:
 from typing import Any
 
 from tritonparse.diff.core.diff_types import PythonLineDiff
+from tritonparse.diff.core.ir_stats_analyzer import get_ir_content
 
 
 # IR types to analyze for source mapping comparison
@@ -68,6 +69,16 @@ class SourcemapAnalyzer:
         python_a = mappings_a.get("python", {})
         python_b = mappings_b.get("python", {})
 
+        # Pre-load IR content for TTIR and TTGIR (skip LLIR/PTX — too verbose)
+        _CODE_IR_TYPES = ("ttir", "ttgir")
+        ir_lines_a: dict[str, list[str]] = {}
+        ir_lines_b: dict[str, list[str]] = {}
+        for ir_type in _CODE_IR_TYPES:
+            content_a = get_ir_content(self.comp_a, ir_type)
+            content_b = get_ir_content(self.comp_b, ir_type)
+            ir_lines_a[ir_type] = content_a.split("\n") if content_a else []
+            ir_lines_b[ir_type] = content_b.split("\n") if content_b else []
+
         # Get all Python line numbers from both compilations
         all_lines: set[int] = set()
         all_lines.update(int(k) for k in python_a.keys() if k.isdigit())
@@ -78,6 +89,8 @@ class SourcemapAnalyzer:
         for py_line in sorted(all_lines):
             a_mapping: dict[str, list[int]] = {}
             b_mapping: dict[str, list[int]] = {}
+            a_code: dict[str, list[str]] = {}
+            b_code: dict[str, list[str]] = {}
             expansion: dict[str, int] = {}
 
             for ir_type in self.ir_types:
@@ -89,6 +102,19 @@ class SourcemapAnalyzer:
                     b_mapping[ir_type] = lines_b
                     expansion[ir_type] = len(lines_b) - len(lines_a)
 
+                    # Extract actual IR code lines for TTIR and TTGIR
+                    if ir_type in _CODE_IR_TYPES:
+                        src_a = ir_lines_a.get(ir_type, [])
+                        src_b = ir_lines_b.get(ir_type, [])
+                        if src_a and lines_a:
+                            a_code[ir_type] = [
+                                src_a[ln - 1] for ln in lines_a if 1 <= ln <= len(src_a)
+                            ]
+                        if src_b and lines_b:
+                            b_code[ir_type] = [
+                                src_b[ln - 1] for ln in lines_b if 1 <= ln <= len(src_b)
+                            ]
+
             # Get Python code for this line
             python_code = get_python_line_code(self.comp_a, py_line)
 
@@ -97,6 +123,8 @@ class SourcemapAnalyzer:
                 python_code=python_code,
                 a=a_mapping,
                 b=b_mapping,
+                a_code=a_code,
+                b_code=b_code,
                 expansion=expansion,
             )
 
