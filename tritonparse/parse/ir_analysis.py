@@ -28,9 +28,14 @@ def _find_filecheck_binary() -> str | None:
         import triton
 
         triton_dir = os.path.dirname(triton.__file__)
-        bundled_path = os.path.join(triton_dir, "backends", "amd", "bin", "FileCheck")
-        if os.path.isfile(bundled_path) and os.access(bundled_path, os.X_OK):
-            return bundled_path
+        candidate_paths = [
+            os.path.join(triton_dir, "FileCheck"),
+            os.path.join(triton_dir, "backends", "amd", "bin", "FileCheck"),
+            os.path.join(triton_dir, "backends", "nvidia", "bin", "FileCheck"),
+        ]
+        for bundled_path in candidate_paths:
+            if os.path.isfile(bundled_path) and os.access(bundled_path, os.X_OK):
+                return bundled_path
     except ImportError as e:
         logger.debug(f"Triton import failed: {e}")
 
