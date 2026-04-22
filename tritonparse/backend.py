@@ -101,6 +101,8 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
                              False, False, "none", "plaintext"),
             IRStageDescriptor("sass", ".sass", "SASS", 60,
                              True, True, "sass_loc", "asm"),
+            IRStageDescriptor("json", ".json", "JSON", 100,
+                             True, False, "none", "json"),
         ]
 
 
@@ -128,6 +130,8 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
                              True, True, "generic_loc", "llvm"),
             IRStageDescriptor("amdgcn", ".amdgcn", "AMDGCN", 40,
                              True, True, "amdgcn_loc", "asm"),
+            IRStageDescriptor("json", ".json", "JSON", 100,
+                             True, False, "none", "json"),
         ]
 
 
