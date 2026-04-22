@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
+import zstandard as zstd  # @manual=fbsource//third-party/pypi/zstandard:zstandard
 from torch.utils._traceback import CapturedTraceback
 from triton.knobs import JITHook, LaunchHook
 from tritonparse._json_compat import dumps, loads
@@ -60,10 +61,11 @@ TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
     "True",
 ]
 # Compression algorithm for raw trace files
-# When enabled, each JSON record is written as a separate gzip member,
-# concatenated in sequence within a .bin.ndjson file.
-# Supported values: "none", "gzip", "clp", "zstd" (future)
+# When enabled, each JSON record is compressed as a separate frame/member
+# and concatenated in sequence within a .bin.ndjson file.
+# Supported values: "none", "gzip", "clp", "zstd"
 # - "gzip": Outputs .bin.ndjson (gzip member concatenation format)
+# - "zstd": Outputs .bin.ndjson (zstd frame concatenation format)
 # - "clp": Outputs .clp (Compressed Log Processor format)
 # - "none": Outputs .ndjson (plain text)
 # If TRITON_TRACE_COMPRESSION is explicitly set, respect that value;
@@ -991,6 +993,7 @@ class TritonTraceHandler(logging.StreamHandler):
         # Track the rank used when creating the current log file
         # _UNINITIALIZED means we haven't created a file yet
         self._last_rank = self._UNINITIALIZED
+        self._zstd_compressor = None
         # If the program is unexpected terminated, atexit can ensure  file resources are properly closed and released.
         # it is because we use `self.stream` to keep the opened file stream, if the program is interrupted by some errors, the stream may not be closed.
         atexit.register(self._cleanup)
@@ -1082,6 +1085,9 @@ class TritonTraceHandler(logging.StreamHandler):
                     if TRITON_TRACE_COMPRESSION == "gzip":
                         file_extension = ".bin.ndjson"
                         file_mode = "ab+"  # Binary mode for gzip member concatenation
+                    elif TRITON_TRACE_COMPRESSION == "zstd":
+                        file_extension = ".bin.ndjson"
+                        file_mode = "ab+"  # Binary mode for zstd frame concatenation
                     elif TRITON_TRACE_COMPRESSION == "clp":
                         file_extension = ".clp"
                         file_mode = "w"  # CLP write mode
@@ -1115,6 +1121,16 @@ class TritonTraceHandler(logging.StreamHandler):
                         gz.write(formatted.encode("utf-8"))
                     # Write the complete gzip member to the file
                     compressed_data = buffer.getvalue()
+                    self.stream.write(compressed_data)
+                elif TRITON_TRACE_COMPRESSION == "zstd":
+                    # Create a separate zstd frame for each record
+                    # ZstdDecompressor.stream_reader() handles multi-frame files
+                    # via read_across_frames=True
+                    if self._zstd_compressor is None:
+                        self._zstd_compressor = zstd.ZstdCompressor()
+                    compressed_data = self._zstd_compressor.compress(
+                        formatted.encode("utf-8")
+                    )
                     self.stream.write(compressed_data)
                 elif TRITON_TRACE_COMPRESSION == "clp":
                     self.stream.add(io.StringIO(formatted))
@@ -1749,7 +1765,7 @@ def init(
         enable_sass_dump (Optional[bool]): Whether to enable SASS dumping.
         enable_tensor_blob_storage (bool): Whether to enable tensor blob storage.
         tensor_storage_quota (Optional[int]): Storage quota in bytes for tensor blobs (default: 100GB).
-        compression (Optional[str]): Compression format for trace files ("none", "gzip", or "clp").
+        compression (Optional[str]): Compression format for trace files ("none", "gzip", "zstd", or "clp").
             If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "none".
         tensor_save_skip_runs (Optional[int]): Skip tensor blob saving for the first N kernel runs.
         tensor_save_max_runs (Optional[int]): Save tensor blobs for at most N kernel runs after skipping.

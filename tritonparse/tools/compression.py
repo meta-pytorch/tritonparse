@@ -27,6 +27,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, TextIO, Union
 
+import zstandard as zstd
+
 # Magic numbers for compression format detection
 # gzip: 0x1F 0x8B (RFC 1952)
 GZIP_MAGIC = b"\x1f\x8b"
@@ -113,7 +115,6 @@ def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
 
     Raises:
         FileNotFoundError: If file does not exist
-        ImportError: If zstd file is detected but zstandard is not installed
 
     Example:
         >>> with open_compressed_file("trace.bin.ndjson") as f:
@@ -132,17 +133,9 @@ def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
         with gzip.open(filepath, "rt", encoding="utf-8") as f:
             yield f
     elif compression == "zstd":
-        try:
-            import zstandard as zstd
-        except ImportError as e:
-            raise ImportError(
-                "zstandard package is required to read zstd compressed files. "
-                "Install it with: pip install zstandard"
-            ) from e
-
         dctx = zstd.ZstdDecompressor()
         with open(filepath, "rb") as binary_file:
-            with dctx.stream_reader(binary_file) as reader:
+            with dctx.stream_reader(binary_file, read_across_frames=True) as reader:
                 with io.TextIOWrapper(reader, encoding="utf-8") as text_stream:
                     yield text_stream
     else:
