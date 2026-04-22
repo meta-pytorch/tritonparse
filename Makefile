@@ -31,11 +31,11 @@ format-check:
 # Testing targets
 test:
 	@echo "Running tests (CPU only)..."
-	pytest tests/ -v -m "not cuda"
+	python -m unittest discover -s tests/cpu -t . -v
 
 test-cuda:
 	@echo "Running all tests (including CUDA)..."
-	pytest tests/ -v
+	python -m unittest discover -s tests -t . -v
 
 # Utility targets
 clean:
