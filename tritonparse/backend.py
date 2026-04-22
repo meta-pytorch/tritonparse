@@ -73,7 +73,6 @@ class CompilationPipelineAdapter(ABC):
         return device
 
 
-
 class NvidiaTritonAdapter(CompilationPipelineAdapter):
     @property
     def adapter_name(self) -> str:
@@ -89,22 +88,26 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
 
     def get_ir_stages(self) -> list[IRStageDescriptor]:
         return [
-            IRStageDescriptor("ttir", ".ttir", "TTIR", 10,
-                             True, True, "generic_loc", "mlir"),
-            IRStageDescriptor("ttgir", ".ttgir", "TTGIR", 20,
-                             True, True, "generic_loc", "mlir"),
-            IRStageDescriptor("llir", ".llir", "LLIR", 30,
-                             True, True, "generic_loc", "llvm"),
-            IRStageDescriptor("ptx", ".ptx", "PTX", 40,
-                             True, True, "ptx_loc", "ptx"),
-            IRStageDescriptor("cubin", ".cubin", "CUBIN", 50,
-                             False, False, "none", "plaintext"),
-            IRStageDescriptor("sass", ".sass", "SASS", 60,
-                             True, True, "sass_loc", "asm"),
-            IRStageDescriptor("json", ".json", "JSON", 100,
-                             True, False, "none", "json"),
+            IRStageDescriptor(
+                "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "ttgir", ".ttgir", "TTGIR", 20, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "llir", ".llir", "LLIR", 30, True, True, "generic_loc", "llvm"
+            ),
+            IRStageDescriptor("ptx", ".ptx", "PTX", 40, True, True, "ptx_loc", "ptx"),
+            IRStageDescriptor(
+                "cubin", ".cubin", "CUBIN", 50, False, False, "none", "plaintext"
+            ),
+            IRStageDescriptor(
+                "sass", ".sass", "SASS", 60, True, True, "sass_loc", "asm"
+            ),
+            IRStageDescriptor(
+                "json", ".json", "JSON", 100, True, False, "none", "json"
+            ),
         ]
-
 
 
 class AmdTritonAdapter(CompilationPipelineAdapter):
@@ -122,16 +125,21 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
 
     def get_ir_stages(self) -> list[IRStageDescriptor]:
         return [
-            IRStageDescriptor("ttir", ".ttir", "TTIR", 10,
-                             True, True, "generic_loc", "mlir"),
-            IRStageDescriptor("ttgir", ".ttgir", "TTGIR", 20,
-                             True, True, "generic_loc", "mlir"),
-            IRStageDescriptor("llir", ".llir", "LLIR", 30,
-                             True, True, "generic_loc", "llvm"),
-            IRStageDescriptor("amdgcn", ".amdgcn", "AMDGCN", 40,
-                             True, True, "amdgcn_loc", "asm"),
-            IRStageDescriptor("json", ".json", "JSON", 100,
-                             True, False, "none", "json"),
+            IRStageDescriptor(
+                "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "ttgir", ".ttgir", "TTGIR", 20, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "llir", ".llir", "LLIR", 30, True, True, "generic_loc", "llvm"
+            ),
+            IRStageDescriptor(
+                "amdgcn", ".amdgcn", "AMDGCN", 40, True, True, "amdgcn_loc", "asm"
+            ),
+            IRStageDescriptor(
+                "json", ".json", "JSON", 100, True, False, "none", "json"
+            ),
         ]
 
 
@@ -187,7 +195,9 @@ def _deserialize_stage_descriptor(raw_stage: dict[str, Any]) -> IRStageDescripto
     )
 
 
-def get_present_stage_descriptors_from_event(event: dict[str, Any]) -> list[IRStageDescriptor]:
+def get_present_stage_descriptors_from_event(
+    event: dict[str, Any],
+) -> list[IRStageDescriptor]:
     payload = event.get("payload", {})
     metadata = payload.get("metadata", {})
     serialized_stage_descriptors = metadata.get("stage_descriptors")
@@ -195,12 +205,18 @@ def get_present_stage_descriptors_from_event(event: dict[str, Any]) -> list[IRSt
         stages = [
             _deserialize_stage_descriptor(raw_stage)
             for raw_stage in serialized_stage_descriptors
-            if isinstance(raw_stage, dict) and "name" in raw_stage and "extension" in raw_stage
+            if isinstance(raw_stage, dict)
+            and "name" in raw_stage
+            and "extension" in raw_stage
         ]
         return sorted(stages, key=lambda stage: stage.display_order)
 
-    artifact_names = list((payload.get("file_content") or {}).keys()) + list((payload.get("file_path") or {}).keys())
-    present_extensions = {Path(artifact_name).suffix for artifact_name in artifact_names}
+    artifact_names = list((payload.get("file_content") or {}).keys()) + list(
+        (payload.get("file_path") or {}).keys()
+    )
+    present_extensions = {
+        Path(artifact_name).suffix for artifact_name in artifact_names
+    }
     seen_stage_names: set[str] = set()
     descriptors: list[IRStageDescriptor] = []
     for adapter in get_backend_registry().create_all():

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
-from tritonparse.backend import get_backend_registry
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -306,7 +305,11 @@ def _resolve_source_mappable_stage_keys(
 
     if isinstance(serialized_stage_descriptors, list):
         for raw_stage in sorted(
-            [stage for stage in serialized_stage_descriptors if isinstance(stage, dict)],
+            [
+                stage
+                for stage in serialized_stage_descriptors
+                if isinstance(stage, dict)
+            ],
             key=lambda stage: int(stage.get("display_order", 0)),
         ):
             stage_name = raw_stage.get("name")
@@ -320,8 +323,7 @@ def _resolve_source_mappable_stage_keys(
 
             # Find the matching artifact name in available_artifacts by extension.
             artifact_name = next(
-                (name for name in available_artifacts if name.endswith(extension)),
-                None
+                (name for name in available_artifacts if name.endswith(extension)), None
             )
 
             if artifact_name is None or stage_name in stage_keys:
@@ -330,7 +332,9 @@ def _resolve_source_mappable_stage_keys(
             stage_keys[stage_name] = artifact_name
 
         if stage_keys:
-            logger.debug(f"Resolved stage keys from metadata.stage_descriptors: {list(stage_keys.keys())}")
+            logger.debug(
+                f"Resolved stage keys from metadata.stage_descriptors: {list(stage_keys.keys())}"
+            )
             return stage_keys
 
     # Path 2: hardcoded extension fallback (original upstream behavior).
@@ -345,14 +349,15 @@ def _resolve_source_mappable_stage_keys(
 
     for stage_name, extension in fallback_extensions.items():
         artifact_name = next(
-            (name for name in file_content if name.endswith(extension)),
-            None
+            (name for name in file_content if name.endswith(extension)), None
         )
         if artifact_name is not None:
             stage_keys[stage_name] = artifact_name
 
     if stage_keys:
-        logger.debug(f"Resolved stage keys from hardcoded extensions: {list(stage_keys.keys())}")
+        logger.debug(
+            f"Resolved stage keys from hardcoded extensions: {list(stage_keys.keys())}"
+        )
 
     return stage_keys
 
@@ -498,7 +503,7 @@ def parse_single_trace_content(trace_content: str) -> str:
         # If upstream Triton already set num_warps_base, trust it; otherwise
         # recover the value from the TTGIR "ttg.num-warps" module attribute.
         if "num_warps_base" not in metadata:
-            ttgir_key = stage_keys.get("ttgir") 
+            ttgir_key = stage_keys.get("ttgir")
             if ttgir_key and ttgir_key in file_content:
                 ttgir_content = file_content[ttgir_key]
                 if isinstance(ttgir_content, str):
@@ -527,9 +532,18 @@ def parse_single_trace_content(trace_content: str) -> str:
 
             # Collect mappings from previously processed stages for use by
             # later stages such as PTX or AMDGCN.
-            other_mappings = [stage_maps[prev_stage] for prev_stage in stage_names[:i] if stage_maps.get(prev_stage)]
+            other_mappings = [
+                stage_maps[prev_stage]
+                for prev_stage in stage_names[:i]
+                if stage_maps.get(prev_stage)
+            ]
 
-            stage_map = process_ir(artifact_key, file_content, file_path, other_mappings if other_mappings else None)
+            stage_map = process_ir(
+                artifact_key,
+                file_content,
+                file_path,
+                other_mappings if other_mappings else None,
+            )
             if stage_map:
                 stage_maps[stage_name] = stage_map
 
@@ -537,7 +551,7 @@ def parse_single_trace_content(trace_content: str) -> str:
         # for example TTIR ↔ TTGIR, TTIR ↔ PTX, TTGIR ↔ PTX, ...
         stage_names = list(stage_maps.keys())
         for i, src_stage in enumerate(stage_names):
-            for tgt_stage in stage_names[i + 1:]:
+            for tgt_stage in stage_names[i + 1 :]:
                 if stage_maps[src_stage] and stage_maps[tgt_stage]:
                     create_bidirectional_mapping(
                         stage_maps[src_stage],
@@ -571,7 +585,7 @@ def parse_single_trace_content(trace_content: str) -> str:
         payload["source_mappings"] = {
             stage_name: stage_map
             for stage_name, stage_map in stage_maps.items()
-            if stage_map 
+            if stage_map
         }
         payload["source_mappings"]["python"] = py_map
     # NDJSON format requires a newline at the end of each line
