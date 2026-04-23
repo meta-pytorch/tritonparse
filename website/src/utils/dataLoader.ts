@@ -1,3 +1,5 @@
+import { ClpArchiveReader, isClpFile } from "clp-ffi-js/sfa";
+
 /**
  * Source mapping information that connects lines in IR code to source code
  */
@@ -465,13 +467,44 @@ async function parseLogDataFromStream(stream: ReadableStream<Uint8Array>): Promi
 
 
 /**
- * Processes ArrayBuffer data, handling gzip decompression and parsing if needed
+ * Processes ArrayBuffer data, handling decompression and parsing as needed for
+ * supported compression formats
  * @param buffer - ArrayBuffer containing the data
  * @returns Promise resolving to an array of LogEntry objects
  */
 export async function processArrayBuffer(buffer: ArrayBuffer): Promise<LogEntry[]> {
-    // Check if file is gzip compressed
-    if (isGzipFile(buffer)) {
+    if (isClpFile(buffer)) {
+        const entries: LogEntry[] = [];
+        let reader: ClpArchiveReader | null = null;
+        try {
+            reader = await ClpArchiveReader.create(new Uint8Array(buffer));
+
+            for (const event of reader.decodeAll()) {
+                try {
+                    const parsedLine: LogEntry = JSON.parse(event.message);
+                    if (parsedLine && typeof parsedLine === 'object') {
+                        entries.push(parsedLine);
+                    }
+                } catch {
+                    console.warn(`Failed to parse line as JSON: ${event.message.substring(0, 100)}...`);
+                    continue;
+                }
+            }
+        } catch (error) {
+            console.error('Error decompressing or parsing clp stream:', error);
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Failed to process clp stream: ${message}`, { cause: error });
+        } finally {
+            reader?.close();
+        }
+
+        if (entries.length === 0) {
+            console.error("No valid JSON entries found in CLP archive");
+            throw new Error("No valid JSON entries found in CLP archive");
+        }
+
+        return entries;
+    } else if (isGzipFile(buffer)) {
         try {
             if (!('DecompressionStream' in window)) {
                 throw new Error('DecompressionStream API is not supported in this browser');
@@ -514,50 +547,30 @@ export async function loadLogData(url: string): Promise<LogEntry[]> {
 
 
 /**
- * Loads log data from a local file using FileReader
+ * Loads log data from a local file using Blob arrayBuffer
  * @param file - The File object to load
  * @returns Promise resolving to an array of LogEntry objects
  */
-export function loadLogDataFromFile(file: File): Promise<LogEntry[]> {
-    // For large files, we should use streaming to avoid memory issues
+export async function loadLogDataFromFile(file: File): Promise<LogEntry[]> {
+    // For large NDJSON files, we should use streaming to avoid memory issues.
+    // We read a small header upfront to detect known compression formats (gzip
+    // or CLP). Streaming is only used for files that exceed the size threshold
+    // and are not detected as compressed, since compressed streams require
+    // different handling inside `processArrayBuffer`.
     const LARGE_FILE_THRESHOLD = 100 * 1024 * 1024; // 100 MB
-    if (file.size > LARGE_FILE_THRESHOLD) {
-        console.log(`File size (${file.size} bytes) exceeds threshold, using streaming.`);
-        // Note: This does not handle gzipped files selected locally, as we can't
-        // easily detect gzip from a stream without reading parts of it first.
-        // The assumption is that very large local files are not gzipped or
-        // have already been decompressed.
+    const header = await file.slice(0, 4).arrayBuffer();
+    if (file.size > LARGE_FILE_THRESHOLD && !isGzipFile(header) && !isClpFile(header)) {
+        console.log(`NDJSON file size (${file.size} bytes) exceeds threshold, using streaming.`);
         return parseLogDataFromStream(file.stream() as ReadableStream<Uint8Array>);
     }
 
     // For smaller files, reading into memory is faster and simpler.
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-
-        reader.onload = async (event) => {
-            try {
-                if (!event.target || !event.target.result) {
-                    throw new Error("Failed to read file");
-                }
-
-                const result = event.target.result;
-                if (!(result instanceof ArrayBuffer)) {
-                    throw new Error("Expected ArrayBuffer from FileReader");
-                }
-
-                resolve(await processArrayBuffer(result));
-            } catch (error) {
-                console.error("Error parsing data from file:", error);
-                reject(error);
-            }
-        };
-
-        reader.onerror = () => {
-            reject(new Error("Error reading file"));
-        };
-
-        reader.readAsArrayBuffer(file);
-    });
+    try {
+        return await processArrayBuffer(await file.arrayBuffer());
+    } catch (error) {
+        console.error("Error parsing data from file:", error);
+        throw error;
+    }
 }
 
 /**
