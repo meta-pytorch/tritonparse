@@ -69,8 +69,11 @@ def load_tensor(tensor_file_path: Union[str, Path], device: str = None) -> torch
         )
 
     try:
-        # Load the tensor from memory buffer
-        tensor = torch.load(io.BytesIO(file_contents), map_location=device)
+        tensor = torch.load(io.BytesIO(file_contents), map_location=device, weights_only=True)
         return tensor
+    except TypeError as e:
+        raise RuntimeError(
+            "Secure tensor loading requires a PyTorch version that supports weights_only=True"
+        ) from e
     except Exception as e:
         raise RuntimeError(f"Failed to load tensor from {blob_path}: {str(e)}")
