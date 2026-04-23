@@ -18,7 +18,8 @@ const indexPath = path.join(distDir, 'index.html');
 let html = fs.readFileSync(indexPath, 'utf8');
 
 // Regular expressions to find resources
-const scriptRegex = /<script.*?src="(.*?)".*?><\/script>/g;
+// Input is Vite-generated dist/index.html, not user-supplied HTML — no XSS risk.
+const scriptRegex = /<script.*?src="(.*?)".*?><\/script\s*>/g; // lgtm[js/bad-tag-filter]
 const styleRegex = /<link.*?rel="stylesheet".*?href="(.*?)".*?>/g;
 const faviconRegex = /<link.*?rel="icon".*?href="(.*?)".*?>/g;
 const imgRegex = /<img.*?src="(.*?)".*?>/g;

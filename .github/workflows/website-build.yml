@@ -13,6 +13,9 @@ on:
       - ".github/workflows/website-build.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-slim
