@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
+from tritonparse.backend import deserialize_stage_descriptors_from_event
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -292,44 +293,41 @@ def _resolve_source_mappable_stage_keys(
         Output: {"ttir": "kernel.ttir"}
     """
     payload = entry.get("payload", {})
-    metadata = payload.get("metadata", {})
     file_content = payload.get("file_content", {})
 
     # Only consider file_content: source mapping requires parsing file contents.
     # If content was not captured, source mapping cannot be generated.
-    available_artifacts = set(file_content.keys())
 
     # Path 1: resolve from metadata.stage_descriptors (new trace format).
-    serialized_stage_descriptors = metadata.get("stage_descriptors")
     stage_keys: Dict[str, str] = {}
+    try:
+        stage_descriptors = deserialize_stage_descriptors_from_event(entry)
+    except ValueError as e:
+        logger.debug(
+            f"Failed to deserialize metadata.stage_descriptors: {e}; falling back to legacy behavior"
+        )
+        stage_descriptors = []
 
-    if isinstance(serialized_stage_descriptors, list):
-        for raw_stage in sorted(
-            [
-                stage
-                for stage in serialized_stage_descriptors
-                if isinstance(stage, dict)
-            ],
-            key=lambda stage: int(stage.get("display_order", 0)),
-        ):
-            stage_name = raw_stage.get("name")
-            extension = raw_stage.get("extension")
-            supports_source_mapping = raw_stage.get("supports_source_mapping", True)
-
-            if not isinstance(stage_name, str) or not isinstance(extension, str):
-                continue
-            if not supports_source_mapping:
+    if stage_descriptors:
+        for stage in stage_descriptors:
+            if not getattr(stage, "supports_source_mapping", True):
                 continue
 
-            # Find the matching artifact name in available_artifacts by extension.
+            extension = getattr(stage, "extension", None)
+            if not isinstance(extension, str):
+                continue
+            # Find the first artifact in file_content that endswith the extension.
+            # Our data model guarantees at most one matching key per extension; use
+            # generator to avoid allocating an intermediate list.
             artifact_name = next(
-                (name for name in available_artifacts if name.endswith(extension)), None
+                (name for name in file_content if name.endswith(extension)),
+                None,
             )
-
-            if artifact_name is None or stage_name in stage_keys:
+            if artifact_name is None:
                 continue
-
-            stage_keys[stage_name] = artifact_name
+            if stage.name in stage_keys:
+                continue
+            stage_keys[stage.name] = artifact_name
 
         if stage_keys:
             logger.debug(

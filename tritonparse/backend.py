@@ -149,7 +149,7 @@ class PipelineAdapterRegistry:
 
     def register(self, adapter_cls: type[CompilationPipelineAdapter]) -> None:
         adapter = adapter_cls()
-        self._adapter_types[adapter.adapter_name] = adapter_cls
+        self._adapter_types[adapter.adapter_name.lower()] = adapter_cls
 
     def create_all(self) -> list[CompilationPipelineAdapter]:
         return [adapter_cls() for adapter_cls in self._adapter_types.values()]
@@ -183,6 +183,7 @@ class PipelineAdapterRegistry:
 
 
 def _deserialize_stage_descriptor(raw_stage: dict[str, Any]) -> IRStageDescriptor:
+    _validate_stage_dict(raw_stage)
     return IRStageDescriptor(
         name=str(raw_stage["name"]),
         extension=str(raw_stage["extension"]),
@@ -195,39 +196,62 @@ def _deserialize_stage_descriptor(raw_stage: dict[str, Any]) -> IRStageDescripto
     )
 
 
-def get_present_stage_descriptors_from_event(
+def _validate_stage_dict(raw_stage: dict[str, Any]) -> None:
+    """Strictly validate a raw stage dict from metadata.
+
+    Raises ValueError if required fields are missing or have invalid types.
+    """
+    if not isinstance(raw_stage, dict):
+        raise ValueError("stage descriptor must be a dict")
+
+    required_fields = [
+        "name",
+        "extension",
+        "display_name",
+        "display_order",
+        "is_text",
+        "supports_source_mapping",
+        "parser_id",
+        "syntax_id",
+    ]
+
+    missing = [f for f in required_fields if f not in raw_stage]
+    if missing:
+        raise ValueError(f"Missing required stage descriptor fields: {missing}")
+
+    if not isinstance(raw_stage["name"], str):
+        raise ValueError("stage 'name' must be a string")
+    if not isinstance(raw_stage["extension"], str):
+        raise ValueError("stage 'extension' must be a string")
+    if not isinstance(raw_stage["display_name"], str):
+        raise ValueError("stage 'display_name' must be a string")
+    if "display_order" in raw_stage:
+        try:
+            int(raw_stage["display_order"])
+        except Exception:
+            raise ValueError("stage 'display_order' must be an integer or integer-like")
+    if not isinstance(raw_stage["parser_id"], str):
+        raise ValueError("stage 'parser_id' must be a string")
+    if not isinstance(raw_stage["syntax_id"], str):
+        raise ValueError("stage 'syntax_id' must be a string")
+
+
+def deserialize_stage_descriptors_from_event(
     event: dict[str, Any],
 ) -> list[IRStageDescriptor]:
     payload = event.get("payload", {})
     metadata = payload.get("metadata", {})
     serialized_stage_descriptors = metadata.get("stage_descriptors")
-    if isinstance(serialized_stage_descriptors, list) and serialized_stage_descriptors:
-        stages = [
-            _deserialize_stage_descriptor(raw_stage)
-            for raw_stage in serialized_stage_descriptors
-            if isinstance(raw_stage, dict)
-            and "name" in raw_stage
-            and "extension" in raw_stage
-        ]
-        return sorted(stages, key=lambda stage: stage.display_order)
-
-    artifact_names = list((payload.get("file_content") or {}).keys()) + list(
-        (payload.get("file_path") or {}).keys()
-    )
-    present_extensions = {
-        Path(artifact_name).suffix for artifact_name in artifact_names
-    }
-    seen_stage_names: set[str] = set()
-    descriptors: list[IRStageDescriptor] = []
-    for adapter in get_backend_registry().create_all():
-        for stage in adapter.get_ir_stages():
-            if stage.name in seen_stage_names:
-                continue
-            if stage.extension not in present_extensions:
-                continue
-            descriptors.append(stage)
-            seen_stage_names.add(stage.name)
-    return sorted(descriptors, key=lambda stage: stage.display_order)
+    if not (
+        isinstance(serialized_stage_descriptors, list) and serialized_stage_descriptors
+    ):
+        return []
+    stages = [
+        _deserialize_stage_descriptor(raw_stage)
+        for raw_stage in serialized_stage_descriptors
+        if isinstance(raw_stage, dict)
+    ]
+    return sorted(stages, key=lambda stage: stage.display_order)
 
 
 _REGISTRY = PipelineAdapterRegistry()
