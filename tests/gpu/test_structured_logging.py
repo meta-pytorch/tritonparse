@@ -23,6 +23,7 @@ import triton  # @manual=//triton:triton
 import triton.language as tl  # @manual=//triton:triton
 import tritonparse.parse.utils
 import tritonparse.structured_logging
+from parameterized import parameterized  # @manual
 from tests.test_utils import GPUTestBase
 from triton.compiler import ASTSource, IRSource  # @manual=//triton:triton
 from triton.knobs import CompileTimes  # @manual=//triton:triton
@@ -134,8 +135,15 @@ class TestStructuredLogging(GPUTestBase):
         self.assertEqual(convert(nested_structure), expected_nested)
         print("✓ Convert function tests passed")
 
-    def test_whole_workflow(self):
-        """Test unified_parse functionality including SASS extraction"""
+    @parameterized.expand(
+        [
+            ("none",),
+            ("gzip",),
+            ("zstd",),
+        ]
+    )
+    def test_whole_workflow(self, compression):
+        """Test unified_parse functionality including SASS extraction with different compression modes"""
 
         # Define a simple kernel directly in the test function
         @triton.jit
@@ -165,17 +173,19 @@ class TestStructuredLogging(GPUTestBase):
         os.makedirs(temp_dir_logs, exist_ok=True)
         os.makedirs(temp_dir_parsed, exist_ok=True)
         print(f"Temporary directory: {temp_dir}")
+        print(f"Compression mode: {compression}")
         nvdisasm_available = is_nvdisasm_available()
         if nvdisasm_available:
             print("✓ nvdisasm tool is available, enabling SASS dumping")
         else:
             print("⚠️  nvdisasm tool not available, SASS dumping will be disabled")
 
-        # Initialize logging with conditional SASS dumping
+        # Initialize logging with conditional SASS dumping and compression mode
         tritonparse.structured_logging.init(
             temp_dir_logs,
             enable_trace_launch=True,
             enable_sass_dump=nvdisasm_available,
+            compression=compression,
         )
 
         # Generate test data and run kernels
