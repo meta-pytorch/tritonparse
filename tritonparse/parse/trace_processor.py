@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
+from tritonparse.backend import deserialize_stage_descriptors_from_event
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -269,6 +270,95 @@ def generate_source_mappings(
     return mappings
 
 
+def _resolve_source_mappable_stage_keys(
+    entry: Dict[str, Any],
+) -> Dict[str, str]:
+    """
+    Resolve stage keys in a trace that support source mapping.
+
+    Two resolution paths are supported:
+    1. metadata.stage_descriptors (new trace format)
+    2. Hardcoded extension fallback (legacy trace format)
+
+    Args:
+        entry: Trace event dict containing event_type and payload.
+
+    Returns:
+        Dict mapping stage name to artifact filename
+        Example: {"ttir": "kernel.ttir", "ttgir": "kernel.ttgir"}
+
+    Example:
+        Input: entry contains file_content={"kernel.ttir": "...", "kernel.ptx": "..."}
+               and stage_descriptors=[{"name": "ttir", "extension": ".ttir", ...}]
+        Output: {"ttir": "kernel.ttir"}
+    """
+    payload = entry.get("payload", {})
+    file_content = payload.get("file_content", {})
+
+    # Only consider file_content: source mapping requires parsing file contents.
+    # If content was not captured, source mapping cannot be generated.
+
+    # Path 1: resolve from metadata.stage_descriptors (new trace format).
+    stage_keys: Dict[str, str] = {}
+    try:
+        stage_descriptors = deserialize_stage_descriptors_from_event(entry)
+    except ValueError as e:
+        logger.debug(
+            f"Failed to deserialize metadata.stage_descriptors: {e}; falling back to legacy behavior"
+        )
+        stage_descriptors = []
+
+    if stage_descriptors:
+        for stage in stage_descriptors:
+            if not getattr(stage, "supports_source_mapping", True):
+                continue
+
+            extension = getattr(stage, "extension", None)
+            if not isinstance(extension, str):
+                continue
+            # Find the first artifact in file_content that endswith the extension.
+            # Our data model guarantees at most one matching key per extension; use
+            # generator to avoid allocating an intermediate list.
+            artifact_name = next(
+                (name for name in file_content if name.endswith(extension)),
+                None,
+            )
+            if artifact_name is None:
+                continue
+            if stage.name in stage_keys:
+                continue
+            stage_keys[stage.name] = artifact_name
+
+        logger.debug(
+            f"Resolved stage keys from metadata.stage_descriptors: {list(stage_keys.keys())}"
+        )
+        return stage_keys
+
+    # Path 2: hardcoded extension fallback (original upstream behavior).
+    # This intentionally mirrors the upstream hardcoded logic and only scans file_content.
+    fallback_extensions = {
+        "ttir": ".ttir",
+        "ttgir": ".ttgir",
+        "ptx": ".ptx",
+        "amdgcn": ".amdgcn",
+        "sass": ".sass",
+    }
+
+    for stage_name, extension in fallback_extensions.items():
+        artifact_name = next(
+            (name for name in file_content if name.endswith(extension)), None
+        )
+        if artifact_name is not None:
+            stage_keys[stage_name] = artifact_name
+
+    if stage_keys:
+        logger.debug(
+            f"Resolved stage keys from hardcoded extensions: {list(stage_keys.keys())}"
+        )
+
+    return stage_keys
+
+
 def process_ir(
     key: str,
     file_content: Dict[str, str],
@@ -400,62 +490,74 @@ def parse_single_trace_content(trace_content: str) -> str:
         payload = entry.setdefault("payload", {})
         file_content = payload.get("file_content", {})
         file_path = payload.get("file_path", {})
+        metadata = payload.setdefault("metadata", {})
 
-        # Find the IR file keys
-        ttir_key = next((k for k in file_content if k.endswith(".ttir")), None)
-        ttgir_key = next((k for k in file_content if k.endswith(".ttgir")), None)
-        ptx_key = next((k for k in file_content if k.endswith(".ptx")), None)
-        amdgcn_key = next((k for k in file_content if k.endswith(".amdgcn")), None)
-        sass_key = next((k for k in file_content if k.endswith(".sass")), None)
+        # Use the new stage resolution helper instead of hardcoded stage lookup.
+        # Returns: {"ttir": "kernel.ttir", "ttgir": "kernel.ttgir", ...}
+        stage_keys = _resolve_source_mappable_stage_keys(entry)
 
         # Extract original num_warps from TTGIR for warp-specialized kernels.
         # If upstream Triton already set num_warps_base, trust it; otherwise
         # recover the value from the TTGIR "ttg.num-warps" module attribute.
-        metadata = payload.setdefault("metadata", {})
-        if "num_warps_base" not in metadata and ttgir_key and ttgir_key in file_content:
-            ttgir_content = file_content[ttgir_key]
-            if isinstance(ttgir_content, str):
-                match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', ttgir_content)
-                if match:
-                    original = int(match.group(1))
-                    current = metadata.get("num_warps")
-                    if current is not None and original != current:
-                        metadata["num_warps_base"] = original
+        if "num_warps_base" not in metadata:
+            ttgir_key = stage_keys.get("ttgir")
+            if ttgir_key and ttgir_key in file_content:
+                ttgir_content = file_content[ttgir_key]
+                if isinstance(ttgir_content, str):
+                    match = re.search(r'"ttg\.num-warps"\s*=\s*(\d+)', ttgir_content)
+                    if match:
+                        original = int(match.group(1))
+                        current = metadata.get("num_warps")
+                        if current is not None and original != current:
+                            metadata["num_warps_base"] = original
 
         # Skip if no IR files found
-        if not (ttir_key or ttgir_key or ptx_key or amdgcn_key or sass_key):
+        if not stage_keys:
             logger.warning("No IR files found in the payload.")
             # Still return with proper NDJSON format (with newline)
             return dumps(entry) + "\n"
 
-        # generate ttir->source, ttgir->source, ptx->source, sass->source
-        ttir_map = process_ir(ttir_key, file_content, file_path)
-        ttgir_map = process_ir(ttgir_key, file_content, file_path)
-        ptx_map = process_ir(ptx_key, file_content, file_path, [ttir_map, ttgir_map])
-        amdgcn_map = process_ir(
-            amdgcn_key, file_content, file_path, [ttir_map, ttgir_map]
-        )
-        sass_map = process_ir(sass_key, file_content, file_path, [ttir_map, ttgir_map])
+        # Generate source mappings for all resolved stages dynamically.
+        # Process in order: earlier stages (for example ttir, ttgir) first,
+        # then later stages (for example ptx, sass), so later stages can
+        # reuse mappings produced by earlier ones.
+        stage_maps: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        stage_names = list(stage_keys.keys())
 
-        # Create bidirectional mappings between all IR types
-        ir_maps = {
-            "ttir": ttir_map,
-            "ttgir": ttgir_map,
-            "ptx": ptx_map,
-            "amdgcn": amdgcn_map,
-            "sass": sass_map,
-        }
+        for i, stage_name in enumerate(stage_names):
+            artifact_key = stage_keys[stage_name]
 
-        # Create mappings between all pairs of IR types
-        ir_types = list(ir_maps.keys())
-        for i, src_type in enumerate(ir_types):
-            for tgt_type in ir_types[i + 1 :]:
-                if ir_maps[src_type] and ir_maps[tgt_type]:
+            # Collect mappings from previously processed stages for use by
+            # later stages such as PTX or AMDGCN.
+            other_mappings = [
+                stage_maps[prev_stage]
+                for prev_stage in stage_names[:i]
+                if stage_maps.get(prev_stage)
+            ]
+
+            stage_map = process_ir(
+                artifact_key,
+                file_content,
+                file_path,
+                other_mappings if other_mappings else None,
+            )
+            if stage_map:
+                stage_maps[stage_name] = stage_map
+
+        # Create bidirectional mappings between every pair of populated stages,
+        # for example TTIR ↔ TTGIR, TTIR ↔ PTX, TTGIR ↔ PTX, ...
+        stage_names = list(stage_maps.keys())
+        for i, src_stage in enumerate(stage_names):
+            for tgt_stage in stage_names[i + 1 :]:
+                if stage_maps[src_stage] and stage_maps[tgt_stage]:
                     create_bidirectional_mapping(
-                        ir_maps[src_type], ir_maps[tgt_type], src_type, tgt_type
+                        stage_maps[src_stage],
+                        stage_maps[tgt_stage],
+                        src_stage,
+                        tgt_stage,
                     )
                     logger.debug(
-                        f"Created bidirectional mapping between {src_type} and {tgt_type}"
+                        f"Created bidirectional mapping between {src_stage} and {tgt_stage}"
                     )
 
         py_map = {}
@@ -465,32 +567,24 @@ def parse_single_trace_content(trace_content: str) -> str:
                 f"Added Python source information (lines {payload['python_source']['start_line']}-{payload['python_source']['end_line']})"
             )
 
-            # 4. Create Python source to IR mappings. We use the original line numbers as key in the python source code.
-            # Create a list of valid IR mappings, filtering out None keys
+            # Create mappings from Python source to IR.
+            # Collect all non-empty IR mappings.
             ir_mappings = []
-            ir_keys_and_maps = [
-                (ttir_key, ttir_map),
-                (ttgir_key, ttgir_map),
-                (ptx_key, ptx_map),
-                (amdgcn_key, amdgcn_map),
-                (sass_key, sass_map),
-            ]
-
-            for key, mapping in ir_keys_and_maps:
-                if key:
-                    ir_mappings.append((get_file_extension(key), mapping))
+            for stage_name, artifact_key in stage_keys.items():
+                stage_map = stage_maps.get(stage_name)
+                if stage_map and artifact_key:
+                    ir_mappings.append((get_file_extension(artifact_key), stage_map))
 
             py_map = create_python_mapping(ir_mappings)
 
-        # Store the mappings in the payload
+        # Build the final source_mappings payload.
+        # Add all populated stage mappings plus the Python mapping.
         payload["source_mappings"] = {
-            "ttir": ttir_map,
-            "ttgir": ttgir_map,
-            **({"ptx": ptx_map} if ptx_map else {}),
-            **({"amdgcn": amdgcn_map} if amdgcn_map else {}),
-            **({"sass": sass_map} if sass_map else {}),
-            "python": py_map,
+            stage_name: stage_map
+            for stage_name, stage_map in stage_maps.items()
+            if stage_map
         }
+        payload["source_mappings"]["python"] = py_map
     # NDJSON format requires a newline at the end of each line
     return dumps(entry) + "\n"
 
