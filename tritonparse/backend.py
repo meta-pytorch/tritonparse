@@ -1,3 +1,4 @@
+#  Copyright (c) Meta Platforms, Inc. and affiliates.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -8,6 +9,19 @@ from typing import Any
 
 @dataclass(frozen=True)
 class IRStageDescriptor:
+    """Describes an IR stage in the compilation pipeline.
+
+    Fields:
+        name: Internal stage identifier (e.g., "ttir", "ptx").
+        extension: File extension for artifacts (e.g., ".ttir", ".ptx").
+        display_name: Human-readable name for UI display.
+        display_order: UI display order (lower values appear first).
+        is_text: True if format is text, False if binary.
+        supports_source_mapping: True if this stage supports source-to-source mapping.
+        parser_id: Identifier for the parser to use.
+        syntax_id: Syntax highlighting identifier for web display.
+    """
+
     name: str
     extension: str
     display_name: str
@@ -20,6 +34,15 @@ class IRStageDescriptor:
 
 @dataclass(frozen=True)
 class DerivedArtifactDescriptor:
+    """Describes an artifact derived by running tools on another stage's output.
+
+    Fields:
+        source_extension: Extension of the source artifact (e.g., ".ptx").
+        output_stage_name: Name of the stage this derived artifact belongs to.
+        output_extension: Extension for the derived artifact (e.g., ".sass").
+        tool_name: Name of the tool used to generate the artifact.
+    """
+
     source_extension: str
     output_stage_name: str
     output_extension: str
@@ -28,11 +51,25 @@ class DerivedArtifactDescriptor:
 
 @dataclass(frozen=True)
 class AnalysisPassDescriptor:
+    """Describes an analysis pass that operates on specific compilation stages.
+
+    Fields:
+        name: Name of the analysis pass.
+        required_stages: Tuple of stage names that must be present for this pass to run.
+    """
+
     name: str
     required_stages: tuple[str, ...]
 
 
 class CompilationPipelineAdapter(ABC):
+    """Abstract base class for compilation pipeline adapters.
+
+    Adapters provide backend-specific configuration for different
+    compilation pipelines (e.g., CUDA vs HIP). Each adapter defines the
+    IR stages, derived artifacts, and analysis passes for its pipeline.
+    """
+
     @property
     @abstractmethod
     def adapter_name(self) -> str:
@@ -144,6 +181,12 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
 
 
 class PipelineAdapterRegistry:
+    """Registry for managing and resolving compilation pipeline adapters.
+
+    Provides registration and resolution methods for different backend adapters.
+    Adapters can be looked up by name or inferred from trace metadata.
+    """
+
     def __init__(self) -> None:
         self._adapter_types: dict[str, type[CompilationPipelineAdapter]] = {}
 
@@ -230,6 +273,10 @@ def _validate_stage_dict(raw_stage: dict[str, Any]) -> None:
             int(raw_stage["display_order"])
         except Exception:
             raise ValueError("stage 'display_order' must be an integer or integer-like")
+    if not isinstance(raw_stage["is_text"], bool):
+        raise ValueError("stage 'is_text' must be a boolean")
+    if not isinstance(raw_stage["supports_source_mapping"], bool):
+        raise ValueError("stage 'supports_source_mapping' must be a boolean")
     if not isinstance(raw_stage["parser_id"], str):
         raise ValueError("stage 'parser_id' must be a string")
     if not isinstance(raw_stage["syntax_id"], str):

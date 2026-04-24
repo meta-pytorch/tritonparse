@@ -329,11 +329,10 @@ def _resolve_source_mappable_stage_keys(
                 continue
             stage_keys[stage.name] = artifact_name
 
-        if stage_keys:
-            logger.debug(
-                f"Resolved stage keys from metadata.stage_descriptors: {list(stage_keys.keys())}"
-            )
-            return stage_keys
+        logger.debug(
+            f"Resolved stage keys from metadata.stage_descriptors: {list(stage_keys.keys())}"
+        )
+        return stage_keys
 
     # Path 2: hardcoded extension fallback (original upstream behavior).
     # This intentionally mirrors the upstream hardcoded logic and only scans file_content.

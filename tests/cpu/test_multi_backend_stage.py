@@ -62,9 +62,7 @@ class TestMultiBackendStage(unittest.TestCase):
         stage_keys = _resolve_source_mappable_stage_keys(event)
 
         # Fallback dict orders ttir before ptx, so keys should reflect that order
-        self.assertIn("ttir", stage_keys)
-        self.assertIn("ptx", stage_keys)
-        self.assertEqual(list(stage_keys.keys()), [k for k in list(stage_keys.keys())])
+        self.assertEqual(list(stage_keys.keys()), ["ttir", "ptx"])
         # Check values mapped correctly
         self.assertEqual(stage_keys["ttir"], "b.ttir")
         self.assertEqual(stage_keys["ptx"], "a.ptx")
