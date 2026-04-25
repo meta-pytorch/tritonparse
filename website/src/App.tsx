@@ -532,13 +532,22 @@ function App() {
   const makeTabButton = (opts: {
     label: string;
     isActive: boolean;
+    requiresTrace?: boolean;
     includeSelectedIR?: boolean;
     onActivate: () => void;
     enabledTitle?: string;
     disabledTitle?: string;
   }) => {
-    const { label, isActive, includeSelectedIR = true, onActivate, enabledTitle, disabledTitle } = opts;
-    const isDisabled = !isTraceLoaded || (includeSelectedIR && !!selectedIR);
+    const {
+      label,
+      isActive,
+      requiresTrace = true,
+      includeSelectedIR = true,
+      onActivate,
+      enabledTitle,
+      disabledTitle,
+    } = opts;
+    const isDisabled = (requiresTrace && !isTraceLoaded) || (includeSelectedIR && !!selectedIR);
 
     // Use aria-disabled + click guard so tooltip and keyboard users can discover the hint
     const handleClick = () => {
@@ -676,6 +685,7 @@ function App() {
               {makeTabButton({
                 label: "File Diff",
                 isActive: activeTab === "file_diff",
+                requiresTrace: false,
                 includeSelectedIR: false,
                 onActivate: () => {
                   if (sess.preview?.active) sess.clearPreview();
