@@ -515,6 +515,74 @@ function App() {
     }
   };
 
+  // Helper: whether any trace/kernel data is available for enabling tabs
+  const isTraceLoaded = dataLoaded && kernels.length > 0;
+
+  // Helper to build class names for tab buttons
+  const tabClassName = (isDisabled: boolean, isActive: boolean) =>
+    `px-3 py-2 text-sm font-medium rounded-md ${
+      isDisabled
+        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+        : isActive
+        ? "bg-blue-700 text-white shadow-md"
+        : "bg-blue-100 text-blue-700 hover:bg-blue-200"
+    }`;
+
+  // Factory to create tab buttons with consistent behavior and accessibility
+  const makeTabButton = (opts: {
+    label: string;
+    isActive: boolean;
+    requiresTrace?: boolean;
+    includeSelectedIR?: boolean;
+    onActivate: () => void;
+    enabledTitle?: string;
+    disabledTitle?: string;
+  }) => {
+    const {
+      label,
+      isActive,
+      requiresTrace = true,
+      includeSelectedIR = true,
+      onActivate,
+      enabledTitle,
+      disabledTitle,
+    } = opts;
+    const isDisabled = (requiresTrace && !isTraceLoaded) || (includeSelectedIR && !!selectedIR);
+
+    // Use aria-disabled + click guard so tooltip and keyboard users can discover the hint
+    const handleClick = () => {
+      if (isDisabled) return;
+      onActivate();
+    };
+
+    const title = isDisabled ? disabledTitle ?? "Please load a trace file first" : enabledTitle ?? label;
+    const descriptionId = isDisabled ? `tab-hint-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : undefined;
+
+    return (
+      <span className="group relative inline-flex focus-within:z-10">
+        <button
+          className={tabClassName(isDisabled, isActive)}
+          aria-disabled={isDisabled}
+          aria-describedby={descriptionId}
+          onClick={handleClick}
+        >
+          {label}
+        </button>
+        {descriptionId && (
+          <>
+            <span id={descriptionId} className="sr-only">{title}</span>
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+            >
+              {title}
+            </span>
+          </>
+        )}
+      </span>
+    );
+  };
+
   return (
     <div className="min-h-screen w-full bg-gray-50 flex flex-col">
       {/* Header with navigation */}
@@ -576,76 +644,74 @@ function App() {
               onShowUrlInputChange={setShowUrlInput}
             />
 
-            {/* Tab navigation: File Diff button placed as the last (rightmost) button */}
+            {/* Tab navigation: All buttons always visible; use shared helper for state, styling, and accessibility */}
             <div className="flex space-x-4">
-              {dataLoaded && kernels.length > 0 && !selectedIR && (
-                <>
-                  <button
-                    className={`px-3 py-2 text-sm font-medium rounded-md ${activeTab === "overview" ? "bg-blue-700 text-white shadow-md" : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                      }`}
-                    onClick={() => {
-                      if (sess.preview?.active) sess.clearPreview();
-                      setShowWelcome(false);
-                      setActiveTab("overview");
+              {makeTabButton({
+                label: "Kernel Overview",
+                isActive: activeTab === "overview",
+                includeSelectedIR: true,
+                onActivate: () => {
+                  if (sess.preview?.active) sess.clearPreview();
+                  setShowWelcome(false);
+                  setActiveTab("overview");
+                  if (loadedUrl) {
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.delete("view");
+                    window.history.replaceState({}, "", newUrl.toString());
+                  }
+                },
+                enabledTitle: "View kernel overview",
+                disabledTitle: "Please load a trace file first",
+              })}
 
-                      if (loadedUrl) {
-                        const newUrl = new URL(window.location.href);
-                        newUrl.searchParams.delete("view");
-                        window.history.replaceState({}, "", newUrl.toString());
-                      }
-                    }}
-                  >
-                    Kernel Overview
-                  </button>
-                  <button
-                    className={`px-3 py-2 text-sm font-medium rounded-md ${activeTab === "comparison" ? "bg-blue-700 text-white shadow-md" : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                      }`}
-                    onClick={() => {
-                      if (sess.preview?.active) sess.clearPreview();
-                      setShowWelcome(false);
-                      setActiveTab("comparison");
+              {makeTabButton({
+                label: "IR Code",
+                isActive: activeTab === "comparison",
+                includeSelectedIR: true,
+                onActivate: () => {
+                  if (sess.preview?.active) sess.clearPreview();
+                  setShowWelcome(false);
+                  setActiveTab("comparison");
+                  if (loadedUrl) {
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.set("view", "ir_code_comparison");
+                    window.history.replaceState({}, "", newUrl.toString());
+                  }
+                },
+                enabledTitle: "View IR code comparison",
+                disabledTitle: "Please load a trace file first",
+              })}
 
-                      if (loadedUrl) {
-                        const newUrl = new URL(window.location.href);
-                        newUrl.searchParams.set("view", "ir_code_comparison");
-                        window.history.replaceState({}, "", newUrl.toString());
-                      }
-                    }}
-                  >
-                    IR Code
-                  </button>
-                </>
-              )}
-              <button
-                className={`px-3 py-2 text-sm font-medium rounded-md ${activeTab === "file_diff" ? "bg-blue-700 text-white shadow-md" : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                  }`}
-                onClick={() => {
+              {makeTabButton({
+                label: "File Diff",
+                isActive: activeTab === "file_diff",
+                requiresTrace: false,
+                includeSelectedIR: false,
+                onActivate: () => {
                   if (sess.preview?.active) sess.clearPreview();
                   setShowWelcome(false);
                   setActiveTab("file_diff");
-                }}
-              >
-                File Diff
-              </button>
-              {dataLoaded && kernels.length > 0 && (
-              <button
-                    className={`px-3 py-2 text-sm font-medium rounded-md ${activeTab === "ir_analysis" ? "bg-blue-700 text-white shadow-md" : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                      }`}
-                    onClick={() => {
-                      if (sess.preview?.active) sess.clearPreview();
-                      setShowWelcome(false);
-                      setActiveTab("ir_analysis");
+                },
+                enabledTitle: "View file diff",
+              })}
 
-                      if (loadedUrl) {
-                        const newUrl = new URL(window.location.href);
-                        newUrl.searchParams.set("view", "ir_analysis");
-                        window.history.replaceState({}, "", newUrl.toString());
-                      }
-                    }}
-                  >
-                    IR Analysis (Beta)
-                  </button>
-              )}
+              {makeTabButton({
+                label: "IR Analysis (Beta)",
+                isActive: activeTab === "ir_analysis",
+                includeSelectedIR: true,
+                onActivate: () => {
+                  if (sess.preview?.active) sess.clearPreview();
+                  setShowWelcome(false);
+                  setActiveTab("ir_analysis");
+                  if (loadedUrl) {
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.set("view", "ir_analysis");
+                    window.history.replaceState({}, "", newUrl.toString());
+                  }
+                },
+                enabledTitle: "View IR analysis",
+                disabledTitle: "Please load a trace file first",
+              })}
             </div>
           </div>
         </div>
