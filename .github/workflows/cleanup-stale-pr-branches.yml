@@ -1,0 +1,149 @@
+name: Cleanup stale PR branches
+
+# Why this exists:
+# tritonparse is developed in Meta's internal monorepo (fbcode) and mirrored
+# to GitHub by ShipIt. ShipIt does NOT merge PRs on GitHub; instead, internal
+# diffs are landed in fbcode and the resulting commits are pushed to `main`,
+# which causes the corresponding GitHub PRs to be CLOSED (not merged). The
+# branches ShipIt creates (e.g. `export-Dxxxxxxxxx`) are left behind and
+# accumulate over time. This workflow deletes branches whose PRs were closed
+# more than 6 months ago.
+
+on:
+    schedule:
+        # 00:00 UTC on the 1st of every month
+        - cron: "0 0 1 * *"
+    workflow_dispatch:
+        inputs:
+            dry_run:
+                description: "Dry run (list branches that would be deleted, but do not delete)"
+                type: boolean
+                default: true
+            age_months:
+                description: "Minimum age in months since PR was closed"
+                type: string
+                default: "6"
+
+permissions:
+    contents: write
+    pull-requests: read
+
+jobs:
+    cleanup:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Cleanup stale PR branches
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  REPO: ${{ github.repository }}
+                  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+                  AGE_MONTHS: ${{ github.event_name == 'workflow_dispatch' && inputs.age_months || '6' }}
+              run: |
+                  set -euo pipefail
+
+                  echo "Repository: $REPO"
+                  echo "Dry run: $DRY_RUN"
+                  echo "Age threshold: $AGE_MONTHS months"
+
+                  # Cutoff timestamp: anything closed at or before this is eligible
+                  cutoff_epoch=$(date -u -d "$AGE_MONTHS months ago" +%s)
+                  cutoff_iso=$(date -u -d "@$cutoff_epoch" +%Y-%m-%dT%H:%M:%SZ)
+                  echo "Cutoff (UTC): $cutoff_iso"
+                  echo
+
+                  # Pull all closed PRs. ShipIt-mirrored repos can have many PRs; bump
+                  # the limit if needed. `gh pr list` will paginate up to --limit.
+                  pr_json=$(gh pr list \
+                      --repo "$REPO" \
+                      --state closed \
+                      --limit 5000 \
+                      --json number,headRefName,closedAt,mergedAt,isCrossRepository,state)
+
+                  total=$(echo "$pr_json" | jq 'length')
+                  echo "Fetched $total closed PRs"
+                  echo
+
+                  deleted=0
+                  skipped=0
+                  failed=0
+                  would_delete=0
+
+                  # Iterate. Use process substitution so we can mutate counters.
+                  while IFS=$'\t' read -r pr_number branch closed_at merged_at cross_repo; do
+                      # Skip merged PRs (defensive — ShipIt closes without merging,
+                      # but other PRs in the repo could be merged normally).
+                      if [ "$merged_at" != "null" ] && [ -n "$merged_at" ]; then
+                          skipped=$((skipped + 1))
+                          continue
+                      fi
+
+                      # Skip PRs originating from forks — we cannot delete those branches.
+                      if [ "$cross_repo" = "true" ]; then
+                          skipped=$((skipped + 1))
+                          continue
+                      fi
+
+                      # Defensive: never touch primary branches.
+                      case "$branch" in
+                          main|master|gh-pages)
+                              echo "SKIP  PR #$pr_number: protected branch '$branch'"
+                              skipped=$((skipped + 1))
+                              continue
+                              ;;
+                      esac
+
+                      # Age check
+                      closed_epoch=$(date -u -d "$closed_at" +%s)
+                      if [ "$closed_epoch" -gt "$cutoff_epoch" ]; then
+                          skipped=$((skipped + 1))
+                          continue
+                      fi
+
+                      # Confirm branch still exists (may have been deleted already).
+                      http_status=$(gh api \
+                          -H "Accept: application/vnd.github+json" \
+                          --method GET \
+                          "/repos/$REPO/branches/$branch" \
+                          --silent 2>/dev/null \
+                          && echo 200 || echo 404)
+
+                      if [ "$http_status" != "200" ]; then
+                          echo "GONE  PR #$pr_number: branch '$branch' already absent"
+                          skipped=$((skipped + 1))
+                          continue
+                      fi
+
+                      if [ "$DRY_RUN" = "true" ]; then
+                          echo "DRY   PR #$pr_number: would delete '$branch' (closed $closed_at)"
+                          would_delete=$((would_delete + 1))
+                          continue
+                      fi
+
+                      if gh api \
+                          -H "Accept: application/vnd.github+json" \
+                          --method DELETE \
+                          "/repos/$REPO/git/refs/heads/$branch" >/dev/null 2>&1; then
+                          echo "DEL   PR #$pr_number: deleted '$branch' (closed $closed_at)"
+                          deleted=$((deleted + 1))
+                      else
+                          echo "FAIL  PR #$pr_number: could not delete '$branch'"
+                          failed=$((failed + 1))
+                      fi
+                  done < <(echo "$pr_json" \
+                      | jq -r '.[] | [.number, .headRefName, .closedAt, (.mergedAt // "null"), (.isCrossRepository|tostring)] | @tsv')
+
+                  echo
+                  echo "Summary:"
+                  echo "  Total closed PRs scanned: $total"
+                  if [ "$DRY_RUN" = "true" ]; then
+                      echo "  Would delete:             $would_delete"
+                  else
+                      echo "  Deleted:                  $deleted"
+                      echo "  Failed:                   $failed"
+                  fi
+                  echo "  Skipped:                  $skipped"
+
+                  # Fail the job if any deletes failed (so it surfaces in the Actions UI).
+                  if [ "$failed" -gt 0 ]; then
+                      exit 1
+                  fi
