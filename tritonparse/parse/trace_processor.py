@@ -176,7 +176,10 @@ def get_procedure_checks() -> List[Dict[str, Any]]:
 
 
 def generate_source_mappings(
-    ir_content: str, ir_type: str, other_mappings: List[Any] | None = None
+    ir_content: str,
+    ir_type: str,
+    other_mappings: List[Any] | None = None,
+    metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Generate source mappings from intermediate representation (IR) content to the source file.
@@ -197,6 +200,7 @@ def generate_source_mappings(
         ir_content (str): The content of the intermediate representation.
         ir_type (str): The type of the intermediate representation (e.g., 'ttir').
         other_mappings (List[Any]): A collection of additional mappings, primarily utilized for PTX mappings since PTX's location annotations reference the file name instead of the complete path.
+        metadata (Dict[str, Any]): Optional metadata for resolving backend-specific parsers.
 
     Returns:
         Dict[str, Dict[str, Any]]: A dictionary mapping line numbers to their corresponding source file,
@@ -204,6 +208,31 @@ def generate_source_mappings(
     """
     if other_mappings is None:
         other_mappings = []
+
+    # Try to use adapter-based parser if metadata is available
+    if metadata is not None:
+        try:
+            from tritonparse.backend import get_backend_registry
+
+            registry = get_backend_registry()
+            adapter = registry.resolve_from_trace(metadata)
+
+            # Find the stage descriptor for this ir_type
+            stage_descriptor = adapter.classify_artifact(f"kernel.{ir_type}")
+            if stage_descriptor is not None and stage_descriptor.parser_id != "none":
+                parser_id = stage_descriptor.parser_id
+                parser = adapter.get_parser(parser_id)
+
+                # Call the parser with standardized signature
+                return parser(ir_content, other_mappings, ir_type)
+        except Exception as e:
+            # Fallback to old hardcoded logic if adapter resolution fails
+            logger.debug(
+                f"Adapter-based parser resolution failed for ir_type={ir_type}: {e}. "
+                f"Falling back to hardcoded parser selection."
+            )
+
+    # Fallback: hardcoded parser selection (for backward compatibility)
     if ir_type == "ptx" or ir_type == "amdgcn":
         return extract_ptx_amdgcn_mappings(ir_content, other_mappings, ir_type)
     elif ir_type == "sass":
@@ -364,11 +393,13 @@ def process_ir(
     file_content: Dict[str, str],
     file_path: Dict[str, str],
     other_mappings: List[Any] | None = None,
+    metadata: Dict[str, Any] | None = None,
 ):
     ir_content = load_ir_contents(key, file_content, file_path)
     if not ir_content:
         return {}
-    mapping = generate_source_mappings(ir_content, key.split(".")[1], other_mappings)
+    ir_type = key.split(".")[1]
+    mapping = generate_source_mappings(ir_content, ir_type, other_mappings, metadata)
     logger.debug(f"Generated source mapping for {key}")
     return mapping
 
@@ -540,6 +571,7 @@ def parse_single_trace_content(trace_content: str) -> str:
                 file_content,
                 file_path,
                 other_mappings if other_mappings else None,
+                metadata,
             )
             if stage_map:
                 stage_maps[stage_name] = stage_map

@@ -3,7 +3,7 @@
 import os
 import re
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from tritonparse.tp_logger import get_logger
 
@@ -60,6 +60,64 @@ ALIAS_SIMPLE_PATTERN = re.compile(r"#loc(\d+)\s*=\s*loc\(\s*#loc(\d*)\s*\)")
 CALLSITE_PATTERN = re.compile(
     r"#loc(\d+)\s*=\s*loc\(\s*callsite\(\s*#loc(\d*)\s+at\s+#loc(\d*)\s*\)\s*\)"
 )
+
+
+# =============================================================================
+# PARSER REGISTRY
+# =============================================================================
+class ParserRegistry:
+    """
+    Registry for managing IR parser functions.
+
+    This registry allows adapters to register and retrieve parser functions
+    by parser_id. It supports both common parsers (shared across backends)
+    and backend-specific parsers.
+    """
+
+    _parsers: Dict[str, Callable] = {}
+
+    @classmethod
+    def register(cls, parser_id: str, parser_func: Callable) -> None:
+        """
+        Register a parser function with the given parser_id.
+
+        Args:
+            parser_id: The parser identifier (e.g., "generic_loc", "ptx_loc")
+            parser_func: The parser function
+
+        Raises:
+            ValueError: If parser_id is already registered
+        """
+        if parser_id in cls._parsers:
+            logger.warning(
+                f"Parser '{parser_id}' is already registered. "
+                f"Overwriting with new parser function."
+            )
+        cls._parsers[parser_id] = parser_func
+        logger.debug(f"Registered parser: {parser_id}")
+
+    @classmethod
+    def get_parser(cls, parser_id: str) -> Optional[Callable]:
+        """
+        Get a parser function by parser_id.
+
+        Args:
+            parser_id: The parser identifier
+
+        Returns:
+            The parser function, or None if not found
+        """
+        return cls._parsers.get(parser_id)
+
+    @classmethod
+    def list_parsers(cls) -> List[str]:
+        """
+        List all registered parser IDs.
+
+        Returns:
+            List of parser IDs
+        """
+        return list(cls._parsers.keys())
 
 
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
@@ -486,3 +544,193 @@ def extract_ptx_amdgcn_mappings(
             logger.error(f"Line content: {line}")
             raise e
     return mappings
+
+
+# =============================================================================
+# PARSER WRAPPER FUNCTIONS
+# =============================================================================
+# These wrapper functions serve two purposes:
+# 1. Unify the parser signatures to match the (content, mappings, ir_type) interface
+# 2. Preserve the original logic from generate_source_mappings (which combined
+#    extract_loc_definitions + extract_code_locations for generic IR types)
+#
+# Note: We use wrappers instead of modifying existing function signatures to
+# maintain backward compatibility with other code that may call these functions.
+# =============================================================================
+
+
+def _parse_generic_loc(
+    ir_content: str,
+    other_mappings: Optional[List[Any]] = None,
+    ir_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Parser for generic IR formats (TTIR/TTGIR/LLIR) with #loc directives.
+
+    This combines extract_loc_definitions + extract_code_locations to preserve
+    the original generate_source_mappings behavior for these IR types.
+
+    Args:
+        ir_content: The IR content
+        other_mappings: Other mappings (not used for generic_loc)
+        ir_type: The IR type (e.g., "ttir", "ttgir", "llir")
+
+    Returns:
+        Dictionary mapping line numbers to source locations
+    """
+
+    loc_defs = extract_loc_definitions(ir_content)
+    logger.debug(f"Found {len(loc_defs)} #loc definitions")
+
+    loc_refs = extract_code_locations(ir_content)
+    logger.debug(f"Found {len(loc_refs)} loc references")
+
+    mappings: Dict[str, Dict[str, Any]] = {}
+    for ln, loc_id in loc_refs.items():
+        if loc_id.startswith("direct:"):
+            _, file_path, line, col = loc_id.split(":", 3)
+            mappings[str(ln)] = {
+                "file": file_path,
+                "line": int(line),
+                "column": int(col),
+                f"{ir_type}_line": ln,
+            }
+        elif loc_id in loc_defs:
+            info = loc_defs[loc_id]
+            entry = {
+                "file": info["file"],
+                "line": info["line"],
+                "column": info["column"],
+                f"{ir_type}_line": ln,
+            }
+            # Propagate callsite metadata if present
+            if info.get("is_callsite"):
+                entry["is_callsite"] = True
+                entry["callsite_callee"] = info["callsite_callee"]
+                entry["callsite_caller"] = info["callsite_caller"]
+            # Propagate alias metadata if present
+            if "alias_name" in info:
+                entry["alias_name"] = info["alias_name"]
+            if "alias_of" in info:
+                entry["loc_id"] = loc_id
+            mappings[str(ln)] = entry
+
+    # Add separate entries for loc definition lines
+    for loc_id, info in loc_defs.items():
+        if "def_line" not in info:
+            continue
+        def_ln = info["def_line"]
+        # Only create mapping if this line doesn't already have one
+        if str(def_ln) not in mappings:
+            entry = {
+                "file": info["file"],
+                "line": info["line"],
+                "column": info["column"],
+                f"{ir_type}_line": def_ln,
+                "kind": "loc_def",
+            }
+            if "alias_name" in info:
+                entry["alias_name"] = info["alias_name"]
+            if "alias_of" in info:
+                entry["loc_id"] = loc_id
+            mappings[str(def_ln)] = entry
+
+    return mappings
+
+
+def _parse_ptx_loc(
+    ir_content: str,
+    other_mappings: Optional[List[Any]] = None,
+    ir_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Parser for PTX IR format.
+
+    Args:
+        ir_content: The PTX content
+        other_mappings: Other mappings for file path resolution (from TTIR/TTGIR)
+        ir_type: The IR type (not used, kept for signature consistency)
+
+    Returns:
+        Dictionary mapping line numbers to source locations
+    """
+    return extract_ptx_amdgcn_mappings(ir_content, other_mappings, "ptx")
+
+
+def _parse_amdgcn_loc(
+    ir_content: str,
+    other_mappings: Optional[List[Any]] = None,
+    ir_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Parser for AMDGCN assembly format.
+
+    Args:
+        ir_content: The AMDGCN content
+        other_mappings: Other mappings for file path resolution (from TTIR/TTGIR)
+        ir_type: The IR type (not used, kept for signature consistency)
+
+    Returns:
+        Dictionary mapping line numbers to source locations
+    """
+    return extract_ptx_amdgcn_mappings(ir_content, other_mappings, "amdgcn")
+
+
+def _parse_sass_loc(
+    ir_content: str,
+    other_mappings: Optional[List[Any]] = None,
+    ir_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Parser for NVIDIA SASS assembly format.
+
+    Args:
+        ir_content: The SASS content
+        other_mappings: Other mappings (not used for SASS, kept for signature consistency)
+        ir_type: The IR type (not used, kept for signature consistency)
+
+    Returns:
+        Dictionary mapping line numbers to source locations
+    """
+    return extract_sass_mappings(ir_content)
+
+
+def _parse_none(
+    ir_content: str,
+    other_mappings: Optional[List[Any]] = None,
+    ir_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Placeholder parser for stages that don't support source mapping (e.g., CUBIN).
+
+    Args:
+        ir_content: The content (not used)
+        other_mappings: Other mappings (not used)
+        ir_type: The IR type (not used)
+
+    Returns:
+        Empty dictionary
+    """
+    return {}
+
+
+# =============================================================================
+# REGISTER COMMON PARSERS
+# =============================================================================
+def _initialize_common_parsers() -> None:
+    """
+    Register common parsers that are shared across all backends.
+
+    Common parsers are those that work across all backends (e.g., TTIR/TTGIR/LLIR
+    which use generic #loc directives).
+
+    Backend-specific parsers (PTX, SASS, AMDGCN) are registered by their
+    respective adapters.
+    """
+    ParserRegistry.register("generic_loc", _parse_generic_loc)
+    ParserRegistry.register("none", _parse_none)
+    logger.debug("Common parsers registered successfully")
+
+
+# Initialize parsers at module import time
+_initialize_common_parsers()
