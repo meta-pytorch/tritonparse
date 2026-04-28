@@ -248,30 +248,34 @@ class PipelineAdapterRegistry:
 
     Provides registration and resolution methods for different backend adapters.
     Adapters can be looked up by name or inferred from trace metadata.
+
+    Note: Adapters are instantiated once during registration and reused for all
+    subsequent resolutions. This ensures parsers are registered only once and
+    stage descriptors are initialized only once.
     """
 
     def __init__(self) -> None:
-        self._adapter_types: dict[str, type[CompilationPipelineAdapter]] = {}
+        self._adapters: dict[str, CompilationPipelineAdapter] = {}
 
     def register(self, adapter_cls: type[CompilationPipelineAdapter]) -> None:
         adapter = adapter_cls()
-        self._adapter_types[adapter.adapter_name.lower()] = adapter_cls
+        self._adapters[adapter.adapter_name.lower()] = adapter
 
     def create_all(self) -> list[CompilationPipelineAdapter]:
-        return [adapter_cls() for adapter_cls in self._adapter_types.values()]
+        return list(self._adapters.values())
 
     def resolve(
         self,
         *,
         adapter_name: str,
     ) -> CompilationPipelineAdapter:
-        adapter_cls = self._adapter_types.get(adapter_name.lower())
-        if adapter_cls is None:
+        adapter = self._adapters.get(adapter_name.lower())
+        if adapter is None:
             raise ValueError(
                 "Unable to resolve adapter from adapter_name: "
                 f"adapter_name={adapter_name!r}"
             )
-        return adapter_cls()
+        return adapter
 
     def resolve_from_trace(
         self,
