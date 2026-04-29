@@ -55,220 +55,6 @@ jobs:
               run: |
                   make format-check || (echo "❌ Format check failed. Please run 'make format' to fix formatting issues, then commit the changes." && echo "📖 For detailed formatting guide, see: https://github.com/meta-pytorch/tritonparse/wiki/05.-Code-Formatting" && exit 1)
 
-    # Probe-only job for the new PyTorch self-hosted GPU runner
-    # (linux.g5.4xlarge.nvidia.gpu, NVIDIA A10G).
-    # Manually triggered via the "Run workflow" button (workflow_dispatch).
-    # Does NOT run on push/PR. Output is used to design a dedicated
-    # setup script for self-hosted runners.
-    probe-selfhosted:
-        if: github.event_name == 'workflow_dispatch'
-        runs-on: [self-hosted, linux.g5.4xlarge.nvidia.gpu]
-        timeout-minutes: 15
-        continue-on-error: true
-        steps:
-            - name: OS / host info
-              run: |
-                  echo "===== uname ====="
-                  uname -a
-                  echo "===== /etc/os-release ====="
-                  cat /etc/os-release || true
-                  echo "===== lsb_release ====="
-                  lsb_release -a 2>/dev/null || true
-                  echo "===== whoami / id ====="
-                  whoami
-                  id
-                  echo "===== pwd / HOME ====="
-                  pwd
-                  echo "HOME=$HOME"
-                  echo "===== disk ====="
-                  df -h
-                  echo "===== memory ====="
-                  free -h
-                  echo "===== cpu ====="
-                  nproc
-                  grep "model name" /proc/cpuinfo | head -1 || true
-
-            - name: Privilege / writable paths
-              run: |
-                  echo "===== sudo -n true ====="
-                  if sudo -n true 2>&1; then
-                      echo "✅ passwordless sudo available"
-                  else
-                      echo "❌ no passwordless sudo"
-                  fi
-                  for d in /opt /usr/local /usr/local/cuda /etc; do
-                      if [ -w "$d" ]; then
-                          echo "✅ writable: $d"
-                      else
-                          echo "❌ NOT writable: $d"
-                      fi
-                  done
-
-            - name: GPU / NVIDIA info
-              run: |
-                  echo "===== nvidia-smi ====="
-                  nvidia-smi || echo "❌ nvidia-smi not found"
-                  echo "===== nvcc --version ====="
-                  nvcc --version 2>/dev/null || echo "❌ nvcc not found in PATH"
-                  echo "===== /usr/local/cuda* dirs ====="
-                  ls -la /usr/local/ 2>/dev/null | grep -i cuda || echo "no cuda dirs in /usr/local"
-                  echo "===== /usr/local/cuda symlink target ====="
-                  readlink -f /usr/local/cuda 2>/dev/null || echo "no /usr/local/cuda symlink"
-                  echo "===== cuDNN libs ====="
-                  find /usr -name "libcudnn*" 2>/dev/null | head -20 || true
-                  find /opt -name "libcudnn*" 2>/dev/null | head -20 || true
-                  echo "===== NVIDIA driver version ====="
-                  cat /proc/driver/nvidia/version 2>/dev/null || echo "no /proc/driver/nvidia/version"
-
-            - name: Python / conda info
-              run: |
-                  echo "===== which python / python3 ====="
-                  which python 2>/dev/null || echo "no python in PATH"
-                  which python3 2>/dev/null || echo "no python3 in PATH"
-                  python3 --version 2>/dev/null || true
-                  echo "===== which conda ====="
-                  which conda 2>/dev/null || echo "no conda in PATH"
-                  conda --version 2>/dev/null || true
-                  echo "===== candidate conda install paths ====="
-                  for p in /opt/miniconda3 /opt/conda $HOME/miniconda3 $HOME/anaconda3 $HOME/conda; do
-                      if [ -d "$p" ]; then
-                          echo "✅ exists: $p"
-                          ls -la "$p" 2>/dev/null | head -5
-                      else
-                          echo "❌ missing: $p"
-                      fi
-                  done
-                  echo "===== conda env list ====="
-                  conda env list 2>/dev/null || true
-                  echo "===== which pip ====="
-                  which pip 2>/dev/null || echo "no pip in PATH"
-                  pip --version 2>/dev/null || true
-
-            - name: Compilers / build tools
-              run: |
-                  for cmd in gcc g++ clang clang++ clang-19 clangd cmake ninja make git curl wget jq; do
-                      if command -v "$cmd" &>/dev/null; then
-                          ver=$("$cmd" --version 2>/dev/null | head -1)
-                          echo "✅ $cmd -> $ver"
-                      else
-                          echo "❌ $cmd not found"
-                      fi
-                  done
-                  echo "===== glibc ====="
-                  ldd --version 2>/dev/null | head -1 || true
-
-            - name: Environment variables / PATH
-              run: |
-                  echo "===== PATH ====="
-                  echo "$PATH" | tr ':' '\n'
-                  echo "===== LD_LIBRARY_PATH ====="
-                  echo "${LD_LIBRARY_PATH:-<unset>}"
-                  echo "===== CUDA_HOME ====="
-                  echo "${CUDA_HOME:-<unset>}"
-                  echo "===== Relevant env vars ====="
-                  env | grep -iE "cuda|conda|python|gpu|torch|nvidia" | sort || true
-
-            - name: PyTorch wheel index reachability
-              run: |
-                  for tag in cu126 cu128 cu129 cu130 cu131 cu132; do
-                      code=$(curl -s -o /dev/null -w "%{http_code}" "https://download.pytorch.org/whl/nightly/${tag}/")
-                      echo "${tag}: HTTP ${code}"
-                  done
-
-            - name: Container / runner context
-              run: |
-                  echo "===== /.dockerenv ====="
-                  if [ -f /.dockerenv ]; then echo "✅ inside docker"; else echo "❌ not docker"; fi
-                  echo "===== /proc/1/cgroup ====="
-                  cat /proc/1/cgroup 2>/dev/null | head -5 || true
-                  echo "===== runner env ====="
-                  env | grep -iE "runner|github|actions" | sort || true
-
-    # Probe jobs that exercise the canonical PyTorch reusable workflow
-    # `pytorch/test-infra/.github/workflows/linux_job_v2.yml@main`.
-    # This is the recommended pattern used by autoparallel / vision / rl /
-    # torchcodec / executorch etc. The reusable workflow runs the script
-    # inside a pre-built Docker container that already has CUDA + conda
-    # + nvidia-smi configured, so we don't have to provision anything
-    # ourselves on the AL2023 host.
-    #
-    # We invoke it three times with different gpu-arch-version values to
-    # discover which CUDA versions are currently supported by the
-    # reusable workflow's image map. The first one that succeeds is the
-    # CUDA version we will adopt for the migration.
-    probe-linux-job-v2-cu128:
-        if: github.event_name == 'workflow_dispatch'
-        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
-        with:
-            runner: linux.g5.4xlarge.nvidia.gpu
-            gpu-arch-type: cuda
-            gpu-arch-version: "12.8"
-            timeout: 15
-            script: |
-                set -x
-                echo "===== requested: cuda 12.8 ====="
-                echo "===== container OS ====="
-                cat /etc/os-release || true
-                echo "===== nvidia-smi ====="
-                nvidia-smi || echo "no nvidia-smi"
-                echo "===== nvcc ====="
-                which nvcc && nvcc --version || echo "no nvcc"
-                echo "===== /usr/local/cuda* ====="
-                ls -la /usr/local/ | grep -i cuda || echo "no cuda in /usr/local"
-                readlink -f /usr/local/cuda 2>/dev/null || true
-                echo "===== conda ====="
-                which conda && conda info | head -20 || echo "no conda"
-                echo "===== python ====="
-                which python && python --version || echo "no python"
-                echo "===== HF cache mount ====="
-                ls -la /mnt/hf_cache 2>/dev/null | head -3 || echo "no /mnt/hf_cache"
-                echo "===== TORCH_CUDA_ARCH_LIST env ====="
-                echo "${TORCH_CUDA_ARCH_LIST:-<unset>}"
-                echo "===== gpu arch / CC ====="
-                python -c "import subprocess; print(subprocess.check_output(['nvidia-smi','--query-gpu=name,compute_cap','--format=csv']).decode())" 2>/dev/null || true
-
-    probe-linux-job-v2-cu130:
-        if: github.event_name == 'workflow_dispatch'
-        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
-        with:
-            runner: linux.g5.4xlarge.nvidia.gpu
-            gpu-arch-type: cuda
-            gpu-arch-version: "13.0"
-            timeout: 15
-            script: |
-                set -x
-                echo "===== requested: cuda 13.0 ====="
-                cat /etc/os-release || true
-                nvidia-smi || echo "no nvidia-smi"
-                which nvcc && nvcc --version || echo "no nvcc"
-                ls -la /usr/local/ | grep -i cuda || echo "no cuda in /usr/local"
-                readlink -f /usr/local/cuda 2>/dev/null || true
-                which conda && conda info | head -20 || echo "no conda"
-                which python && python --version || echo "no python"
-                ls -la /mnt/hf_cache 2>/dev/null | head -3 || echo "no /mnt/hf_cache"
-                echo "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-<unset>}"
-
-    probe-linux-job-v2-cu132:
-        if: github.event_name == 'workflow_dispatch'
-        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
-        with:
-            runner: linux.g5.4xlarge.nvidia.gpu
-            gpu-arch-type: cuda
-            gpu-arch-version: "13.2"
-            timeout: 15
-            script: |
-                set -x
-                echo "===== requested: cuda 13.2 ====="
-                cat /etc/os-release || true
-                nvidia-smi || echo "no nvidia-smi"
-                which nvcc && nvcc --version || echo "no nvcc"
-                ls -la /usr/local/ | grep -i cuda || echo "no cuda in /usr/local"
-                readlink -f /usr/local/cuda 2>/dev/null || true
-                which conda && conda info | head -20 || echo "no conda"
-                which python && python --version || echo "no python"
-                ls -la /mnt/hf_cache 2>/dev/null | head -3 || echo "no /mnt/hf_cache"
-                echo "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-<unset>}"
-
     # GPU tests - runs on GPU runner with full Triton from source
     # Note: CPU tests (tests/cpu/) are run as part of GPU jobs with TEST_TYPE=all
     test-from-source:
@@ -420,3 +206,106 @@ jobs:
                   COVERAGE: ${{ github.event.inputs.coverage || 'false' }}
               run: |
                   bash .ci/run-tests.sh
+
+    # ===================================================================
+    # Migration target: PyTorch self-hosted GPU runner (NVIDIA A10G via
+    # AWS G5.4xlarge, ephemeral EC2 instances, 1 job per VM).
+    #
+    # Runs the test suite inside the canonical PyTorch reusable workflow
+    # `pytorch/test-infra/.github/workflows/linux_job_v2.yml@main`, which:
+    #   1. Spins up an ephemeral g5.4xlarge EC2 (16 vCPU / 64 GiB / A10G
+    #      / Amazon Linux 2023 host).
+    #   2. Pulls `pytorch/almalinux-builder:cuda13.0` (AlmaLinux 8.10 +
+    #      CUDA 13.0 toolkit + conda 23.5.2 in /opt/conda + Python 3.11
+    #      base env).
+    #   3. docker-execs our `script:` inside that container with
+    #      `--gpus all` and the repo mounted at /meta-pytorch/tritonparse.
+    #
+    # We don't call `.ci/setup.sh` here — `setup.sh` is tailored to a
+    # GitHub-hosted Ubuntu fresh-image runner (uses apt, /opt/miniconda3,
+    # update-alternatives) and is kept for local development only. The
+    # container ships with everything we need.
+    #
+    # Why CUDA 13.0 (not 13.2): probed on 2026-04-29 — host driver on G5
+    # runners is currently 580.65.06 which exposes CUDA runtime 13.0;
+    # the container image cuda13.2 needs driver 581+ and fails the
+    # nvidia-container-cli capability check
+    # ("unsatisfied condition: cuda>=13.2"). Bump to 13.2 once PyTorch
+    # infra rolls out a newer driver AMI.
+    #
+    # Currently triggered only via workflow_dispatch to avoid hammering
+    # the shared self-hosted runner pool while we stabilize. Once stable,
+    # the `if:` guard can be removed and these jobs will run on push/PR
+    # alongside the existing T4 GitHub-hosted jobs.
+    # ===================================================================
+    test-from-source-a10g:
+        if: github.event_name == 'workflow_dispatch'
+        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
+        with:
+            runner: linux.g5.4xlarge.nvidia.gpu
+            gpu-arch-type: cuda
+            gpu-arch-version: "13.0"
+            timeout: 120
+            script: |
+                set -e
+                # A10G compute capability (Ampere)
+                export TORCH_CUDA_ARCH_LIST=8.6
+                export CONDA_ENV=tritonparse
+                export PYTHON_VERSION=3.13
+
+                # Container ships with conda 23.5.2 in /opt/conda (Py3.11
+                # base). Create a fresh Py3.13 env for tritonparse.
+                conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
+                source "$(conda info --base)/etc/profile.d/conda.sh"
+                conda activate "$CONDA_ENV"
+
+                # Install PyTorch nightly with CUDA 13.0 runtime.
+                pip install --pre torch torchvision torchaudio \
+                    --index-url https://download.pytorch.org/whl/nightly/cu130
+                # Workaround: PyTorch nightly missing 'packaging' dep.
+                pip install packaging
+
+                # Install Triton from source. TRITON_COMMIT defaults to
+                # "main" inside install-triton.sh.
+                # NOTE: no actions/cache available inside reusable workflow,
+                # so cold builds take ~30-50 minutes. Add caching later
+                # via the reusable workflow's upload-artifact mechanism.
+                bash .ci/install-triton.sh
+
+                # Install the project + test deps.
+                bash .ci/install-project.sh
+
+                # Run the test suite.
+                export TEST_TYPE="${{ github.event.inputs.test-type || 'all' }}"
+                export COVERAGE="${{ github.event.inputs.coverage || 'false' }}"
+                bash .ci/run-tests.sh
+
+    test-from-pip-a10g:
+        if: github.event_name == 'workflow_dispatch'
+        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
+        with:
+            runner: linux.g5.4xlarge.nvidia.gpu
+            gpu-arch-type: cuda
+            gpu-arch-version: "13.0"
+            timeout: 60
+            script: |
+                set -e
+                export TORCH_CUDA_ARCH_LIST=8.6
+                export CONDA_ENV=tritonparse-pip
+                export PYTHON_VERSION=3.13
+
+                conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
+                source "$(conda info --base)/etc/profile.d/conda.sh"
+                conda activate "$CONDA_ENV"
+
+                # PyTorch nightly bundles its own pytorch-triton, so no
+                # source build of Triton needed here.
+                pip install --pre torch torchvision torchaudio \
+                    --index-url https://download.pytorch.org/whl/nightly/cu130
+                pip install packaging
+
+                bash .ci/install-project.sh
+
+                export TEST_TYPE="${{ github.event.inputs.test-type || 'all' }}"
+                export COVERAGE="${{ github.event.inputs.coverage || 'false' }}"
+                bash .ci/run-tests.sh

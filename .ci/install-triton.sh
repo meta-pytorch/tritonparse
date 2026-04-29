@@ -40,8 +40,19 @@ if [ -z "$CONDA_ENV" ]; then
     exit 1
 fi
 
-# Activate conda environment
-source /opt/miniconda3/etc/profile.d/conda.sh
+# Activate conda environment.
+# Locate conda installation: prefer existing $CONDA_HOME, else discover
+# via 'conda info --base' if conda is in PATH, else fall back to the
+# legacy /opt/miniconda3 path used by .ci/setup.sh on GitHub-hosted
+# runners.
+if [ -z "${CONDA_HOME:-}" ]; then
+    if command -v conda >/dev/null 2>&1; then
+        CONDA_HOME="$(conda info --base)"
+    else
+        CONDA_HOME="/opt/miniconda3"
+    fi
+fi
+source "${CONDA_HOME}/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 # Create cache directory
