@@ -55,20 +55,47 @@ jobs:
               run: |
                   make format-check || (echo "❌ Format check failed. Please run 'make format' to fix formatting issues, then commit the changes." && echo "📖 For detailed formatting guide, see: https://github.com/meta-pytorch/tritonparse/wiki/05.-Code-Formatting" && exit 1)
 
-    # GPU tests - runs on GPU runner with full Triton from source
-    # Note: CPU tests (tests/cpu/) are run as part of GPU jobs with TEST_TYPE=all
+    # ===================================================================
+    # GPU tests on PyTorch self-hosted runner: AWS g5.4xlarge / NVIDIA
+    # A10G, ephemeral EC2 (1 job per VM, no cross-PR pollution).
+    #
+    # Architecture: `runs-on:` + `container:` (helion-style). We run the
+    # job directly inside the `pytorch/almalinux-builder:cuda13.0`
+    # docker image (AlmaLinux 8.10 + CUDA 13.0 toolkit + conda 23.5.2 in
+    # /opt/conda + Python 3.11 base env). The host AMI provides the
+    # NVIDIA driver (580.65.06) and nvidia-container-toolkit; the
+    # container picks them up via `--gpus all`.
+    #
+    # We bypass `pytorch/test-infra/linux_job_v2.yml` to retain native
+    # `actions/cache` support (the reusable workflow's opaque `script:`
+    # block prevents standard caching). This trade-off costs us the
+    # reusable workflow's auto NVIDIA driver freshness check, but the
+    # AMI's pre-installed driver has been verified working.
+    #
+    # `.ci/setup.sh` is intentionally NOT called here — it targets a
+    # GitHub-hosted Ubuntu fresh-image runner and is kept for local
+    # development only. The container ships with everything we need.
+    #
+    # Why CUDA 13.0 (not 13.2): host driver on G5 runners (580.65.06)
+    # exposes CUDA runtime 13.0; cuda13.2 image fails the
+    # nvidia-container-cli capability check ("unsatisfied condition:
+    # cuda>=13.2"). Bump once PyTorch infra rolls out a newer driver
+    # AMI. Probed on 2026-04-29.
+    # ===================================================================
     test-from-source:
-        runs-on: 4-core-ubuntu-gpu-t4
+        runs-on: linux.g5.4xlarge.nvidia.gpu
+        container:
+            image: pytorch/almalinux-builder:cuda13.0
+            options: --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g --ipc=host
         timeout-minutes: 120
+        env:
+            # A10G compute capability (Ampere)
+            TORCH_CUDA_ARCH_LIST: "8.6"
+            CONDA_ENV: tritonparse
+            PYTHON_VERSION: "3.13"
+            PYTORCH_CUDA_TAG: cu130
         steps:
             - uses: actions/checkout@v6
-
-            # NOTE: We intentionally do NOT use actions/setup-python here.
-            # `.ci/setup.sh` creates and activates a conda env with Python 3.13.
-            # Having actions/setup-python's hosted-tool-cache Python earlier on
-            # PATH causes `python` to resolve to a different interpreter than
-            # the activated conda env, leading to ModuleNotFoundError after a
-            # successful `pip install`.
 
             - name: Get daily cache timestamp
               id: daily-cache
@@ -78,31 +105,19 @@ jobs:
                   echo "date=$DATE_STAMP" >> $GITHUB_OUTPUT
                   echo "Using daily cache stamp: $DATE_STAMP"
 
-            - name: Get weekly cache timestamp
-              id: weekly-cache
-              run: |
-                  # Calculate year-week (e.g., 2024-03) for weekly cache expiration
-                  WEEK_STAMP=$(date +"%Y-%U")
-                  echo "week=$WEEK_STAMP" >> $GITHUB_OUTPUT
-                  echo "Using weekly cache stamp: $WEEK_STAMP"
-
             - name: Cache pip dependencies
               uses: actions/cache@v5
               with:
-                  path: ~/.cache/pip
-                  key: ${{ runner.os }}-pip-3.13-${{ steps.daily-cache.outputs.date }}
+                  # Container runs as root, so pip's user cache lives at
+                  # /root/.cache/pip rather than the host's ~/.cache/pip.
+                  path: /root/.cache/pip
+                  key: ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-${{ steps.daily-cache.outputs.date }}
                   restore-keys: |
-                      ${{ runner.os }}-pip-3.13-
+                      ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-
 
             - name: Get Triton latest commit
               id: triton-commit
               run: |
-                  # Check if jq is available
-                  if ! command -v jq &> /dev/null; then
-                      echo "jq not found, installing..."
-                      sudo apt-get update && sudo apt-get install -y jq
-                  fi
-
                   # Get commit with error handling
                   echo "Fetching latest Triton commit..."
                   COMMIT=$(curl -s --max-time 30 --retry 3 https://api.github.com/repos/triton-lang/triton/commits/main | jq -r .sha 2>/dev/null || echo "")
@@ -131,48 +146,55 @@ jobs:
                       ${{ runner.os }}-triton-source-${{ hashFiles('.ci/install-triton.sh') }}-
                       ${{ runner.os }}-triton-source-
 
-            - name: Setup environment
-              env:
-                  CONDA_ENV: tritonparse
-                  PYTHON_VERSION: "3.13"
-                  CUDA_VERSION: "12.8"
+            - name: Setup conda env + PyTorch nightly
               run: |
-                  bash .ci/setup.sh
+                  # Container ships with conda 23.5.2 in /opt/conda
+                  # (Py3.11 base). Create a fresh Py3.13 env for tritonparse.
+                  eval "$(/opt/conda/bin/conda shell.bash hook)"
+                  conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
+                  conda activate "$CONDA_ENV"
+
+                  # Install PyTorch nightly with CUDA runtime matching the
+                  # container toolkit.
+                  pip install --pre torch torchvision torchaudio \
+                      --index-url "https://download.pytorch.org/whl/nightly/${PYTORCH_CUDA_TAG}"
+                  # Workaround: PyTorch nightly missing 'packaging' dep.
+                  pip install packaging
 
             - name: Install Triton from source
               env:
-                  CONDA_ENV: tritonparse
                   TRITON_COMMIT: ${{ steps.triton-commit.outputs.commit }}
               run: |
                   bash .ci/install-triton.sh
 
             - name: Install project dependencies
-              env:
-                  CONDA_ENV: tritonparse
               run: |
                   bash .ci/install-project.sh
 
             - name: Run tests
               env:
-                  CONDA_ENV: tritonparse
                   TEST_TYPE: ${{ github.event.inputs.test-type || 'all' }}
                   COVERAGE: ${{ github.event.inputs.coverage || 'false' }}
               run: |
                   bash .ci/run-tests.sh
 
     test-from-pip:
-        runs-on: 4-core-ubuntu-gpu-t4
-        timeout-minutes: 120
+        runs-on: linux.g5.4xlarge.nvidia.gpu
+        container:
+            image: pytorch/almalinux-builder:cuda13.0
+            options: --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g --ipc=host
+        timeout-minutes: 60
+        env:
+            TORCH_CUDA_ARCH_LIST: "8.6"
+            CONDA_ENV: tritonparse-pip
+            PYTHON_VERSION: "3.13"
+            PYTORCH_CUDA_TAG: cu130
         steps:
             - uses: actions/checkout@v6
-
-            # NOTE: We intentionally do NOT use actions/setup-python here.
-            # See comment in test-from-source above for the rationale.
 
             - name: Get daily cache timestamp
               id: daily-cache
               run: |
-                  # Calculate date (e.g., 2024-01-15) for daily cache expiration
                   DATE_STAMP=$(date +"%Y-%m-%d")
                   echo "date=$DATE_STAMP" >> $GITHUB_OUTPUT
                   echo "Using daily cache stamp: $DATE_STAMP"
@@ -180,132 +202,30 @@ jobs:
             - name: Cache pip dependencies
               uses: actions/cache@v5
               with:
-                  path: ~/.cache/pip
-                  key: ${{ runner.os }}-pip-3.13-${{ steps.daily-cache.outputs.date }}
+                  path: /root/.cache/pip
+                  key: ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-${{ steps.daily-cache.outputs.date }}
                   restore-keys: |
-                      ${{ runner.os }}-pip-3.13-
+                      ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-
 
-            - name: Setup environment
-              env:
-                  CONDA_ENV: tritonparse-pip
-                  PYTHON_VERSION: "3.13"
-                  CUDA_VERSION: "12.8"
+            - name: Setup conda env + PyTorch nightly
               run: |
-                  bash .ci/setup.sh
+                  eval "$(/opt/conda/bin/conda shell.bash hook)"
+                  conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
+                  conda activate "$CONDA_ENV"
+
+                  # PyTorch nightly bundles its own pytorch-triton, so no
+                  # source build of Triton needed in this job.
+                  pip install --pre torch torchvision torchaudio \
+                      --index-url "https://download.pytorch.org/whl/nightly/${PYTORCH_CUDA_TAG}"
+                  pip install packaging
 
             - name: Install project dependencies
-              env:
-                  CONDA_ENV: tritonparse-pip
               run: |
                   bash .ci/install-project.sh
 
             - name: Run tests
               env:
-                  CONDA_ENV: tritonparse-pip
                   TEST_TYPE: ${{ github.event.inputs.test-type || 'all' }}
                   COVERAGE: ${{ github.event.inputs.coverage || 'false' }}
               run: |
                   bash .ci/run-tests.sh
-
-    # ===================================================================
-    # Migration target: PyTorch self-hosted GPU runner (NVIDIA A10G via
-    # AWS G5.4xlarge, ephemeral EC2 instances, 1 job per VM).
-    #
-    # Runs the test suite inside the canonical PyTorch reusable workflow
-    # `pytorch/test-infra/.github/workflows/linux_job_v2.yml@main`, which:
-    #   1. Spins up an ephemeral g5.4xlarge EC2 (16 vCPU / 64 GiB / A10G
-    #      / Amazon Linux 2023 host).
-    #   2. Pulls `pytorch/almalinux-builder:cuda13.0` (AlmaLinux 8.10 +
-    #      CUDA 13.0 toolkit + conda 23.5.2 in /opt/conda + Python 3.11
-    #      base env).
-    #   3. docker-execs our `script:` inside that container with
-    #      `--gpus all` and the repo mounted at /meta-pytorch/tritonparse.
-    #
-    # We don't call `.ci/setup.sh` here — `setup.sh` is tailored to a
-    # GitHub-hosted Ubuntu fresh-image runner (uses apt, /opt/miniconda3,
-    # update-alternatives) and is kept for local development only. The
-    # container ships with everything we need.
-    #
-    # Why CUDA 13.0 (not 13.2): probed on 2026-04-29 — host driver on G5
-    # runners is currently 580.65.06 which exposes CUDA runtime 13.0;
-    # the container image cuda13.2 needs driver 581+ and fails the
-    # nvidia-container-cli capability check
-    # ("unsatisfied condition: cuda>=13.2"). Bump to 13.2 once PyTorch
-    # infra rolls out a newer driver AMI.
-    #
-    # Currently triggered only via workflow_dispatch to avoid hammering
-    # the shared self-hosted runner pool while we stabilize. Once stable,
-    # the `if:` guard can be removed and these jobs will run on push/PR
-    # alongside the existing T4 GitHub-hosted jobs.
-    # ===================================================================
-    test-from-source-a10g:
-        if: github.event_name == 'workflow_dispatch'
-        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
-        with:
-            runner: linux.g5.4xlarge.nvidia.gpu
-            gpu-arch-type: cuda
-            gpu-arch-version: "13.0"
-            timeout: 120
-            script: |
-                set -e
-                # A10G compute capability (Ampere)
-                export TORCH_CUDA_ARCH_LIST=8.6
-                export CONDA_ENV=tritonparse
-                export PYTHON_VERSION=3.13
-
-                # Container ships with conda 23.5.2 in /opt/conda (Py3.11
-                # base). Create a fresh Py3.13 env for tritonparse.
-                conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
-                source "$(conda info --base)/etc/profile.d/conda.sh"
-                conda activate "$CONDA_ENV"
-
-                # Install PyTorch nightly with CUDA 13.0 runtime.
-                pip install --pre torch torchvision torchaudio \
-                    --index-url https://download.pytorch.org/whl/nightly/cu130
-                # Workaround: PyTorch nightly missing 'packaging' dep.
-                pip install packaging
-
-                # Install Triton from source. TRITON_COMMIT defaults to
-                # "main" inside install-triton.sh.
-                # NOTE: no actions/cache available inside reusable workflow,
-                # so cold builds take ~30-50 minutes. Add caching later
-                # via the reusable workflow's upload-artifact mechanism.
-                bash .ci/install-triton.sh
-
-                # Install the project + test deps.
-                bash .ci/install-project.sh
-
-                # Run the test suite.
-                export TEST_TYPE="${{ github.event.inputs.test-type || 'all' }}"
-                export COVERAGE="${{ github.event.inputs.coverage || 'false' }}"
-                bash .ci/run-tests.sh
-
-    test-from-pip-a10g:
-        if: github.event_name == 'workflow_dispatch'
-        uses: pytorch/test-infra/.github/workflows/linux_job_v2.yml@main
-        with:
-            runner: linux.g5.4xlarge.nvidia.gpu
-            gpu-arch-type: cuda
-            gpu-arch-version: "13.0"
-            timeout: 60
-            script: |
-                set -e
-                export TORCH_CUDA_ARCH_LIST=8.6
-                export CONDA_ENV=tritonparse-pip
-                export PYTHON_VERSION=3.13
-
-                conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
-                source "$(conda info --base)/etc/profile.d/conda.sh"
-                conda activate "$CONDA_ENV"
-
-                # PyTorch nightly bundles its own pytorch-triton, so no
-                # source build of Triton needed here.
-                pip install --pre torch torchvision torchaudio \
-                    --index-url https://download.pytorch.org/whl/nightly/cu130
-                pip install packaging
-
-                bash .ci/install-project.sh
-
-                export TEST_TYPE="${{ github.event.inputs.test-type || 'all' }}"
-                export COVERAGE="${{ github.event.inputs.coverage || 'false' }}"
-                bash .ci/run-tests.sh
