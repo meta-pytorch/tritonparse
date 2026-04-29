@@ -63,10 +63,12 @@ jobs:
         steps:
             - uses: actions/checkout@v6
 
-            - name: Set up Python 3.13
-              uses: actions/setup-python@v6
-              with:
-                  python-version: "3.13"
+            # NOTE: We intentionally do NOT use actions/setup-python here.
+            # `.ci/setup.sh` creates and activates a conda env with Python 3.13.
+            # Having actions/setup-python's hosted-tool-cache Python earlier on
+            # PATH causes `python` to resolve to a different interpreter than
+            # the activated conda env, leading to ModuleNotFoundError after a
+            # successful `pip install`.
 
             - name: Get daily cache timestamp
               id: daily-cache
@@ -164,10 +166,8 @@ jobs:
         steps:
             - uses: actions/checkout@v6
 
-            - name: Set up Python 3.13
-              uses: actions/setup-python@v6
-              with:
-                  python-version: "3.13"
+            # NOTE: We intentionally do NOT use actions/setup-python here.
+            # See comment in test-from-source above for the rationale.
 
             - name: Get daily cache timestamp
               id: daily-cache

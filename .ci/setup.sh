@@ -110,12 +110,83 @@ export CONDA_HOME="/opt/miniconda3"
 conda init bash || true
 
 # Create conda environment
+# NOTE: Do NOT swallow failures with `|| true` here. If env creation fails
+# silently, a later `conda activate` may not switch the active Python and
+# `pip` will install into the base env while `python` resolves elsewhere
+# (e.g. actions/setup-python's hosted-tool-cache Python), producing a
+# confusing "ModuleNotFoundError: No module named 'torch'" right after a
+# successful `pip install torch`.
 echo "Creating conda environment: $CONDA_ENV"
-conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge || true
+# IMPORTANT: explicitly request `pip` here. conda-forge's `python` package
+# does NOT pull pip in by default, so without this the env would have
+# `python` but no `pip`/`python -m pip`, causing every later
+# `python -m pip install ...` to fail with "No module named pip".
+if conda env list | awk '{print $1}' | grep -qx "$CONDA_ENV"; then
+    echo "✅ conda env '$CONDA_ENV' already exists"
+else
+    conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" pip -y -c conda-forge
+fi
 
 # Activate conda environment
 source /opt/miniconda3/etc/profile.d/conda.sh
 conda activate "$CONDA_ENV"
+
+# Sanity check: make sure `python` and `pip` resolve to the activated env.
+# If `actions/setup-python` placed another Python earlier in PATH, this
+# step will surface the mismatch immediately instead of after a confusing
+# `pip install` succeeds against the wrong interpreter.
+#
+# We deliberately validate against the runtime $CONDA_PREFIX (set by
+# `conda activate`) rather than a hard-coded "/opt/miniconda3/envs/..."
+# path. $CONDA_PREFIX is conda's own answer for "which env is active", so
+# it stays correct if the miniconda install location or envs_dirs config
+# ever changes, and it also catches the case where `conda activate`
+# silently failed (in which case CONDA_PREFIX is unset or points at base).
+echo "Verifying active Python interpreter..."
+echo "  CONDA_PREFIX:    ${CONDA_PREFIX:-<unset>}"
+echo "  which python:    $(command -v python || echo 'not found')"
+echo "  which pip:       $(command -v pip || echo 'not found')"
+
+# Guard: if `conda activate` did not put a `python` on PATH, every
+# subsequent `$(python -c ...)` would emit a noisy "python: command not
+# found" with no useful context. Fail fast with a clear message.
+if ! command -v python >/dev/null 2>&1; then
+    echo "❌ No 'python' executable found on PATH after"
+    echo "   'conda activate $CONDA_ENV'. CONDA_PREFIX=${CONDA_PREFIX:-<unset>}."
+    echo "   The conda activation did not produce a usable Python interpreter."
+    echo "   Aborting to avoid confusing pip/python mismatch failures."
+    exit 1
+fi
+
+ACTUAL_PYTHON=$(python -c 'import sys; print(sys.executable)')
+echo "  sys.executable:  $ACTUAL_PYTHON"
+
+if [[ -z "${CONDA_PREFIX:-}" ]]; then
+    echo "❌ CONDA_PREFIX is not set — 'conda activate $CONDA_ENV' did not"
+    echo "   take effect. Aborting."
+    exit 1
+fi
+if [[ "$(basename "$CONDA_PREFIX")" != "$CONDA_ENV" ]]; then
+    echo "❌ Active conda env ($(basename "$CONDA_PREFIX")) does not match"
+    echo "   the requested env ($CONDA_ENV). Aborting."
+    exit 1
+fi
+if [[ "$ACTUAL_PYTHON" != "$CONDA_PREFIX"/* ]]; then
+    echo "❌ Python interpreter ($ACTUAL_PYTHON) is NOT inside the activated"
+    echo "   conda env (\$CONDA_PREFIX=$CONDA_PREFIX). Something earlier on"
+    echo "   PATH (e.g. actions/setup-python) is shadowing the env's python."
+    echo "   Aborting to avoid pip/python mismatch."
+    exit 1
+fi
+
+# Ensure pip is available inside the env. A previously-cached env may have
+# been created without pip (older revision of this script), so bootstrap it
+# via ensurepip if `python -m pip` doesn't work yet.
+if ! python -m pip --version >/dev/null 2>&1; then
+    echo "⚠️ pip not found in env, bootstrapping via ensurepip..."
+    python -m ensurepip --upgrade || conda install -n "$CONDA_ENV" -y -c conda-forge pip
+fi
+python -m pip --version
 
 # Check NVIDIA GPU information
 echo "Checking NVIDIA GPU information..."
@@ -172,12 +243,18 @@ CUDA_MAJOR_VERSION="${CUDA_VERSION%%.*}"
 sudo -E bash -c "source /tmp/install_cuda.sh && install_cudnn \"${CUDA_MAJOR_VERSION}\" \"${CUDNN_VERSION}\""
 
 # Install PyTorch nightly
+# Use `python -m pip` (NOT bare `pip`) so the install always targets the
+# same interpreter we use for verification below. A bare `pip` on PATH may
+# resolve to a different Python (e.g. base conda or actions/setup-python),
+# leading to a successful install followed by ModuleNotFoundError.
 echo "Installing PyTorch nightly..."
-pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
-pip install packaging  # Workaround: PyTorch nightly missing packaging dependency
+python -m pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+python -m pip install packaging  # Workaround: PyTorch nightly missing packaging dependency
 
 # Verify PyTorch installation
 echo "Verifying PyTorch installation..."
+echo "  Using python: $(command -v python)"
+echo "  sys.executable: $(python -c 'import sys; print(sys.executable)')"
 python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
 python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 if python -c "import torch; print(torch.cuda.is_available())" | grep -q "True"; then
