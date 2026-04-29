@@ -14,10 +14,7 @@ from tritonparse.tp_logger import get_logger
 
 from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
 from .ir_analysis import _generate_ir_analysis
-from .ir_parser import (
-    _parse_generic_loc,
-    extract_ptx_amdgcn_mappings,
-)
+from .ir_parser import _parse_generic_loc, extract_ptx_amdgcn_mappings
 from .mapper import create_bidirectional_mapping, create_python_mapping
 from .sourcemap_utils import (
     _is_autotune_benchmark_launch,
@@ -217,8 +214,8 @@ def generate_source_mappings(
             registry = get_backend_registry()
             adapter = registry.resolve_from_trace(metadata)
 
-            # Find the stage descriptor for this ir_type
-            stage_descriptor = adapter.classify_artifact(f"kernel.{ir_type}")
+            # Resolve the stage descriptor directly by stage name.
+            stage_descriptor = adapter.get_stage_by_name(ir_type)
             if stage_descriptor is not None and stage_descriptor.parser_id != "none":
                 parser_id = stage_descriptor.parser_id
                 parser = adapter.get_parser(parser_id)

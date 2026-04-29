@@ -89,7 +89,13 @@ class CompilationPipelineAdapter(ABC):
     def get_ir_stages(self) -> list[IRStageDescriptor]:
         raise NotImplementedError
 
-    def classify_artifact(self, artifact_name: str) -> IRStageDescriptor | None:
+    def get_stage_by_name(self, stage_name: str) -> IRStageDescriptor | None:
+        for stage in self.get_ir_stages():
+            if stage.name == stage_name:
+                return stage
+        return None
+
+    def get_stage_by_artifact(self, artifact_name: str) -> IRStageDescriptor | None:
         artifact_suffix = Path(artifact_name).suffix
         for stage in self.get_ir_stages():
             if stage.extension == artifact_suffix:
