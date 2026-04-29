@@ -85,8 +85,8 @@ class ParserRegistry:
             parser_id: The parser identifier (e.g., "generic_loc", "ptx_loc")
             parser_func: The parser function
 
-        Raises:
-            ValueError: If parser_id is already registered
+        If parser_id is already registered, the existing parser is overwritten
+        and a warning is logged.
         """
         if parser_id in cls._parsers:
             logger.warning(

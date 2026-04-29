@@ -233,36 +233,76 @@ class TestMultiBackendStage(unittest.TestCase):
             %0 = arith.constant 42 loc(#loc1)
             """
 
+        sentinel_mapping = {
+            "sentinel": {"file": "adapter_selected.py", "line": 999, "ttir_line": 1}
+        }
+
+        def sentinel_generic_loc_parser(*args, **kwargs):
+            return sentinel_mapping
+
+        original_generic_parser = ParserRegistry.get_parser("generic_loc")
+        self.assertIsNotNone(original_generic_parser)
+
         # Test with metadata (adapter-driven parser selection)
         metadata_cuda = {"backend_name": "cuda"}
-        result_with_metadata = generate_source_mappings(
-            ttir_content, "ttir", None, metadata_cuda
-        )
-        self.assertIsInstance(result_with_metadata, dict)
-        self.assertIn("4", result_with_metadata)
-        self.assertEqual(result_with_metadata["4"]["file"], "test.py")
-        self.assertEqual(result_with_metadata["4"]["line"], 20)
-        self.assertIn("ttir_line", result_with_metadata["4"])
+        try:
+            ParserRegistry.register("generic_loc", sentinel_generic_loc_parser)
 
-        # Test without metadata (fallback to hardcoded parser selection)
-        result_fallback = generate_source_mappings(ttir_content, "ttir", None, None)
-        self.assertIsInstance(result_fallback, dict)
-        self.assertIn("4", result_fallback)
-        self.assertEqual(result_fallback["4"]["file"], "test.py")
-        self.assertEqual(result_fallback["4"]["line"], 20)
-        self.assertIn("ttir_line", result_fallback["4"])
+            result_with_metadata = generate_source_mappings(
+                ttir_content, "ttir", None, metadata_cuda
+            )
+            self.assertEqual(
+                result_with_metadata,
+                sentinel_mapping,
+                "Expected metadata-driven source mapping to use the adapter-selected parser",
+            )
 
-        # Verify both paths produce similar results
-        self.assertEqual(
-            result_with_metadata["4"]["file"],
-            result_fallback["4"]["file"],
-            "Adapter-driven and fallback should produce same file",
-        )
-        self.assertEqual(
-            result_with_metadata["4"]["line"],
-            result_fallback["4"]["line"],
-            "Adapter-driven and fallback should produce same line",
-        )
+            # Empty metadata simulates legacy traces after payload.setdefault("metadata", {}).
+            result_empty_metadata = generate_source_mappings(
+                ttir_content, "ttir", None, {}
+            )
+            self.assertIsInstance(result_empty_metadata, dict)
+            self.assertIn("4", result_empty_metadata)
+            self.assertEqual(result_empty_metadata["4"]["file"], "test.py")
+            self.assertEqual(result_empty_metadata["4"]["line"], 20)
+            self.assertIn("ttir_line", result_empty_metadata["4"])
+
+            result_fallback = generate_source_mappings(ttir_content, "ttir", None, None)
+            self.assertIsInstance(result_fallback, dict)
+            self.assertIn("4", result_fallback)
+            self.assertEqual(result_fallback["4"]["file"], "test.py")
+            self.assertEqual(result_fallback["4"]["line"], 20)
+            self.assertIn("ttir_line", result_fallback["4"])
+        finally:
+            ParserRegistry.register("generic_loc", original_generic_parser)
+
+    def test_adapter_parser_execution_errors_are_not_silently_swallowed(self):
+        """Adapter-selected parser execution failures should propagate instead of falling back."""
+        registry = PipelineAdapterRegistry()
+        registry.register(NvidiaTritonAdapter)
+        registry.register(AmdTritonAdapter)
+
+        ttir_content = """
+            #loc = loc("test.py":10:5)
+            #loc1 = loc("test.py":20:10)
+            %0 = arith.constant 42 loc(#loc1)
+            """
+
+        metadata_cuda = {"backend_name": "cuda"}
+
+        def failing_generic_loc_parser(*args, **kwargs):
+            raise RuntimeError("parser execution failed")
+
+        original_generic_parser = ParserRegistry.get_parser("generic_loc")
+        self.assertIsNotNone(original_generic_parser)
+
+        try:
+            ParserRegistry.register("generic_loc", failing_generic_loc_parser)
+
+            with self.assertRaisesRegex(RuntimeError, "parser execution failed"):
+                generate_source_mappings(ttir_content, "ttir", None, metadata_cuda)
+        finally:
+            ParserRegistry.register("generic_loc", original_generic_parser)
 
 
 if __name__ == "__main__":

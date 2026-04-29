@@ -15,8 +15,7 @@ from tritonparse.tp_logger import get_logger
 from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
 from .ir_analysis import _generate_ir_analysis
 from .ir_parser import (
-    extract_code_locations,
-    extract_loc_definitions,
+    _parse_generic_loc,
     extract_ptx_amdgcn_mappings,
 )
 from .mapper import create_bidirectional_mapping, create_python_mapping
@@ -209,8 +208,9 @@ def generate_source_mappings(
     if other_mappings is None:
         other_mappings = []
 
-    # Try to use adapter-based parser if metadata is available
-    if metadata is not None:
+    # Only enter adapter-driven resolution when trace metadata can identify a backend.
+    if metadata is not None and isinstance(metadata.get("backend_name"), str):
+        parser = None
         try:
             from tritonparse.backend import get_backend_registry
 
@@ -222,15 +222,16 @@ def generate_source_mappings(
             if stage_descriptor is not None and stage_descriptor.parser_id != "none":
                 parser_id = stage_descriptor.parser_id
                 parser = adapter.get_parser(parser_id)
-
-                # Call the parser with standardized signature
-                return parser(ir_content, other_mappings, ir_type)
-        except Exception as e:
+        except ValueError as e:
             # Fallback to old hardcoded logic if adapter resolution fails
             logger.debug(
                 f"Adapter-based parser resolution failed for ir_type={ir_type}: {e}. "
                 f"Falling back to hardcoded parser selection."
             )
+
+        if parser is not None:
+            # Parser execution errors should surface rather than silently falling back.
+            return parser(ir_content, other_mappings, ir_type)
 
     # Fallback: hardcoded parser selection (for backward compatibility)
     if ir_type == "ptx" or ir_type == "amdgcn":
@@ -240,63 +241,7 @@ def generate_source_mappings(
 
         return extract_sass_mappings(ir_content)
 
-    loc_defs = extract_loc_definitions(ir_content)
-    logger.debug(f"Found {len(loc_defs)} #loc definitions")
-
-    loc_refs = extract_code_locations(ir_content)
-    logger.debug(f"Found {len(loc_refs)} loc references")
-
-    mappings = {}
-    for ln, loc_id in loc_refs.items():
-        if loc_id.startswith("direct:"):
-            _, file_path, line, col = loc_id.split(":", 3)
-            mappings[str(ln)] = {
-                "file": file_path,
-                "line": int(line),
-                "column": int(col),
-                f"{ir_type}_line": ln,
-            }
-        elif loc_id in loc_defs:
-            info = loc_defs[loc_id]
-            entry = {
-                "file": info["file"],
-                "line": info["line"],
-                "column": info["column"],
-                f"{ir_type}_line": ln,
-            }
-            # Propagate callsite metadata if present
-            if info.get("is_callsite"):
-                entry["is_callsite"] = True
-                entry["callsite_callee"] = info["callsite_callee"]
-                entry["callsite_caller"] = info["callsite_caller"]
-            # Propagate alias metadata if present
-            if "alias_name" in info:
-                entry["alias_name"] = info["alias_name"]
-            if "alias_of" in info:
-                entry["loc_id"] = loc_id
-            mappings[str(ln)] = entry
-
-    # Add separate entries for loc definition lines
-    for loc_id, info in loc_defs.items():
-        if "def_line" not in info:
-            continue
-        def_ln = info["def_line"]
-        # Only create mapping if this line doesn't already have one
-        if str(def_ln) not in mappings:
-            entry = {
-                "file": info["file"],
-                "line": info["line"],
-                "column": info["column"],
-                f"{ir_type}_line": def_ln,
-                "kind": "loc_def",
-            }
-            if "alias_name" in info:
-                entry["alias_name"] = info["alias_name"]
-            if "alias_of" in info:
-                entry["loc_id"] = loc_id
-            mappings[str(def_ln)] = entry
-
-    return mappings
+    return _parse_generic_loc(ir_content, other_mappings, ir_type)
 
 
 def _resolve_source_mappable_stage_keys(
