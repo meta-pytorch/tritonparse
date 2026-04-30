@@ -9,7 +9,7 @@ Sets up the conda environment, installs dependencies, configures CUDA, and insta
 
 **Environment Variables:**
 - `CONDA_ENV`: Conda environment name (default: "tritonparse")
-- `PYTHON_VERSION`: Python version (default: "3.11")
+- `PYTHON_VERSION`: Python version (default: "3.14")
 - `CUDA_VERSION`: CUDA version (default: "12.8")
 - `CUDNN_VERSION`: cuDNN version (default: "9.10.2.21")
 

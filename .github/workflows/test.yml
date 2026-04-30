@@ -42,10 +42,10 @@ jobs:
         steps:
             - uses: actions/checkout@v6
 
-            - name: Set up Python 3.13
+            - name: Set up Python 3.14
               uses: actions/setup-python@v6
               with:
-                  python-version: "3.13"
+                  python-version: "3.14"
 
             - name: Install development dependencies
               run: |
@@ -92,7 +92,7 @@ jobs:
             # A10G compute capability (Ampere)
             TORCH_CUDA_ARCH_LIST: "8.6"
             CONDA_ENV: tritonparse
-            PYTHON_VERSION: "3.13"
+            PYTHON_VERSION: "3.14"
             PYTORCH_CUDA_TAG: cu130
         steps:
             - uses: actions/checkout@v6
@@ -149,7 +149,7 @@ jobs:
             - name: Setup conda env + PyTorch nightly
               run: |
                   # Container ships with conda 23.5.2 in /opt/conda
-                  # (Py3.11 base). Create a fresh Py3.13 env for tritonparse.
+                  # (Py3.11 base). Create a fresh Py3.14 env for tritonparse.
                   eval "$(/opt/conda/bin/conda shell.bash hook)"
                   conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
                   conda activate "$CONDA_ENV"
@@ -187,7 +187,7 @@ jobs:
         env:
             TORCH_CUDA_ARCH_LIST: "8.6"
             CONDA_ENV: tritonparse-pip
-            PYTHON_VERSION: "3.13"
+            PYTHON_VERSION: "3.14"
             PYTORCH_CUDA_TAG: cu130
         steps:
             - uses: actions/checkout@v6
