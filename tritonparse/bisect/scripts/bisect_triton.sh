@@ -185,8 +185,10 @@ fi
 echo "" | log_output
 
 # Clean build directory to avoid stale artifacts from previous commits
+# Clean $HOME/.triton directory too
 echo "Cleaning build directory..." | log_output
 rm -rf "$TRITON_DIR/build"
+rm -rf "$HOME/.triton" || true
 rm -rf "$TRITON_DIR/python/triton.egg-info"
 echo "" | log_output
 
