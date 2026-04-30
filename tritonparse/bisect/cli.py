@@ -131,6 +131,17 @@ def _add_bisect_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Create a separate log file for each commit",
     )
+    parser.add_argument(
+        "--build-fail-action",
+        choices=["skip", "abort"],
+        default="skip",
+        help="What to do when an intermediate commit fails to build during "
+        "bisect. 'skip' (default, recommended) tells git bisect to skip the "
+        "commit and continue (exit 125), so a transient compile break in an "
+        "intermediate Triton/Torch commit does not derail the whole bisect. "
+        "'abort' tells git bisect to stop on the first build failure "
+        "(exit 128); use this only when build infra itself looks broken.",
+    )
 
     # Triton bisect arguments
     parser.add_argument(
@@ -412,6 +423,7 @@ def _handle_full_workflow(args: argparse.Namespace) -> int:
         build_command=args.build_command,
         session_name=logger.session_name,  # Links state file to log files
         triton_repo=args.triton_repo,
+        build_fail_action=args.build_fail_action,
     )
 
     # Run orchestration
@@ -491,6 +503,7 @@ def _orchestrate_workflow(
                     conda_env=state.conda_env,
                     logger=logger,
                     build_command=state.build_command,
+                    build_fail_action=state.build_fail_action,
                 )
 
                 state.triton_culprit = bisector.run(
@@ -819,6 +832,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 conda_env=args.conda_env,
                 build_command=args.build_command,
                 per_commit_log=args.per_commit_log,
+                build_fail_action=args.build_fail_action,
             )
 
             # Run bisect
@@ -927,6 +941,7 @@ def _handle_torch_bisect(args: argparse.Namespace) -> int:
                 conda_env=args.conda_env,
                 build_command=args.build_command,
                 per_commit_log=args.per_commit_log,
+                build_fail_action=args.build_fail_action,
             )
 
             culprit = bisector.run(

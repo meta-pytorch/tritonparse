@@ -59,6 +59,7 @@ class BaseBisector(ABC):
         logger: BisectLogger,
         build_command: Optional[str] = None,
         per_commit_log: bool = False,
+        build_fail_action: str = "skip",
     ) -> None:
         """
         Initialize the bisector.
@@ -69,6 +70,17 @@ class BaseBisector(ABC):
             conda_env: Name of the conda environment to use for builds.
             logger: BisectLogger instance for logging.
             build_command: Custom build command. Defaults to subclass default.
+            per_commit_log: If True, the bisect script writes a separate log
+                file per tested commit.
+            build_fail_action: What to tell git bisect when the build fails on
+                an intermediate commit. One of:
+                - "skip" (default, recommended): exit 125 so git bisect skips
+                  this commit and continues. This handles transient compile
+                  breaks in intermediate Triton/Torch commits without aborting
+                  the whole bisect.
+                - "abort": exit 128 so git bisect aborts immediately. Use this
+                  only when build infra itself is broken and you want to stop
+                  and investigate.
         """
         self.triton_dir = Path(triton_dir).resolve()
         self.test_script = Path(test_script).resolve()
@@ -77,6 +89,46 @@ class BaseBisector(ABC):
         self.build_command = build_command or self.default_build_command
         self.executor = ShellExecutor(logger)
         self.per_commit_log = per_commit_log
+        self.build_fail_action = self._validate_build_fail_action(build_fail_action)
+
+    @staticmethod
+    def _validate_build_fail_action(value: str) -> str:
+        """
+        Validate a build_fail_action string.
+
+        Args:
+            value: User-provided action name.
+
+        Returns:
+            Lowercased, validated action name.
+
+        Raises:
+            ValueError: If value is not "skip" or "abort".
+        """
+        if not isinstance(value, str):
+            raise ValueError(
+                f"build_fail_action must be a string, got {type(value).__name__}"
+            )
+        normalized = value.strip().lower()
+        if normalized not in ("skip", "abort"):
+            raise ValueError(
+                f"build_fail_action must be 'skip' or 'abort', got: {value!r}"
+            )
+        return normalized
+
+    @staticmethod
+    def _build_fail_exit_code(action: str) -> str:
+        """
+        Map a build_fail_action name to the git-bisect exit code (as a string,
+        ready for use as an environment variable value).
+
+        Args:
+            action: Validated action name ("skip" or "abort").
+
+        Returns:
+            "125" for "skip", "128" for "abort".
+        """
+        return "125" if action == "skip" else "128"
 
     @property
     @abstractmethod
@@ -149,6 +201,10 @@ class BaseBisector(ABC):
         self.logger.info(f"Bad commit: {bad_commit}")
         self.logger.info(f"Conda environment: {self.conda_env}")
         self.logger.info(f"Build command: {self.build_command}")
+        self.logger.info(
+            f"On build failure: {self.build_fail_action} "
+            f"(exit {self._build_fail_exit_code(self.build_fail_action)})"
+        )
 
     def _pre_bisect_check(self) -> None:
         """
@@ -210,6 +266,7 @@ class BaseBisector(ABC):
             "CONDA_ENV": self.conda_env,
             "LOG_DIR": str(self.logger.log_dir),
             "PER_COMMIT_LOG": "1" if self.per_commit_log else "0",
+            "BUILD_FAIL_EXIT_CODE": self._build_fail_exit_code(self.build_fail_action),
         }
         # Only include BUILD_COMMAND if it's set (not used by LLVMBisector)
         if self.build_command:
@@ -220,35 +277,119 @@ class BaseBisector(ABC):
         """
         Parse the culprit commit from git bisect output.
 
-        The output contains a line like:
-        "<40-char-hash> is the first bad commit"
+        Handles two normal completion shapes:
+
+        1. Single first-bad found:
+               "<40-char-hash> is the first bad commit"
+
+        2. Some commits were skipped, so git can only narrow it down to a
+           candidate set:
+               "There are only 'skip'ped commits left to test."
+               "The first bad commit could be any of:"
+               "<hash1>"
+               "<hash2>"
+               ...
+               "We cannot bisect more!"
+           In this case we return the FIRST candidate (the most recent
+           non-skipped good->bad transition boundary on the bisected range)
+           and also surface a warning listing all candidates so the user
+           knows the bisect was approximate.
 
         Args:
             output: The stdout from git bisect run.
 
         Returns:
-            The culprit commit hash.
+            The culprit commit hash. If multiple candidates exist (case 2),
+            the first listed is returned.
 
         Raises:
-            BisectError: If cannot parse the result.
+            BisectError: If neither pattern matches.
         """
-        # Try full 40-character hash first
+        # Case 1: clean single-commit result.
         pattern_full = r"([a-f0-9]{40}) is the first bad commit"
         match = re.search(pattern_full, output)
         if match:
             return match.group(1)
 
-        # Try shorter hash (7-12 characters)
         pattern_short = r"([a-f0-9]{7,12}) is the first bad commit"
         match = re.search(pattern_short, output)
         if match:
             return match.group(1)
 
-        # If we can't find the pattern, raise an error with context
+        # Case 2: result narrowed to a set because some commits were skipped
+        # (typically because they failed to build and we asked git bisect to
+        # skip them). Parse the candidate list.
+        candidates = self._parse_skip_candidates(output)
+        if candidates:
+            self.logger.warning(
+                "git bisect could not converge on a single first-bad commit "
+                "because some commits in the range were skipped (most likely "
+                "due to build failures). Narrowed it down to "
+                f"{len(candidates)} candidate(s):"
+            )
+            for sha in candidates:
+                self.logger.warning(f"  - {sha}")
+            self.logger.warning(
+                "Returning the first candidate as the culprit. To get a "
+                "precise result, fix the build error on the skipped commits "
+                "(or set --build-fail-action=abort to stop on the first build "
+                "failure) and re-run bisect."
+            )
+            return candidates[0]
+
+        # If we can't find any pattern, raise an error with context
         raise BisectError(
             f"Cannot parse bisect result. Expected '<hash> is the first bad commit' "
-            f"in output:\n{output[-500:]}"  # Last 500 chars for context
+            f"or a 'could be any of' candidate list in output:\n{output[-500:]}"
         )
+
+    @staticmethod
+    def _parse_skip_candidates(output: str) -> list:
+        """
+        Parse the candidate list from a 'could be any of' bisect result.
+
+        Looks for output of the form:
+            The first bad commit could be any of:
+            <hash1>
+            <hash2>
+            ...
+            We cannot bisect more!
+
+        Args:
+            output: The stdout from git bisect run.
+
+        Returns:
+            List of candidate commit hashes (full 40-char SHAs only).
+            Empty list if no such block is present in the output.
+        """
+        marker = "first bad commit could be any of"
+        idx = output.find(marker)
+        if idx < 0:
+            return []
+
+        # Walk lines after the marker, collect 40-char hex SHAs until we hit
+        # a blank line or the trailing "We cannot bisect more!" sentinel.
+        candidates: list = []
+        sha_re = re.compile(r"^([a-f0-9]{40})$")
+        for line in output[idx:].splitlines()[1:]:
+            stripped = line.strip()
+            if not stripped:
+                # Blank line ends the candidate block.
+                if candidates:
+                    break
+                # Skip leading blanks.
+                continue
+            if "cannot bisect" in stripped.lower():
+                break
+            m = sha_re.match(stripped)
+            if m:
+                candidates.append(m.group(1))
+            elif candidates:
+                # Non-SHA, non-blank line after we already started collecting
+                # means the candidate block has ended.
+                break
+
+        return candidates
 
     def _log_completion(self, culprit: str) -> None:
         """

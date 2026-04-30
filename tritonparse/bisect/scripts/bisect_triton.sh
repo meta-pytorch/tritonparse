@@ -34,18 +34,26 @@ Required Environment Variables:
   TEST_SCRIPT         Path to test script that returns 0 for pass, non-0 for fail
 
 Optional Environment Variables (with defaults):
-  CONDA_ENV           Conda environment name (default: triton_bisect)
-  CONDA_DIR           Conda directory (default: $HOME/miniconda3)
-  LOG_DIR             Log directory (default: ./bisect_logs)
-  TEST_ARGS           Arguments for test script (default: empty)
-  BUILD_COMMAND       Build command (default: pip install -e .)
-  PER_COMMIT_LOG      Write per-commit log files (default: 1, set to 0 to disable)
+  CONDA_ENV              Conda environment name (default: triton_bisect)
+  CONDA_DIR              Conda directory (default: $HOME/miniconda3)
+  LOG_DIR                Log directory (default: ./bisect_logs)
+  TEST_ARGS              Arguments for test script (default: empty)
+  BUILD_COMMAND          Build command (default: pip install -e .)
+  PER_COMMIT_LOG         Write per-commit log files (default: 1, set to 0 to disable)
+  BUILD_FAIL_EXIT_CODE   Exit code to use when the Triton build fails (default: 125).
+                         125 = let git bisect skip this commit and continue with
+                         neighboring commits (recommended; transient compile breaks
+                         in intermediate Triton commits should not abort bisect).
+                         Set to 128 to abort the entire bisect on the first build
+                         failure (useful when build infra itself is broken and you
+                         want to stop and investigate).
+                         Must be one of: 0, 1-124, 125, 126-127, 128.
 
 Exit Codes (for git bisect):
   0   - Good commit (test passed)
   1   - Bad commit (test failed)
-  125 - Skip (currently unused, reserved for future use)
-  128 - Abort (build failed or configuration error, stops bisect)
+  125 - Skip this commit (default for build failures; see BUILD_FAIL_EXIT_CODE)
+  128 - Abort (configuration / environment error, stops bisect)
 
 Example:
   # Basic usage
@@ -85,6 +93,25 @@ else
   BUILD_COMMAND=${BUILD_COMMAND:-"pip install -e ."}
 fi
 PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
+
+# Exit code to use when the Triton build fails. Defaults to 125 so that git
+# bisect skips the bad commit and continues, which is the right behavior when
+# an intermediate Triton commit happens to be unbuildable (a common occurrence
+# in active development branches). Set to 128 to abort the entire bisect on
+# the first build failure instead.
+BUILD_FAIL_EXIT_CODE=${BUILD_FAIL_EXIT_CODE:-125}
+
+# Validate BUILD_FAIL_EXIT_CODE: must be a non-negative integer in the range
+# git bisect understands (0..128). Reject anything else (e.g. typos like
+# "skip", empty string, negative, or > 128) so we never silently swallow a
+# build failure as exit 0 (which would mark a broken commit GOOD).
+if ! [[ "$BUILD_FAIL_EXIT_CODE" =~ ^[0-9]+$ ]] \
+   || [ "$BUILD_FAIL_EXIT_CODE" -lt 0 ] \
+   || [ "$BUILD_FAIL_EXIT_CODE" -gt 128 ]; then
+  echo "ERROR: BUILD_FAIL_EXIT_CODE must be an integer in [0, 128], got: '$BUILD_FAIL_EXIT_CODE'"
+  echo "       Common values: 125 (skip, default), 128 (abort bisect)."
+  exit 128
+fi
 
 # ============ Validation ============
 if [ -z "$TRITON_DIR" ]; then
@@ -218,8 +245,9 @@ BUILD_TIME=$((BUILD_END - BUILD_START))
 echo "Build completed in ${BUILD_TIME}s, exit code: $BUILD_CODE" | log_output
 
 if [ $BUILD_CODE -ne 0 ]; then
-  echo "Build FAILED" | log_output
-  exit 128
+  echo "Build FAILED (exit code: $BUILD_CODE)" | log_output
+  echo "Reporting to git bisect with exit $BUILD_FAIL_EXIT_CODE (125=skip, 128=abort)" | log_output
+  exit "$BUILD_FAIL_EXIT_CODE"
 fi
 
 echo "" | log_output

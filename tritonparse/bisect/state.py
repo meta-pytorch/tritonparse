@@ -82,6 +82,7 @@ class BisectState:
     build_command: Optional[str] = None
     session_name: Optional[str] = None  # Links state file to log files
     triton_repo: str = "oai"  # "oai" or "meta" — controls commit URL prefix
+    build_fail_action: str = "skip"  # "skip" (exit 125) or "abort" (exit 128)
 
     # Progress
     phase: BisectPhase = BisectPhase.TRITON_BISECT

@@ -44,6 +44,7 @@ class TorchBisector(BaseBisector):
         logger: "BisectLogger",
         build_command: Optional[str] = None,
         per_commit_log: bool = False,
+        build_fail_action: str = "skip",
     ) -> None:
         """
         Initialize the PyTorch bisector.
@@ -54,6 +55,12 @@ class TorchBisector(BaseBisector):
             conda_env: Name of the conda environment to use for builds.
             logger: BisectLogger instance for logging.
             build_command: Custom build command. Defaults to editable install.
+            per_commit_log: If True, the bisect script writes a separate log
+                file per tested commit.
+            build_fail_action: What to tell git bisect when the build fails on
+                an intermediate commit. "skip" (default) maps to exit 125 so
+                git bisect skips and continues; "abort" maps to exit 128 so
+                git bisect aborts immediately.
         """
         # BaseBisector requires ``triton_dir`` as the primary repo directory.
         # For PyTorch bisect we reuse that slot for the PyTorch checkout so
@@ -66,6 +73,7 @@ class TorchBisector(BaseBisector):
             logger=logger,
             build_command=build_command,
             per_commit_log=per_commit_log,
+            build_fail_action=build_fail_action,
         )
 
     @property
@@ -102,6 +110,10 @@ class TorchBisector(BaseBisector):
         self.logger.info(f"Bad commit: {bad_commit}")
         self.logger.info(f"Conda environment: {self.conda_env}")
         self.logger.info(f"Build command: {self.build_command}")
+        self.logger.info(
+            f"On build failure: {self.build_fail_action} "
+            f"(exit {self._build_fail_exit_code(self.build_fail_action)})"
+        )
 
     def _prepare_before_bisect(self) -> None:
         """Run the prepare_build_pytorch.sh script to install dependencies."""

@@ -79,6 +79,10 @@ class TritonBisector(BaseBisector):
         self.logger.info(f"Bad commit: {bad_commit}")
         self.logger.info(f"Conda environment: {self.conda_env}")
         self.logger.info(f"Build command: {self.build_command}")
+        self.logger.info(
+            f"On build failure: {self.build_fail_action} "
+            f"(exit {self._build_fail_exit_code(self.build_fail_action)})"
+        )
 
     def run(
         self,
