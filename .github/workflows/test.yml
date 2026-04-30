@@ -97,6 +97,16 @@ jobs:
         steps:
             - uses: actions/checkout@v6
 
+            - name: Mark workspace as safe for git
+              # actions/checkout sets safe.directory in a *temporary* HOME
+              # that is discarded after the step. Subsequent git invocations
+              # (e.g. setuptools-scm during 'pip install -e .') see the
+              # workspace as ec2-user-owned (uid 1000) while the container
+              # runs as root (uid 0), and refuse with 'dubious ownership'.
+              # Persist the safe.directory in /github/home/.gitconfig so all
+              # later steps inherit it.
+              run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
             - name: Get daily cache timestamp
               id: daily-cache
               run: |
@@ -191,6 +201,11 @@ jobs:
             PYTORCH_CUDA_TAG: cu130
         steps:
             - uses: actions/checkout@v6
+
+            - name: Mark workspace as safe for git
+              # See test-from-source for the rationale (setuptools-scm needs
+              # git introspection during 'pip install -e .').
+              run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
             - name: Get daily cache timestamp
               id: daily-cache
