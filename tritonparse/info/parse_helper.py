@@ -9,7 +9,7 @@ reusing functionality from the parse module.
 
 from pathlib import Path
 
-from tritonparse.parse.common import gzip_single_file
+from tritonparse.parse.common import compress_single_file
 from tritonparse.parse.trace_processor import parse_single_file
 
 
@@ -24,7 +24,7 @@ def parse_and_compress_raw_log(
 
     This function reuses the parse module's functionality:
     - parse_single_file: Parse the file
-    - gzip_single_file: Compress the parsed file
+    - compress_single_file: Compress the parsed file
 
     Args:
         input_path: Path to raw log file
@@ -65,6 +65,6 @@ def parse_and_compress_raw_log(
         )
 
     # 3. Compress the file (reusing parse module's function)
-    compressed_file = gzip_single_file(str(uncompressed_file), verbose=verbose)
+    compressed_file = compress_single_file(str(uncompressed_file), verbose=verbose)
 
     return Path(compressed_file)  # Returns .ndjson.gz path

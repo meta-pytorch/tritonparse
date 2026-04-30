@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import zstandard as zstd
 from tritonparse._json_compat import dumps
 from tritonparse.shared_vars import (
     DEFAULT_TRACE_FILE_PREFIX_WITHOUT_USER as LOG_PREFIX,
@@ -221,25 +222,38 @@ def print_parsed_files_summary(parsed_log_dir: str) -> None:
     print("=" * 80 + "\n")
 
 
-def gzip_single_file(file_path: str, verbose: bool = False) -> str:
+def compress_single_file(
+    file_path: str,
+    compression: str = "gzip",
+    verbose: bool = False,
+) -> str:
     """
-    Gzip a single file and delete the original file.
+    Compress a single file and delete the original file.
     Args:
-        file_path: Path to the file to gzip
+        file_path: Path to the file to compress
+        compression: Compression algorithm to use ("gzip" or "zstd")
         verbose: Whether to print verbose information
     Returns:
-        Path to the gzipped file
+        Path to the compressed file
     """
-    if file_path.endswith(".gz"):
-        return file_path
+    if compression == "gzip":
+        compressed_path = file_path + ".gz"
+    elif compression == "zstd":
+        compressed_path = file_path + ".zst"
+    else:
+        raise ValueError(f"Unsupported compression: {compression}")
 
-    gz_file_path = file_path + ".gz"
     if verbose:
-        logger.info(f"Gzipping {file_path}")
+        logger.info(f"Compressing {file_path} with {compression}")
 
     with open(file_path, "rb") as f_in:
-        with gzip.open(gz_file_path, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
+        if compression == "gzip":
+            with gzip.open(compressed_path, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        else:
+            cctx = zstd.ZstdCompressor()
+            with open(compressed_path, "wb") as f_out:
+                cctx.copy_stream(f_in, f_out)
 
     # Delete the original file after successful compression
     if os.path.exists(file_path):
@@ -247,7 +261,7 @@ def gzip_single_file(file_path: str, verbose: bool = False) -> str:
     if verbose:
         logger.info(f"Deleted original file {file_path}")
 
-    return gz_file_path
+    return compressed_path
 
 
 def copy_local_to_tmpdir(local_path: str, verbose: bool = False) -> str:
@@ -488,7 +502,9 @@ def parse_logs(
                     generated_path = os.path.join(output_dir, generated_item)
                     if os.path.isfile(generated_path):
                         # Gzip the file immediately after parsing
-                        gz_file_path = gzip_single_file(generated_path, verbose)
+                        gz_file_path = compress_single_file(
+                            generated_path, verbose=verbose
+                        )
                         gz_filename = os.path.basename(gz_file_path)
                         # Check if it's a mapped file (assuming files with 'mapped' in name)
                         if "mapped" in generated_item.lower():

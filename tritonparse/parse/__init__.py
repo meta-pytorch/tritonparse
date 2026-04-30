@@ -9,8 +9,8 @@ extracting source mappings, and processing IR files.
 
 # Public API exports
 from .common import (
+    compress_single_file,
     copy_local_to_tmpdir,
-    gzip_single_file,
     parse_logs,
     print_parsed_files_summary,
     Rank,
@@ -42,8 +42,8 @@ from .utils import _add_parse_args, oss_run, unified_parse
 
 __all__ = [
     # Common utilities
+    "compress_single_file",
     "copy_local_to_tmpdir",
-    "gzip_single_file",
     "parse_logs",
     "print_parsed_files_summary",
     "Rank",
