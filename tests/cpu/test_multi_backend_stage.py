@@ -6,7 +6,11 @@ from tritonparse.backend import (
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
-from tritonparse.parse.trace_processor import _resolve_source_mappable_stage_keys
+from tritonparse.parse.ir_parser import ParserRegistry
+from tritonparse.parse.trace_processor import (
+    _resolve_source_mappable_stage_keys,
+    generate_source_mappings,
+)
 
 
 def make_event(file_content: dict, stage_descriptors: list | None = None):
@@ -162,6 +166,143 @@ class TestMultiBackendStage(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             deserialize_stage_descriptors_from_event(event)
+
+    def test_parser_registry_and_layered_registration(self):
+        """Test ParserRegistry and layered parser registration (common + backend-specific)."""
+        # Step 1: Verify common parsers are pre-registered
+        common_parsers = {"generic_loc", "none"}
+        for parser_id in common_parsers:
+            parser = ParserRegistry.get_parser(parser_id)
+            self.assertIsNotNone(
+                parser, f"Common parser '{parser_id}' should be pre-registered"
+            )
+
+        # Step 2: Create adapters (triggers backend-specific parser registration)
+        registry = PipelineAdapterRegistry()
+        registry.register(NvidiaTritonAdapter)
+        registry.register(AmdTritonAdapter)
+
+        # Step 3: Verify all parsers are listed (check registry list functionality)
+        all_parsers = ParserRegistry.list_parsers()
+        self.assertIn("generic_loc", all_parsers)
+        self.assertIn("none", all_parsers)
+        self.assertIn("ptx_loc", all_parsers)
+        self.assertIn("sass_loc", all_parsers)
+        self.assertIn("amdgcn_loc", all_parsers)
+
+    def test_adapter_get_parser_method(self):
+        """Test adapter.get_parser() method with both common and backend-specific parsers."""
+        registry = PipelineAdapterRegistry()
+        registry.register(NvidiaTritonAdapter)
+        registry.register(AmdTritonAdapter)
+
+        # Get NVIDIA adapter
+        nvidia_adapter = registry.resolve(adapter_name="cuda_triton")
+
+        # Test getting common parser (generic_loc)
+        generic_parser = nvidia_adapter.get_parser("generic_loc")
+        self.assertIsNotNone(generic_parser)
+
+        # Test getting NVIDIA-specific parser
+        ptx_parser = nvidia_adapter.get_parser("ptx_loc")
+        self.assertIsNotNone(ptx_parser)
+
+        # Test getting AMD parser (also works because parsers are globally registered)
+        amdgcn_parser = nvidia_adapter.get_parser("amdgcn_loc")
+        self.assertIsNotNone(amdgcn_parser)
+
+        # Get AMD adapter and test NVIDIA parser (also works for symmetrical access)
+        amd_adapter = registry.resolve(adapter_name="hip_triton")
+        ptx_parser_amd = amd_adapter.get_parser("ptx_loc")
+        self.assertIsNotNone(ptx_parser_amd)
+
+        # Test getting unknown parser should raise ValueError
+        with self.assertRaises(ValueError):
+            nvidia_adapter.get_parser("unknown_parser")
+
+    def test_adapter_driven_parser_selection_and_fallback(self):
+        """Test adapter-driven parser selection with backward compatibility fallback."""
+        registry = PipelineAdapterRegistry()
+        registry.register(NvidiaTritonAdapter)
+        registry.register(AmdTritonAdapter)
+
+        # Test content (TTIR with #loc directives)
+        ttir_content = """
+            #loc = loc("test.py":10:5)
+            #loc1 = loc("test.py":20:10)
+            %0 = arith.constant 42 loc(#loc1)
+            """
+
+        sentinel_mapping = {
+            "sentinel": {"file": "adapter_selected.py", "line": 999, "ttir_line": 1}
+        }
+
+        def sentinel_generic_loc_parser(*args, **kwargs):
+            return sentinel_mapping
+
+        original_generic_parser = ParserRegistry.get_parser("generic_loc")
+        self.assertIsNotNone(original_generic_parser)
+
+        # Test with metadata (adapter-driven parser selection)
+        metadata_cuda = {"backend_name": "cuda"}
+        try:
+            ParserRegistry.register("generic_loc", sentinel_generic_loc_parser)
+
+            result_with_metadata = generate_source_mappings(
+                ttir_content, "ttir", None, metadata_cuda
+            )
+            self.assertEqual(
+                result_with_metadata,
+                sentinel_mapping,
+                "Expected metadata-driven source mapping to use the adapter-selected parser",
+            )
+
+            # Empty metadata simulates legacy traces after payload.setdefault("metadata", {}).
+            result_empty_metadata = generate_source_mappings(
+                ttir_content, "ttir", None, {}
+            )
+            self.assertIsInstance(result_empty_metadata, dict)
+            self.assertIn("4", result_empty_metadata)
+            self.assertEqual(result_empty_metadata["4"]["file"], "test.py")
+            self.assertEqual(result_empty_metadata["4"]["line"], 20)
+            self.assertIn("ttir_line", result_empty_metadata["4"])
+
+            result_fallback = generate_source_mappings(ttir_content, "ttir", None, None)
+            self.assertIsInstance(result_fallback, dict)
+            self.assertIn("4", result_fallback)
+            self.assertEqual(result_fallback["4"]["file"], "test.py")
+            self.assertEqual(result_fallback["4"]["line"], 20)
+            self.assertIn("ttir_line", result_fallback["4"])
+        finally:
+            ParserRegistry.register("generic_loc", original_generic_parser)
+
+    def test_adapter_parser_execution_errors_are_not_silently_swallowed(self):
+        """Adapter-selected parser execution failures should propagate instead of falling back."""
+        registry = PipelineAdapterRegistry()
+        registry.register(NvidiaTritonAdapter)
+        registry.register(AmdTritonAdapter)
+
+        ttir_content = """
+            #loc = loc("test.py":10:5)
+            #loc1 = loc("test.py":20:10)
+            %0 = arith.constant 42 loc(#loc1)
+            """
+
+        metadata_cuda = {"backend_name": "cuda"}
+
+        def failing_generic_loc_parser(*args, **kwargs):
+            raise RuntimeError("parser execution failed")
+
+        original_generic_parser = ParserRegistry.get_parser("generic_loc")
+        self.assertIsNotNone(original_generic_parser)
+
+        try:
+            ParserRegistry.register("generic_loc", failing_generic_loc_parser)
+
+            with self.assertRaisesRegex(RuntimeError, "parser execution failed"):
+                generate_source_mappings(ttir_content, "ttir", None, metadata_cuda)
+        finally:
+            ParserRegistry.register("generic_loc", original_generic_parser)
 
 
 if __name__ == "__main__":

@@ -89,7 +89,13 @@ class CompilationPipelineAdapter(ABC):
     def get_ir_stages(self) -> list[IRStageDescriptor]:
         raise NotImplementedError
 
-    def classify_artifact(self, artifact_name: str) -> IRStageDescriptor | None:
+    def get_stage_by_name(self, stage_name: str) -> IRStageDescriptor | None:
+        for stage in self.get_ir_stages():
+            if stage.name == stage_name:
+                return stage
+        return None
+
+    def get_stage_by_artifact(self, artifact_name: str) -> IRStageDescriptor | None:
         artifact_suffix = Path(artifact_name).suffix
         for stage in self.get_ir_stages():
             if stage.extension == artifact_suffix:
@@ -109,22 +115,60 @@ class CompilationPipelineAdapter(ABC):
     def normalize_device_string(self, device: str) -> str:
         return device
 
+    def get_parser(self, parser_id: str):
+        """
+        Get parser function by parser_id from the parser registry.
+
+        This is a generic implementation that works for most backends.
+        Subclasses can override this method if they need custom parser resolution.
+
+        Args:
+            parser_id: The parser identifier (e.g., "generic_loc", "ptx_loc")
+
+        Returns:
+            The parser function for the given parser_id
+
+        Raises:
+            ValueError: If the parser_id is not found in the registry
+        """
+        from tritonparse.parse.ir_parser import ParserRegistry
+
+        parser = ParserRegistry.get_parser(parser_id)
+        if parser is None:
+            available_parsers = ParserRegistry.list_parsers()
+            raise ValueError(
+                f"Parser '{parser_id}' not found. "
+                f"Available parsers: {available_parsers}"
+            )
+        return parser
+
+    def register_backend_parser(self, parser_id: str, parser_func) -> None:
+        """
+        Register a backend-specific parser to the parser registry.
+
+        This allows adapters to register custom parsers for backend-specific
+        IR formats that are not part of the common parser registry.
+
+        Args:
+            parser_id: The parser identifier (e.g., "ascend_ir")
+            parser_func: The parser function
+        """
+        from tritonparse.parse.ir_parser import ParserRegistry
+
+        ParserRegistry.register(parser_id, parser_func)
+
 
 class NvidiaTritonAdapter(CompilationPipelineAdapter):
-    @property
-    def adapter_name(self) -> str:
-        return "cuda_triton"
+    def __init__(self):
+        """Initialize and register backend-specific parsers and stage descriptors."""
+        from tritonparse.parse.ir_parser import _parse_ptx_loc, _parse_sass_loc
 
-    @property
-    def runtime_backend(self) -> str:
-        return "cuda"
+        # Register NVIDIA-specific parsers
+        self.register_backend_parser("ptx_loc", _parse_ptx_loc)
+        self.register_backend_parser("sass_loc", _parse_sass_loc)
 
-    @property
-    def pytorch_module(self) -> str:
-        return "torch.cuda"
-
-    def get_ir_stages(self) -> list[IRStageDescriptor]:
-        return [
+        # Pre-initialize stage descriptors (immutable objects, can be reused)
+        self._stages = [
             IRStageDescriptor(
                 "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
             ),
@@ -146,22 +190,32 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
             ),
         ]
 
-
-class AmdTritonAdapter(CompilationPipelineAdapter):
     @property
     def adapter_name(self) -> str:
-        return "hip_triton"
+        return "cuda_triton"
 
     @property
     def runtime_backend(self) -> str:
-        return "hip"
+        return "cuda"
 
     @property
     def pytorch_module(self) -> str:
         return "torch.cuda"
 
     def get_ir_stages(self) -> list[IRStageDescriptor]:
-        return [
+        return self._stages
+
+
+class AmdTritonAdapter(CompilationPipelineAdapter):
+    def __init__(self):
+        """Initialize and register backend-specific parsers and stage descriptors."""
+        from tritonparse.parse.ir_parser import _parse_amdgcn_loc
+
+        # Register AMD-specific parsers
+        self.register_backend_parser("amdgcn_loc", _parse_amdgcn_loc)
+
+        # Pre-initialize stage descriptors (immutable objects, can be reused)
+        self._stages = [
             IRStageDescriptor(
                 "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
             ),
@@ -179,36 +233,55 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
             ),
         ]
 
+    @property
+    def adapter_name(self) -> str:
+        return "hip_triton"
+
+    @property
+    def runtime_backend(self) -> str:
+        return "hip"
+
+    @property
+    def pytorch_module(self) -> str:
+        return "torch.cuda"
+
+    def get_ir_stages(self) -> list[IRStageDescriptor]:
+        return self._stages
+
 
 class PipelineAdapterRegistry:
     """Registry for managing and resolving compilation pipeline adapters.
 
     Provides registration and resolution methods for different backend adapters.
     Adapters can be looked up by name or inferred from trace metadata.
+
+    Note: Adapters are instantiated once during registration and reused for all
+    subsequent resolutions. This ensures parsers are registered only once and
+    stage descriptors are initialized only once.
     """
 
     def __init__(self) -> None:
-        self._adapter_types: dict[str, type[CompilationPipelineAdapter]] = {}
+        self._adapters: dict[str, CompilationPipelineAdapter] = {}
 
     def register(self, adapter_cls: type[CompilationPipelineAdapter]) -> None:
         adapter = adapter_cls()
-        self._adapter_types[adapter.adapter_name.lower()] = adapter_cls
+        self._adapters[adapter.adapter_name.lower()] = adapter
 
     def create_all(self) -> list[CompilationPipelineAdapter]:
-        return [adapter_cls() for adapter_cls in self._adapter_types.values()]
+        return list(self._adapters.values())
 
     def resolve(
         self,
         *,
         adapter_name: str,
     ) -> CompilationPipelineAdapter:
-        adapter_cls = self._adapter_types.get(adapter_name.lower())
-        if adapter_cls is None:
+        adapter = self._adapters.get(adapter_name.lower())
+        if adapter is None:
             raise ValueError(
                 "Unable to resolve adapter from adapter_name: "
                 f"adapter_name={adapter_name!r}"
             )
-        return adapter_cls()
+        return adapter
 
     def resolve_from_trace(
         self,
