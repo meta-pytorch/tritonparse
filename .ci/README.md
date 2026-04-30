@@ -26,8 +26,14 @@ CONDA_ENV=tritonparse PYTHON_VERSION=3.11 bash .ci/setup.sh
 ### `install-triton.sh`
 Installs Triton from source by cloning the repository and building it.
 
+> **Note:** As of the migration to NVIDIA's Triton-Nightly wheel feed,
+> the CI workflow no longer invokes this script. It is kept for local
+> development and for cases where you want to test against a specific
+> upstream Triton commit (set `TRITON_COMMIT=<sha>` before invoking).
+
 **Environment Variables:**
 - `CONDA_ENV`: Conda environment name (required)
+- `TRITON_COMMIT`: Optional commit SHA or branch (default: "main")
 
 **Usage:**
 ```bash

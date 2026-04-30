@@ -82,18 +82,23 @@ jobs:
     # cuda>=13.2"). Bump once PyTorch infra rolls out a newer driver
     # AMI. Probed on 2026-04-29.
     # ===================================================================
-    test-from-source:
+    test-from-nightly:
         runs-on: linux.g5.4xlarge.nvidia.gpu
         container:
             image: pytorch/almalinux-builder:cuda13.0
             options: --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g --ipc=host
-        timeout-minutes: 120
+        timeout-minutes: 60
         env:
             # A10G compute capability (Ampere)
             TORCH_CUDA_ARCH_LIST: "8.6"
             CONDA_ENV: tritonparse
             PYTHON_VERSION: "3.14"
             PYTORCH_CUDA_TAG: cu130
+            # NVIDIA-published Triton nightly wheel index (cp310-cp314,
+            # x86_64 + aarch64). The "Triton-Nightly" is the *feed* name;
+            # the package is just `triton`. Versions look like
+            # 3.7.0+gitXXXXXXXX.
+            TRITON_NIGHTLY_INDEX_URL: "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/"
         steps:
             - uses: actions/checkout@v6
 
@@ -126,38 +131,7 @@ jobs:
                   restore-keys: |
                       ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-
 
-            - name: Get Triton latest commit
-              id: triton-commit
-              run: |
-                  # Get commit with error handling
-                  echo "Fetching latest Triton commit..."
-                  COMMIT=$(curl -s --max-time 30 --retry 3 https://api.github.com/repos/triton-lang/triton/commits/main | jq -r .sha 2>/dev/null || echo "")
-
-                  if [ -n "$COMMIT" ] && [ "$COMMIT" != "null" ]; then
-                      echo "commit=$COMMIT" >> $GITHUB_OUTPUT
-                      echo "cache-key=$COMMIT" >> $GITHUB_OUTPUT
-                      echo "✅ Using Triton commit: $COMMIT"
-                  else
-                      echo "❌ Failed to get Triton commit, using 'main' as fallback"
-                      # Force cache miss by using timestamp when API fails
-                      TIMESTAMP=$(date +%Y%m%d%H%M%S)
-                      echo "commit=main" >> $GITHUB_OUTPUT
-                      echo "cache-key=main-fallback-$TIMESTAMP" >> $GITHUB_OUTPUT
-                      echo "⚠️ Using fallback cache key: main-fallback-$TIMESTAMP"
-                  fi
-
-            - name: Cache Triton source and build
-              uses: actions/cache@v5
-              with:
-                  path: |
-                      /tmp/triton
-                      /tmp/triton-cache
-                  key: ${{ runner.os }}-triton-source-${{ hashFiles('.ci/install-triton.sh') }}-${{ steps.triton-commit.outputs.cache-key }}
-                  restore-keys: |
-                      ${{ runner.os }}-triton-source-${{ hashFiles('.ci/install-triton.sh') }}-
-                      ${{ runner.os }}-triton-source-
-
-            - name: Setup conda env + PyTorch nightly
+            - name: Setup conda env + PyTorch nightly + Triton nightly
               run: |
                   # Container ships with conda 23.5.2 in /opt/conda
                   # (Py3.11 base). Create a fresh Py3.14 env for tritonparse.
@@ -166,17 +140,24 @@ jobs:
                   conda activate "$CONDA_ENV"
 
                   # Install PyTorch nightly with CUDA runtime matching the
-                  # container toolkit.
+                  # container toolkit. This pulls a pinned `pytorch-triton`
+                  # snapshot which we replace below with the upstream
+                  # NVIDIA Triton nightly.
                   pip install --pre torch torchvision torchaudio \
                       --index-url "https://download.pytorch.org/whl/nightly/${PYTORCH_CUDA_TAG}"
                   # Workaround: PyTorch nightly missing 'packaging' dep.
                   pip install packaging
 
-            - name: Install Triton from source
-              env:
-                  TRITON_COMMIT: ${{ steps.triton-commit.outputs.commit }}
-              run: |
-                  bash .ci/install-triton.sh
+                  # Replace the pytorch-triton snapshot with the upstream
+                  # Triton nightly (NVIDIA's official feed). Both packages
+                  # provide `import triton`, so we uninstall any existing
+                  # variant first to avoid a half-overwritten install.
+                  # --extra-index-url keeps PyPI as the fallback for any
+                  # transitive deps; --pre allows the +gitXXXXXXXX version.
+                  pip uninstall -y pytorch-triton triton 2>/dev/null || true
+                  pip install -U --pre triton \
+                      --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
+                  python -c "import triton; print(f'Triton: {triton.__version__} from {triton.__file__}')"
 
             - name: Install project dependencies
               run: |
