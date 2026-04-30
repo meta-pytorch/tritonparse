@@ -451,8 +451,6 @@ def _extract_dict_keys(dict_node: ast.Dict) -> set[str]:
         if key is not None:
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
                 keys.add(key.value)
-            elif isinstance(key, ast.Str):  # Python 3.7 compatibility
-                keys.add(key.s)
             elif isinstance(key, ast.Name):
                 # Handle unquoted identifier keys like {BLOCK_SIZE: 128}
                 keys.add(key.id)

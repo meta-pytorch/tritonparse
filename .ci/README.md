@@ -9,7 +9,7 @@ Sets up the conda environment, installs dependencies, configures CUDA, and insta
 
 **Environment Variables:**
 - `CONDA_ENV`: Conda environment name (default: "tritonparse")
-- `PYTHON_VERSION`: Python version (default: "3.11")
+- `PYTHON_VERSION`: Python version (default: "3.14")
 - `CUDA_VERSION`: CUDA version (default: "12.8")
 - `CUDNN_VERSION`: cuDNN version (default: "9.10.2.21")
 
@@ -26,8 +26,15 @@ CONDA_ENV=tritonparse PYTHON_VERSION=3.11 bash .ci/setup.sh
 ### `install-triton.sh`
 Installs Triton from source by cloning the repository and building it.
 
+> **Note:** As of the migration to the upstream Triton team's
+> Triton-Nightly wheel feed, the CI workflow no longer invokes this
+> script. It is kept for local development and for cases where you
+> want to test against a specific upstream Triton commit (set
+> `TRITON_COMMIT=<sha>` before invoking).
+
 **Environment Variables:**
 - `CONDA_ENV`: Conda environment name (required)
+- `TRITON_COMMIT`: Optional commit SHA or branch (default: "main")
 
 **Usage:**
 ```bash

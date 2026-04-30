@@ -40,8 +40,19 @@ if [ -z "$CONDA_ENV" ]; then
     exit 1
 fi
 
-# Activate conda environment
-source /opt/miniconda3/etc/profile.d/conda.sh
+# Activate conda environment.
+# Locate conda installation: prefer existing $CONDA_HOME, else discover
+# via 'conda info --base' if conda is in PATH, else fall back to the
+# legacy /opt/miniconda3 path used by .ci/setup.sh on GitHub-hosted
+# runners.
+if [ -z "${CONDA_HOME:-}" ]; then
+    if command -v conda >/dev/null 2>&1; then
+        CONDA_HOME="$(conda info --base)"
+    else
+        CONDA_HOME="/opt/miniconda3"
+    fi
+fi
+source "${CONDA_HOME}/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 # Create cache directory
@@ -70,14 +81,17 @@ fi
 
 # Update libstdc++ to match system version
 # Otherwise, we get errors like:
-# ImportError: /opt/miniconda3/envs/tritonparse/bin/../lib/libstdc++.so.6:
+# ImportError: <conda_env>/bin/../lib/libstdc++.so.6:
 # version `GLIBCXX_3.4.30' not found (required by /tmp/triton/python/triton/_C/libtriton.so)
 echo "Updating libstdc++ to match system version..."
 # Use the latest version for Ubuntu 22.04 that includes GLIBCXX_3.4.32
 conda install -y -c conda-forge libstdcxx-ng=15.1.0
 # Check if the update was successful
 echo "Checking libstdc++ version after update:"
-strings /opt/miniconda3/envs/tritonparse/lib/libstdc++.so.6 | grep GLIBCXX | tail -10
+# Use $CONDA_PREFIX (set by 'conda activate') so this works regardless of
+# whether conda is at /opt/miniconda3 (legacy setup.sh path) or /opt/conda
+# (container path) or anywhere else.
+strings "${CONDA_PREFIX}/lib/libstdc++.so.6" | grep GLIBCXX | tail -10
 
 # Uninstall existing pytorch-triton
 echo "Uninstalling existing pytorch-triton..."
@@ -126,12 +140,22 @@ pip install ninja cmake wheel pybind11
 echo "Installing Triton requirements..."
 pip install -r python/requirements.txt
 
-# Set environment to use clang compiler for faster compilation
-echo "Setting up clang compiler for faster compilation..."
-export CC=clang
-export CXX=clang++
-echo "Using CC: $CC"
-echo "Using CXX: $CXX"
+# Set environment to use clang compiler for faster compilation IF available.
+# In the GitHub-hosted Ubuntu CI path, .ci/setup.sh apt-installs clang-19;
+# in the container CI path (pytorch/almalinux-builder:cuda13.0) only gcc
+# (gcc-toolset-13) is preinstalled, so we fall back to gcc to let CMake
+# auto-detect rather than failing with "Could not find compiler clang++".
+# Local development on a workstation without clang also benefits from
+# this fallback.
+if command -v clang &>/dev/null && command -v clang++ &>/dev/null; then
+    echo "Setting up clang compiler for faster compilation..."
+    export CC=clang
+    export CXX=clang++
+else
+    echo "clang/clang++ not found; using default compiler (gcc)..."
+fi
+echo "Using CC: ${CC:-<default>}"
+echo "Using CXX: ${CXX:-<default>}"
 
 # Install Triton in editable mode with clang
 if [ "$USE_CACHED_SOURCE" = "true" ]; then
