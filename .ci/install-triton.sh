@@ -140,12 +140,22 @@ pip install ninja cmake wheel pybind11
 echo "Installing Triton requirements..."
 pip install -r python/requirements.txt
 
-# Set environment to use clang compiler for faster compilation
-echo "Setting up clang compiler for faster compilation..."
-export CC=clang
-export CXX=clang++
-echo "Using CC: $CC"
-echo "Using CXX: $CXX"
+# Set environment to use clang compiler for faster compilation IF available.
+# In the GitHub-hosted Ubuntu CI path, .ci/setup.sh apt-installs clang-19;
+# in the container CI path (pytorch/almalinux-builder:cuda13.0) only gcc
+# (gcc-toolset-13) is preinstalled, so we fall back to gcc to let CMake
+# auto-detect rather than failing with "Could not find compiler clang++".
+# Local development on a workstation without clang also benefits from
+# this fallback.
+if command -v clang &>/dev/null && command -v clang++ &>/dev/null; then
+    echo "Setting up clang compiler for faster compilation..."
+    export CC=clang
+    export CXX=clang++
+else
+    echo "clang/clang++ not found; using default compiler (gcc)..."
+fi
+echo "Using CC: ${CC:-<default>}"
+echo "Using CXX: ${CXX:-<default>}"
 
 # Install Triton in editable mode with clang
 if [ "$USE_CACHED_SOURCE" = "true" ]; then
