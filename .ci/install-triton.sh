@@ -81,14 +81,17 @@ fi
 
 # Update libstdc++ to match system version
 # Otherwise, we get errors like:
-# ImportError: /opt/miniconda3/envs/tritonparse/bin/../lib/libstdc++.so.6:
+# ImportError: <conda_env>/bin/../lib/libstdc++.so.6:
 # version `GLIBCXX_3.4.30' not found (required by /tmp/triton/python/triton/_C/libtriton.so)
 echo "Updating libstdc++ to match system version..."
 # Use the latest version for Ubuntu 22.04 that includes GLIBCXX_3.4.32
 conda install -y -c conda-forge libstdcxx-ng=15.1.0
 # Check if the update was successful
 echo "Checking libstdc++ version after update:"
-strings /opt/miniconda3/envs/tritonparse/lib/libstdc++.so.6 | grep GLIBCXX | tail -10
+# Use $CONDA_PREFIX (set by 'conda activate') so this works regardless of
+# whether conda is at /opt/miniconda3 (legacy setup.sh path) or /opt/conda
+# (container path) or anywhere else.
+strings "${CONDA_PREFIX}/lib/libstdc++.so.6" | grep GLIBCXX | tail -10
 
 # Uninstall existing pytorch-triton
 echo "Uninstalling existing pytorch-triton..."

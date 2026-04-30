@@ -118,9 +118,10 @@ jobs:
             - name: Cache pip dependencies
               uses: actions/cache@v5
               with:
-                  # Container runs as root, so pip's user cache lives at
-                  # /root/.cache/pip rather than the host's ~/.cache/pip.
-                  path: /root/.cache/pip
+                  # GitHub Actions sets HOME=/github/home in container jobs,
+                  # so pip's default cache directory ($HOME/.cache/pip per
+                  # XDG) is /github/home/.cache/pip — NOT /root/.cache/pip.
+                  path: /github/home/.cache/pip
                   key: ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-${{ steps.daily-cache.outputs.date }}
                   restore-keys: |
                       ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-
@@ -217,7 +218,9 @@ jobs:
             - name: Cache pip dependencies
               uses: actions/cache@v5
               with:
-                  path: /root/.cache/pip
+                  # See test-from-source for the rationale (HOME=/github/home
+                  # in container jobs, pip cache lives there).
+                  path: /github/home/.cache/pip
                   key: ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-${{ steps.daily-cache.outputs.date }}
                   restore-keys: |
                       ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-
