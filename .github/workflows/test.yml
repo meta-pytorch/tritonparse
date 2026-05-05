@@ -132,6 +132,17 @@ jobs:
                       ${{ runner.os }}-pip-${{ env.PYTORCH_CUDA_TAG }}-py${{ env.PYTHON_VERSION }}-
 
             - name: Setup conda env + PyTorch nightly + Triton nightly
+              env:
+                  # Provided so the Triton-nightly resolver below can
+                  # authenticate to the GitHub Actions API. Without this,
+                  # we hit the 60 req/hr unauthenticated limit (shared per
+                  # runner IP across all repos using the runner pool) and
+                  # fall back to the unpinned install. With the workflow
+                  # token, the limit is 1000/hr per repo and the only
+                  # permission we need is read access to triton-lang/triton
+                  # (a public repo), which the default GITHUB_TOKEN already
+                  # has.
+                  GITHUB_TOKEN: ${{ github.token }}
               run: |
                   # Container ships with conda 23.5.2 in /opt/conda
                   # (Py3.11 base). Create a fresh Py3.14 env for tritonparse.
@@ -152,11 +163,33 @@ jobs:
                   # Triton nightly (NVIDIA's official feed). Both packages
                   # provide `import triton`, so we uninstall any existing
                   # variant first to avoid a half-overwritten install.
-                  # --extra-index-url keeps PyPI as the fallback for any
-                  # transitive deps; --pre allows the +gitXXXXXXXX version.
                   pip uninstall -y pytorch-triton triton 2>/dev/null || true
-                  pip install -U --pre triton \
-                      --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
+
+                  # Workaround: the Triton-Nightly feed publishes wheels
+                  # with PEP-440 local versions like `3.7.0+gitXXXXXXXX`,
+                  # which pip sorts lexicographically — so `pip install -U`
+                  # silently selects an arbitrarily-old wheel rather than
+                  # the newest commit. We resolve the latest upstream
+                  # wheels.yml head_sha via GitHub API and pin to it.
+                  # The resolver runs under the active conda env's python
+                  # here (just whatever `python` resolves to on PATH); it
+                  # doesn't matter because the script is stdlib-only and
+                  # PY_TAG is derived from that same interpreter, so the
+                  # platform tag we filter on always matches the install
+                  # target. On any resolver failure, fall back to the
+                  # unpinned install (preserves the original behavior so
+                  # this leg never regresses).
+                  PY_TAG=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+                  PIN=$(python .ci/triton_nightly_pin.py --pytag "$PY_TAG" --platform x86_64) || PIN=""
+                  if [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
+                      echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
+                      pip install "triton==$PIN" \
+                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
+                  else
+                      echo "Resolver did not produce a valid pin (got: '$PIN'); falling back to default"
+                      pip install -U --pre triton \
+                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
+                  fi
                   python -c "import triton; print(f'Triton: {triton.__version__} from {triton.__file__}')"
 
             - name: Install project dependencies
