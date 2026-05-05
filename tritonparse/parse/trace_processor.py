@@ -882,6 +882,22 @@ def parse_single_file(
                     if not is_benchmark and session_id:
                         autotune_winners[session_id] = launch_group_hash
 
+            elif event_type == "autotune":
+                # Handle authoritative autotune events from AutotuneListener
+                stack = parsed_json.get("stack", [])
+                session_id, user_stack = get_autotune_session_id(stack)
+                if session_id:
+                    autotune_sessions[session_id]["autotune_result"] = {
+                        "best_config": parsed_json.get("best_config"),
+                        "configs_timings": parsed_json.get("configs_timings"),
+                        "duration": parsed_json.get("duration"),
+                        "cache_hit": parsed_json.get("cache_hit"),
+                        "cache_key": parsed_json.get("cache_key"),
+                        "kernel_name": parsed_json.get("kernel_name"),
+                    }
+                    if user_stack and session_id not in session_stacks:
+                        session_stacks[session_id] = user_stack
+
     # Organize lines for final output, keyed by output file path
     all_output_lines = defaultdict(list)
     for _kernel_hash, data in kernels_by_hash.items():

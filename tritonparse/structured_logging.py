@@ -1685,6 +1685,25 @@ def enable_launch_tracing() -> None:
     log.debug("[tritonparse] Launch tracing enabled")
 
 
+def _autotune_listener(*, fn, key, best_config, configs_timings, duration, cache_hit):
+    """AutotuneListener callback — writes an 'autotune' event to NDJSON."""
+    kernel_name = fn.fn.__name__
+    if _KERNEL_ALLOWLIST_PATTERNS is not None:
+        if not should_trace_kernel(kernel_name, _KERNEL_ALLOWLIST_PATTERNS):
+            return
+
+    trace_data = {
+        "kernel_name": kernel_name,
+        "cache_key": fn.cache_key,
+        "best_config": str(best_config),
+        "configs_timings": {str(c): t for c, t in configs_timings.items()},
+        "duration": duration,
+        "cache_hit": cache_hit,
+        "autotune_key": str(key),
+    }
+    trace_structured_triton("autotune", metadata_fn=lambda: convert(trace_data))
+
+
 def disable_launch_tracing() -> None:
     """
     Disable launch event tracing.
@@ -1818,6 +1837,8 @@ def init(
     from triton import knobs
 
     knobs.compilation.listener = maybe_trace_triton
+    if hasattr(knobs.autotuning, "listener"):
+        knobs.autotuning.listener = _autotune_listener
 
 
 def init_with_env():
@@ -1866,6 +1887,8 @@ def clear_logging_config():
     from triton import knobs
 
     knobs.compilation.listener = None
+    if hasattr(knobs.autotuning, "listener"):
+        knobs.autotuning.listener = None
     knobs.runtime.jit_post_compile_hook = None
     knobs.runtime.launch_enter_hook = None
 

@@ -470,6 +470,16 @@ def _generate_autotune_analysis_events(
         if autotune_args_summary is not None:
             analysis_event["autotune_args_summary"] = autotune_args_summary
 
+        # Add authoritative autotune result from AutotuneListener (if available)
+        autotune_result = session_data.get("autotune_result")
+        if autotune_result:
+            analysis_event["autotune_result"] = {
+                "best_config": autotune_result["best_config"],
+                "configs_timings": autotune_result["configs_timings"],
+                "benchmark_duration": autotune_result["duration"],
+                "cache_hit": autotune_result["cache_hit"],
+            }
+
         output_events[output_file].append(dumps(analysis_event) + "\n")
 
     # Third pass: Generate autotune_summary event with winner usage statistics
