@@ -49,19 +49,6 @@ class DerivedArtifactDescriptor:
     tool_name: str
 
 
-@dataclass(frozen=True)
-class AnalysisPassDescriptor:
-    """Describes an analysis pass that operates on specific compilation stages.
-
-    Fields:
-        name: Name of the analysis pass.
-        required_stages: Tuple of stage names that must be present for this pass to run.
-    """
-
-    name: str
-    required_stages: tuple[str, ...]
-
-
 class CompilationPipelineAdapter(ABC):
     """Abstract base class for compilation pipeline adapters.
 
@@ -109,8 +96,133 @@ class CompilationPipelineAdapter(ABC):
     def get_derived_artifacts(self) -> list[DerivedArtifactDescriptor]:
         return []
 
-    def get_analysis_passes(self) -> list[AnalysisPassDescriptor]:
-        return []
+    def get_analysis_passes(self) -> list[str]:
+        """
+        Return list of analysis pass names for this adapter.
+
+        Base implementation: gets analyzers from AnalysisRegistry
+        that match this adapter's affinity or are common (no affinity).
+
+        Can be overridden by subclasses for custom behavior.
+        """
+        from tritonparse.parse.ir_analysis import AnalysisRegistry
+
+        my_name = self.adapter_name
+        analyzer_names = []
+
+        for _, info in AnalysisRegistry._analyzer_infos.items():
+            # Include analyzers specific to this adapter or common analyzers
+            if info.adapter_affinity in (my_name, None):
+                analyzer_names.append(info.name)
+
+        return analyzer_names
+
+    def get_executable_analyzers(
+        self,
+        file_content: dict[str, str],
+        enabled_analyses: set[str] | None = None,
+    ) -> list[str]:
+        """
+        Get list of analyzers that can be executed based on:
+        1. User-enabled analyses (from environment variable)
+        2. Available intermediate products (file_content)
+
+        Args:
+            file_content: Dictionary mapping file keys to file content
+            enabled_analyses: User-enabled analysis names (None = all)
+
+        Returns:
+            List of executable analyzer names
+        """
+        from tritonparse.parse.ir_analysis import AnalysisRegistry
+
+        # Get declared analyzers for this adapter (already registered)
+        declared_analyzers = self.get_analysis_passes()
+        executable = []
+
+        for analyzer_name in declared_analyzers:
+            # Check 1: Is it enabled by user?
+            if enabled_analyses is not None and analyzer_name not in enabled_analyses:
+                continue
+
+            # Check 2: Are required stages available?
+            info = AnalysisRegistry.get_analyzer_info(analyzer_name)
+            if not info or not info.required_stages:
+                continue
+
+            stages_available = True
+            for stage_name in info.required_stages:
+                stage = self.get_stage_by_name(stage_name)
+                if not stage:
+                    stages_available = False
+                    break
+
+                # Check if any file in file_content has this stage's extension
+                if not any(k.endswith(stage.extension) for k in file_content):
+                    stages_available = False
+                    break
+
+            if stages_available:
+                executable.append(analyzer_name)
+
+        return executable
+
+    def run_analysis_pass(
+        self,
+        pass_name: str,
+        entry: dict,
+        procedure_checks: list | None = None,
+    ) -> dict[str, Any]:
+        """
+        Execute the specified analysis pass.
+
+        Args:
+            pass_name: Analysis name (e.g., "amd_buffer_ops", "loop_schedules")
+            entry: Trace entry (contains payload)
+            procedure_checks: Procedure checks configuration
+
+        Returns:
+            Analysis result dictionary
+
+        Raises:
+            ValueError: If the pass_name is not found in the registry
+        """
+        from tritonparse.parse.ir_analysis import AnalysisRegistry
+
+        analyzer = AnalysisRegistry.get_analyzer(pass_name)
+        if analyzer is None:
+            available = AnalysisRegistry.list_analyzers()
+            raise ValueError(
+                f"Analyzer '{pass_name}' not found. Available analyzers: {available}"
+            )
+
+        return analyzer(entry, procedure_checks)
+
+    def register_backend_analyzer(
+        self,
+        analyzer_id: str,
+        analyzer_func,
+        required_stages: tuple[str, ...] = (),
+    ) -> None:
+        """
+        Register a backend-specific analyzer to the analyzer registry.
+
+        This allows adapters to register custom analyzers for backend-specific
+        analysis passes that are not part of the common analyzer registry.
+
+        Args:
+            analyzer_id: The analyzer identifier (e.g., "amd_buffer_ops")
+            analyzer_func: The analyzer function with signature
+                          (entry, procedure_checks) -> dict | None
+            required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
+        """
+        from tritonparse.parse.ir_analysis import AnalysisRegistry
+
+        # Use this adapter's name as affinity
+        adapter_affinity = self.adapter_name
+        AnalysisRegistry.register(
+            analyzer_id, analyzer_func, required_stages, adapter_affinity
+        )
 
     def normalize_device_string(self, device: str) -> str:
         return device
@@ -208,11 +320,19 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
 
 class AmdTritonAdapter(CompilationPipelineAdapter):
     def __init__(self):
-        """Initialize and register backend-specific parsers and stage descriptors."""
+        """Initialize and register backend-specific parsers and analyzers."""
+        from tritonparse.parse.ir_analysis import _analyze_amd_buffer_ops
         from tritonparse.parse.ir_parser import _parse_amdgcn_loc
 
         # Register AMD-specific parsers
         self.register_backend_parser("amdgcn_loc", _parse_amdgcn_loc)
+
+        # Register AMD-specific analyzers
+        self.register_backend_analyzer(
+            "amd_buffer_ops",
+            _analyze_amd_buffer_ops,
+            required_stages=("ttgir", "amdgcn"),
+        )
 
         # Pre-initialize stage descriptors (immutable objects, can be reused)
         self._stages = [

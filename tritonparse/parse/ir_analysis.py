@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from tritonparse.tp_logger import get_logger
 
@@ -16,6 +16,87 @@ logger = get_logger("IRAnalysis")
 
 # Default timeout (in seconds) for FileCheck subprocess calls
 FILECHECK_TIMEOUT_SECONDS = 30
+
+
+# =============================================================================
+# ANALYSIS REGISTRY
+# =============================================================================
+@dataclass
+class AnalyzerInfo:
+    """
+    Information about a registered analyzer.
+
+    Attributes:
+        name: Analyzer name (e.g., "amd_buffer_ops")
+        func: Analyzer function with signature (entry, procedure_checks) -> dict | None
+        required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
+        adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
+                       None means common/shared analyzer.
+    """
+
+    name: str
+    func: Callable
+    required_stages: tuple[str, ...]
+    adapter_affinity: str | None = None
+
+
+class AnalysisRegistry:
+    """
+    Registry for managing IR analysis functions and their metadata.
+
+    This registry allows adapters to register and retrieve analysis functions
+    by analysis_id. It supports both common analyzers (shared across backends)
+    and backend-specific analyzers.
+    """
+
+    _analyzer_infos: dict[str, AnalyzerInfo] = {}
+
+    @classmethod
+    def register(
+        cls,
+        analyzer_id: str,
+        analyzer_func: Callable,
+        required_stages: tuple[str, ...] = (),
+        adapter_affinity: str | None = None,
+    ) -> None:
+        """
+        Register an analyzer with its metadata.
+
+        Args:
+            analyzer_id: Analyzer identifier (e.g., "amd_buffer_ops")
+            analyzer_func: Analyzer function
+            required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
+            adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
+                           None means common/shared analyzer.
+        """
+        info = AnalyzerInfo(
+            name=analyzer_id,
+            func=analyzer_func,
+            required_stages=required_stages,
+            adapter_affinity=adapter_affinity,
+        )
+        cls._analyzer_infos[analyzer_id] = info
+
+    @classmethod
+    def get_analyzer_info(cls, analyzer_id: str) -> AnalyzerInfo | None:
+        """Get analyzer info by name."""
+        return cls._analyzer_infos.get(analyzer_id)
+
+    @classmethod
+    def get_analyzer(cls, analyzer_id: str) -> Callable | None:
+        """Get the analyzer function by name."""
+        info = cls._analyzer_infos.get(analyzer_id)
+        return info.func if info else None
+
+    @classmethod
+    def list_analyzers(cls) -> list[str]:
+        """List all registered analyzer IDs."""
+        return list(cls._analyzer_infos.keys())
+
+    @classmethod
+    def clear(cls) -> None:
+        """Clear all registered analyzers (mainly for testing)."""
+        cls._analyzer_infos.clear()
 
 
 # =============================================================================
@@ -958,8 +1039,110 @@ def _analyze_loop_schedules(
 
 
 def _generate_ir_analysis(
-    entry: str, procedure_checks: list[dict[str, Any]] | None = None
-):
+    entry: dict[str, Any], procedure_checks: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """
+    Generate IR analysis results (adapter-driven with fallback).
+
+    Two-level dispatch:
+    1. Priority: Adapter-driven (for new traces with backend_name in metadata)
+    2. Fallback: Hardcoded logic (for old traces without backend_name)
+
+    Args:
+        entry: Trace entry containing payload
+        procedure_checks: Optional procedure checks configuration
+
+    Returns:
+        Dictionary of analysis results
+    """
+    payload = entry.get("payload", {})
+    metadata = payload.get("metadata", {})
+
+    # Try adapter-driven path when backend_name is available
+    backend_name = metadata.get("backend_name")
+    if isinstance(backend_name, str):
+        try:
+            return _generate_ir_analysis_adapter_driven(entry, procedure_checks)
+        except ValueError as e:
+            logger.warning(
+                f"Adapter-driven analysis failed: {e}. Falling back to legacy."
+            )
+
+    # Fallback: hardcoded logic (for traces without backend_name or adapter failure)
+    return _generate_ir_analysis_legacy(entry, procedure_checks)
+
+
+def _generate_ir_analysis_adapter_driven(
+    entry: dict[str, Any], procedure_checks: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """
+    Adapter-driven IR analysis generation.
+
+    This implements the new adapter-based analysis dispatch:
+    1. Get enabled analyses from environment variable
+    2. Resolve adapter from backend metadata
+    3. Get executable analyzers from adapter (combining registration, artifacts, user preference)
+    4. Execute each executable analysis
+
+    Args:
+        entry: Trace entry containing payload
+        procedure_checks: Optional procedure checks configuration
+
+    Returns:
+        Dictionary of analysis results
+    """
+    from tritonparse.backend import get_backend_registry
+
+    payload = entry.get("payload", {})
+    metadata = payload.get("metadata", {})
+    file_content = payload.get("file_content", {})
+
+    # Get user-enabled analysis list from environment variable
+    enabled_analyses = _get_user_enabled_analyses()
+
+    # If all analyses are disabled, return empty
+    if enabled_analyses is not None and len(enabled_analyses) == 0:
+        logger.debug("All analyses are disabled via TRITONPARSE_ANALYSIS env var")
+        return {}
+
+    # Resolve adapter from backend metadata
+    adapter = get_backend_registry().resolve_from_trace(metadata)
+
+    # Get executable analyzers (adapter handles all the logic)
+    executable_analyzers = adapter.get_executable_analyzers(
+        file_content, enabled_analyses
+    )
+
+    # Execute each executable analyzer
+    analysis_results = {}
+    for analyzer_name in executable_analyzers:
+        try:
+            result = adapter.run_analysis_pass(analyzer_name, entry, procedure_checks)
+            if result:
+                analysis_results.update(result)
+                logger.debug(f"Analysis '{analyzer_name}' completed successfully")
+        except Exception as e:
+            logger.warning(f"Analysis '{analyzer_name}' failed: {e}")
+
+    return analysis_results
+
+
+def _generate_ir_analysis_legacy(
+    entry: dict[str, Any], procedure_checks: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """
+    Legacy IR analysis generation (backward compatibility).
+
+    This preserves the original hardcoded analysis logic for old traces
+    that don't have backend metadata.
+
+    Args:
+        entry: Trace entry containing payload
+        procedure_checks: Optional procedure checks configuration
+
+    Returns:
+        Dictionary of analysis results
+    """
     payload = entry.setdefault("payload", {})
     file_content = payload.get("file_content", {})
     file_path = payload.get("file_path", {})
@@ -985,7 +1168,6 @@ def _generate_ir_analysis(
         if loop_schedule:
             ir_analysis["loop_schedules"] = loop_schedule
 
-    # Add FileCheck-based procedure detection if procedure_checks are specified
     if procedure_checks and ttgir_key:
         procedure_results = find_procedures_with_patterns(
             procedure_checks,
@@ -998,3 +1180,219 @@ def _generate_ir_analysis(
             ir_analysis["procedure_checks"] = procedure_results
 
     return ir_analysis
+
+
+# =============================================================================
+# STANDARDIZED ANALYZER WRAPPERS
+# =============================================================================
+def _validate_required_stages(
+    file_content: dict[str, str],
+    required_extensions: list[str],
+    analysis_name: str,
+) -> dict[str, str] | None:
+    """
+    Validate that required stages exist in file_content.
+
+    This is a defensive check that provides clear error messages if required
+    stages are missing. This should not happen if called through adapter properly,
+    but provides safety for direct calls and debugging.
+
+    Args:
+        file_content: Dictionary mapping file keys to file content
+        required_extensions: List of required file extensions (e.g., [".ttgir", ".amdgcn"])
+        analysis_name: Name of the analysis (for logging)
+
+    Returns:
+        dict: {extension: stage_key} if all stages exist
+        None: if any stage is missing
+    """
+    stage_keys = {}
+    for ext in required_extensions:
+        key = next((k for k in file_content if k.endswith(ext)), None)
+        if not key:
+            logger.debug(
+                f"{analysis_name} analysis required stage '{ext}' not found in file_content. "
+                f"Available keys: {list(file_content.keys())[:5]}..."  # Show first 5 keys
+            )
+            return None
+        stage_keys[ext] = key
+
+    return stage_keys
+
+
+def _analyze_amd_buffer_ops(
+    entry: dict[str, Any],
+    procedure_checks: list | None = None,
+) -> dict[str, Any] | None:
+    """
+    AMD buffer ops analysis (standardized wrapper).
+
+    This is a standardized wrapper that adapts the existing
+    _analyze_buffer_ops function to the analyzer registry interface.
+
+    Args:
+        entry: Trace entry containing payload with file_content, file_path, etc.
+        procedure_checks: Optional procedure checks configuration (not used for this analysis)
+
+    Returns:
+        Analysis results dictionary or None if analysis cannot be performed
+    """
+    payload = entry.get("payload", {})
+    file_content = payload.get("file_content", {})
+    file_path = payload.get("file_path", {})
+
+    # Validate required stages (defensive check)
+    stage_keys = _validate_required_stages(
+        file_content, [".ttgir", ".amdgcn"], "amd_buffer_ops"
+    )
+    if not stage_keys:
+        return None
+
+    # Extract stage keys
+    ttgir_key = stage_keys[".ttgir"]
+    amdgcn_key = stage_keys[".amdgcn"]
+
+    # Call existing function (logic unchanged)
+    io_counts = _analyze_buffer_ops(ttgir_key, amdgcn_key, file_content, file_path)
+
+    if io_counts:
+        return {"io_counts": io_counts}
+    return None
+
+
+def _analyze_loop_schedules_generic(
+    entry: dict[str, Any],
+    procedure_checks: list | None = None,
+) -> dict[str, Any] | None:
+    """
+    Generic analyzer for loop schedules.
+
+    This is a standardized wrapper that adapts the existing
+    _analyze_loop_schedules function to the analyzer registry interface.
+
+    Args:
+        entry: Trace entry containing payload with file_content, file_path, etc.
+        procedure_checks: Optional procedure checks configuration (not used for this analysis)
+
+    Returns:
+        Analysis results dictionary or None if analysis cannot be performed
+    """
+    payload = entry.get("payload", {})
+    file_content = payload.get("file_content", {})
+    file_path = payload.get("file_path", {})
+    source_mappings = payload.get("source_mappings", {})
+
+    # Validate required stages (defensive check)
+    stage_keys = _validate_required_stages(
+        file_content, [".ttir", ".ttgir"], "loop_schedules"
+    )
+    if not stage_keys:
+        return None
+
+    # Extract stage keys
+    ttir_key = stage_keys[".ttir"]
+    ttgir_key = stage_keys[".ttgir"]
+
+    # Call existing function (logic unchanged)
+    loop_schedule = _analyze_loop_schedules(
+        ttir_key, ttgir_key, file_content, file_path, payload, source_mappings
+    )
+
+    if loop_schedule:
+        return {"loop_schedules": loop_schedule}
+    return None
+
+
+def _analyze_procedures_generic(
+    entry: dict[str, Any],
+    procedure_checks: list | None = None,
+) -> dict[str, Any] | None:
+    """
+    Generic analyzer for FileCheck-based procedure detection.
+
+    This is a standardized wrapper that adapts the existing
+    find_procedures_with_patterns function to the analyzer registry interface.
+
+    Args:
+        entry: Trace entry containing payload with file_content, file_path, etc.
+        procedure_checks: Procedure checks configuration (required for this analysis)
+
+    Returns:
+        Analysis results dictionary or None if analysis cannot be performed
+    """
+    if not procedure_checks:
+        return None
+
+    payload = entry.get("payload", {})
+    file_content = payload.get("file_content", {})
+    file_path = payload.get("file_path", {})
+
+    # Validate required stages (defensive check)
+    stage_keys = _validate_required_stages(file_content, [".ttgir"], "procedure_checks")
+    if not stage_keys:
+        return None
+
+    # Extract stage keys
+    ttgir_key = stage_keys[".ttgir"]
+
+    # TTIR is optional for procedure checks, but we try to get it if available
+    ttir_key = next((k for k in file_content if k.endswith(".ttir")), None)
+
+    # Call existing function (logic unchanged)
+    procedure_results = find_procedures_with_patterns(
+        procedure_checks,
+        ttgir_key,
+        file_content,
+        file_path,
+        ttir_key=ttir_key,
+    )
+
+    if procedure_results:
+        return {"procedure_checks": procedure_results}
+    return None
+
+
+# =============================================================================
+# ENVIRONMENT VARIABLE CONTROL
+# =============================================================================
+def _get_user_enabled_analyses() -> set[str] | None:
+    """
+    Get user-enabled analysis list from environment variable.
+
+    Returns:
+        None: Enable all analyses (default)
+        set: Enabled analysis name set
+        Empty set: Disable all analyses
+    """
+    env_value = os.environ.get("TRITONPARSE_ANALYSIS", "all").strip()
+
+    if not env_value or env_value.lower() == "none":
+        return set()  # Disable all
+    elif env_value.lower() == "all":
+        return None  # Enable all (default)
+    else:
+        # Comma-separated analysis list
+        return set(name.strip() for name in env_value.split(",") if name.strip())
+
+
+# =============================================================================
+# COMMON ANALYZER INITIALIZATION
+# =============================================================================
+def _initialize_common_analyzers() -> None:
+    """Register common analyzers that are shared across all backends."""
+    AnalysisRegistry.register(
+        "loop_schedules",
+        _analyze_loop_schedules_generic,
+        required_stages=("ttir", "ttgir"),
+        adapter_affinity=None,  # Common analyzer
+    )
+    AnalysisRegistry.register(
+        "procedure_checks",
+        _analyze_procedures_generic,
+        required_stages=("ttgir",),
+        adapter_affinity=None,  # Common analyzer
+    )
+
+
+# Initialize common analyzers on module load
+_initialize_common_analyzers()
