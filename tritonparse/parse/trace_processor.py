@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
-from tritonparse.backend import deserialize_stage_descriptors_from_event
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -248,8 +247,8 @@ def _resolve_source_mappable_stage_keys(
     Resolve stage keys in a trace that support source mapping.
 
     Two resolution paths are supported:
-    1. metadata.stage_descriptors (new trace format)
-    2. Hardcoded extension fallback (legacy trace format)
+    1. Adapter-driven (via backend_name in metadata)
+    2. Hardcoded extension fallback (for traces without backend_name)
 
     Args:
         entry: Trace event dict containing event_type and payload.
@@ -257,56 +256,44 @@ def _resolve_source_mappable_stage_keys(
     Returns:
         Dict mapping stage name to artifact filename
         Example: {"ttir": "kernel.ttir", "ttgir": "kernel.ttgir"}
-
-    Example:
-        Input: entry contains file_content={"kernel.ttir": "...", "kernel.ptx": "..."}
-               and stage_descriptors=[{"name": "ttir", "extension": ".ttir", ...}]
-        Output: {"ttir": "kernel.ttir"}
     """
     payload = entry.get("payload", {})
     file_content = payload.get("file_content", {})
+    metadata = payload.get("metadata", {})
 
-    # Only consider file_content: source mapping requires parsing file contents.
-    # If content was not captured, source mapping cannot be generated.
-
-    # Path 1: resolve from metadata.stage_descriptors (new trace format).
     stage_keys: Dict[str, str] = {}
-    try:
-        stage_descriptors = deserialize_stage_descriptors_from_event(entry)
-    except ValueError as e:
-        logger.debug(
-            f"Failed to deserialize metadata.stage_descriptors: {e}; falling back to legacy behavior"
-        )
-        stage_descriptors = []
 
-    if stage_descriptors:
-        for stage in stage_descriptors:
-            if not getattr(stage, "supports_source_mapping", True):
-                continue
+    # Path 1: adapter-driven (resolve stages from adapter via backend_name).
+    backend_name = metadata.get("backend_name")
+    if isinstance(backend_name, str):
+        try:
+            from tritonparse.backend import get_backend_registry
 
-            extension = getattr(stage, "extension", None)
-            if not isinstance(extension, str):
-                continue
-            # Find the first artifact in file_content that endswith the extension.
-            # Our data model guarantees at most one matching key per extension; use
-            # generator to avoid allocating an intermediate list.
-            artifact_name = next(
-                (name for name in file_content if name.endswith(extension)),
-                None,
+            adapter = get_backend_registry().resolve_from_trace(metadata)
+            for stage in adapter.get_ir_stages():
+                if not stage.supports_source_mapping:
+                    continue
+                artifact_name = next(
+                    (name for name in file_content if name.endswith(stage.extension)),
+                    None,
+                )
+                if artifact_name is None:
+                    continue
+                if stage.name not in stage_keys:
+                    stage_keys[stage.name] = artifact_name
+
+            if stage_keys:
+                logger.debug(
+                    f"Resolved stage keys from adapter: {list(stage_keys.keys())}"
+                )
+                return stage_keys
+        except ValueError as e:
+            logger.debug(
+                f"Adapter resolution failed for backend_name={backend_name}: {e}; "
+                f"falling back to hardcoded extensions"
             )
-            if artifact_name is None:
-                continue
-            if stage.name in stage_keys:
-                continue
-            stage_keys[stage.name] = artifact_name
-
-        logger.debug(
-            f"Resolved stage keys from metadata.stage_descriptors: {list(stage_keys.keys())}"
-        )
-        return stage_keys
 
     # Path 2: hardcoded extension fallback (original upstream behavior).
-    # This intentionally mirrors the upstream hardcoded logic and only scans file_content.
     fallback_extensions = {
         "ttir": ".ttir",
         "ttgir": ".ttgir",
