@@ -147,7 +147,7 @@ class CompilationPipelineAdapter(ABC):
 
             # Check 2: Are required stages available?
             info = AnalysisRegistry.get_analyzer_info(analyzer_name)
-            if not info or not info.required_stages:
+            if not info:
                 continue
 
             stages_available = True
@@ -202,7 +202,7 @@ class CompilationPipelineAdapter(ABC):
         self,
         analyzer_id: str,
         analyzer_func,
-        required_stages: tuple[str, ...] = (),
+        required_stages: tuple[str, ...],
     ) -> None:
         """
         Register a backend-specific analyzer to the analyzer registry.

@@ -57,7 +57,7 @@ class AnalysisRegistry:
         cls,
         analyzer_id: str,
         analyzer_func: Callable,
-        required_stages: tuple[str, ...] = (),
+        required_stages: tuple[str, ...],
         adapter_affinity: str | None = None,
     ) -> None:
         """
