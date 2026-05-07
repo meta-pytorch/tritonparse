@@ -178,6 +178,22 @@ def generate_source_mappings(
 ) -> Dict[str, Dict[str, Any]]:
     """
     Generate source mappings from intermediate representation (IR) content to the source file.
+
+    Two parser resolution paths are supported:
+    1. Adapter-driven (via backend_name in metadata)
+    2. Hardcoded parser selection (for backward compatibility)
+
+    Note: Both failure modes in Path 1 intentionally fall through to
+    Path 2 as a defensive safety net:
+
+    - ``resolve_from_trace`` raises ``ValueError`` (no matching adapter
+      registered for the given ``backend_name``).
+    - Adapter resolves successfully but yields no usable parser (e.g.
+      the stage descriptor is not found or its ``parser_id`` is ``"none"``).
+
+    Once a parser is resolved, execution errors propagate immediately
+    and are *not* silently caught as fallback triggers.
+
     Example:
     loc definition: Line 39 in ttir: #loc2 = loc("/tmp/torchinductor_yhao/yp/abcdef.py":20:28)
     loc reference: Line 9 in ttir: %0 = tt.get_program_id x : i32 loc(#loc2)
@@ -249,6 +265,14 @@ def _resolve_source_mappable_stage_keys(
     Two resolution paths are supported:
     1. Adapter-driven (via backend_name in metadata)
     2. Hardcoded extension fallback (for traces without backend_name)
+
+    Note: Both failure modes in Path 1 intentionally fall through to
+    Path 2 as a defensive safety net; do not add an early return:
+
+    - ``resolve_from_trace`` raises ``ValueError`` (no matching adapter
+      registered for the given ``backend_name``).
+    - Adapter resolves successfully but no artifacts in ``file_content``
+      match the adapter's stage extensions, leaving ``stage_keys`` empty.
 
     Args:
         entry: Trace event dict containing event_type and payload.
