@@ -72,7 +72,9 @@ class AnalysisRegistry:
                            None means common/shared analyzer.
         """
         if analyzer_id in cls._analyzer_infos:
-            logger.debug(f"Analyzer '{analyzer_id}' is already registered. Overwriting.")
+            logger.debug(
+                f"Analyzer '{analyzer_id}' is already registered. Overwriting."
+            )
         info = AnalyzerInfo(
             name=analyzer_id,
             func=analyzer_func,
@@ -101,7 +103,6 @@ class AnalysisRegistry:
     def list_analyzer_infos(cls) -> list[tuple[str, AnalyzerInfo]]:
         """List all registered (analyzer_id, AnalyzerInfo) pairs."""
         return list(cls._analyzer_infos.items())
-
 
 
 # =============================================================================
@@ -1050,8 +1051,8 @@ def _generate_ir_analysis(
     Generate IR analysis results (adapter-driven with fallback).
 
     Two-level dispatch:
-    1. Priority: Adapter-driven (for traces with backend_name in metadata)
-    2. Fallback: Hardcoded logic (for traces without backend_name)
+    1. Priority: Adapter-driven
+    2. Fallback: Hardcoded legacy logic when adapter resolution fails
 
     Both paths honor the ``TRITONPARSE_ANALYSIS`` environment variable.
 
@@ -1068,22 +1069,14 @@ def _generate_ir_analysis(
         logger.debug("All analyses are disabled via TRITONPARSE_ANALYSIS env var")
         return {}
 
-    payload = entry.get("payload", {})
-    metadata = payload.get("metadata", {})
+    try:
+        return _generate_ir_analysis_adapter_driven(
+            entry, procedure_checks, enabled_analyses
+        )
+    except ValueError as e:
+        logger.warning(f"Adapter-driven analysis failed: {e}. Falling back to legacy.")
 
-    # Try adapter-driven path when backend_name is available
-    backend_name = metadata.get("backend_name")
-    if isinstance(backend_name, str):
-        try:
-            return _generate_ir_analysis_adapter_driven(
-                entry, procedure_checks, enabled_analyses
-            )
-        except ValueError as e:
-            logger.warning(
-                f"Adapter-driven analysis failed: {e}. Falling back to legacy."
-            )
-
-    # Fallback: hardcoded logic (for traces without backend_name or adapter failure)
+    # Fallback: hardcoded legacy logic when adapter resolution fails
     return _generate_ir_analysis_legacy(entry, procedure_checks, enabled_analyses)
 
 
@@ -1164,14 +1157,18 @@ def _generate_ir_analysis_legacy(
         logger.debug("No IR found")
         return {}
     ir_analysis = {}
-    if amdgcn_key and ttgir_key and (
-        enabled_analyses is None or "amd_buffer_ops" in enabled_analyses
+    if (
+        amdgcn_key
+        and ttgir_key
+        and (enabled_analyses is None or "amd_buffer_ops" in enabled_analyses)
     ):
         io_counts = _analyze_buffer_ops(ttgir_key, amdgcn_key, file_content, file_path)
         if io_counts:
             ir_analysis["io_counts"] = io_counts
-    if ttir_key and ttgir_key and (
-        enabled_analyses is None or "loop_schedules" in enabled_analyses
+    if (
+        ttir_key
+        and ttgir_key
+        and (enabled_analyses is None or "loop_schedules" in enabled_analyses)
     ):
         loop_schedule = _analyze_loop_schedules(
             ttir_key, ttgir_key, file_content, file_path, payload, source_mappings
@@ -1179,8 +1176,10 @@ def _generate_ir_analysis_legacy(
         if loop_schedule:
             ir_analysis["loop_schedules"] = loop_schedule
 
-    if procedure_checks and ttgir_key and (
-        enabled_analyses is None or "procedure_checks" in enabled_analyses
+    if (
+        procedure_checks
+        and ttgir_key
+        and (enabled_analyses is None or "procedure_checks" in enabled_analyses)
     ):
         procedure_results = find_procedures_with_patterns(
             procedure_checks,
@@ -1198,7 +1197,7 @@ def _generate_ir_analysis_legacy(
 # =============================================================================
 # STANDARDIZED ANALYZER WRAPPERS
 # =============================================================================
-# Wrappers use dot-extension lists (e.g. [".ttir"]) to match raw file_content keys; 
+# Wrappers use dot-extension lists (e.g. [".ttir"]) to match raw file_content keys;
 # adapter registration uses bare stage names (e.g. "ttir").
 def _validate_required_stages(
     file_content: dict[str, str],
@@ -1367,7 +1366,6 @@ def _analyze_procedures_generic(
     if procedure_results:
         return {"procedure_checks": procedure_results}
     return None
-
 
 
 # =============================================================================

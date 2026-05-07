@@ -8,16 +8,13 @@ from tritonparse.backend import (
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
-from tritonparse.parse.ir_analysis import (
-    _generate_ir_analysis,
-    AnalysisRegistry,
-)
-from tritonparse.shared_vars import get_enabled_analyses
+from tritonparse.parse.ir_analysis import _generate_ir_analysis, AnalysisRegistry
 from tritonparse.parse.ir_parser import ParserRegistry
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
 )
+from tritonparse.shared_vars import get_enabled_analyses
 
 
 def make_event(file_content: dict, stage_descriptors: list | None = None):
@@ -364,11 +361,11 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         self.assertEqual(_generate_ir_analysis(empty_trace), {})
 
     def test_analysis_legacy_path(self):
-        """Legacy path (no backend_name): returns dict with artifacts, empty dict without."""
+        """Fallback to legacy when adapter resolution fails."""
         # With artifacts
-        old_trace = {
+        fallback_trace = {
             "payload": {
-                "metadata": {},
+                "metadata": {"backend_name": "unknown"},
                 "file_content": {
                     "kernel.ttgir": "ttgir content",
                     "kernel.amdgcn": "amdgcn content",
@@ -377,14 +374,16 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
-        self.assertIsInstance(_generate_ir_analysis(old_trace), dict)
+        result = _generate_ir_analysis(fallback_trace)
+        self.assertIsInstance(result, dict)
+        self.assertIn("io_counts", result)
 
         # Without artifacts
         self.assertEqual(
             _generate_ir_analysis(
                 {
                     "payload": {
-                        "metadata": {},
+                        "metadata": {"backend_name": "unknown"},
                         "file_content": {},
                         "file_path": {},
                         "source_mappings": {},
@@ -486,9 +485,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
 
         # Comma-separated with spaces → trimmed set
         os.environ["TRITONPARSE_ANALYSIS"] = " amd_buffer_ops , loop_schedules "
-        self.assertEqual(
-            get_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"}
-        )
+        self.assertEqual(get_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"})
 
 
 if __name__ == "__main__":
