@@ -180,7 +180,7 @@ def generate_source_mappings(
     Generate source mappings from intermediate representation (IR) content to the source file.
 
     Two parser resolution paths are supported:
-    1. Adapter-driven (via backend_name in metadata)
+    1. Adapter-driven (try resolving an adapter from metadata)
     2. Hardcoded parser selection (for backward compatibility)
 
     Note: Both failure modes in Path 1 intentionally fall through to
@@ -220,8 +220,8 @@ def generate_source_mappings(
     if other_mappings is None:
         other_mappings = []
 
-    # Only enter adapter-driven resolution when trace metadata can identify a backend.
-    if metadata is not None and isinstance(metadata.get("backend_name"), str):
+    # Try adapter-driven resolution first whenever metadata is available.
+    if metadata is not None:
         parser = None
         try:
             from tritonparse.backend import get_backend_registry
@@ -263,8 +263,8 @@ def _resolve_source_mappable_stage_keys(
     Resolve stage keys in a trace that support source mapping.
 
     Two resolution paths are supported:
-    1. Adapter-driven (via backend_name in metadata)
-    2. Hardcoded extension fallback (for traces without backend_name)
+    1. Adapter-driven (try resolving stages from adapter metadata)
+    2. Hardcoded extension fallback (when adapter resolution fails)
 
     Note: Both failure modes in Path 1 intentionally fall through to
     Path 2 as a defensive safety net; do not add an early return:
@@ -287,35 +287,32 @@ def _resolve_source_mappable_stage_keys(
 
     stage_keys: Dict[str, str] = {}
 
-    # Path 1: adapter-driven (resolve stages from adapter via backend_name).
+    # Path 1: adapter-driven (try resolving stages from adapter metadata).
     backend_name = metadata.get("backend_name")
-    if isinstance(backend_name, str):
-        try:
-            from tritonparse.backend import get_backend_registry
+    try:
+        from tritonparse.backend import get_backend_registry
 
-            adapter = get_backend_registry().resolve_from_trace(metadata)
-            for stage in adapter.get_ir_stages():
-                if not stage.supports_source_mapping:
-                    continue
-                artifact_name = next(
-                    (name for name in file_content if name.endswith(stage.extension)),
-                    None,
-                )
-                if artifact_name is None:
-                    continue
-                if stage.name not in stage_keys:
-                    stage_keys[stage.name] = artifact_name
-
-            if stage_keys:
-                logger.debug(
-                    f"Resolved stage keys from adapter: {list(stage_keys.keys())}"
-                )
-                return stage_keys
-        except ValueError as e:
-            logger.debug(
-                f"Adapter resolution failed for backend_name={backend_name}: {e}; "
-                f"falling back to hardcoded extensions"
+        adapter = get_backend_registry().resolve_from_trace(metadata)
+        for stage in adapter.get_ir_stages():
+            if not stage.supports_source_mapping:
+                continue
+            artifact_name = next(
+                (name for name in file_content if name.endswith(stage.extension)),
+                None,
             )
+            if artifact_name is None:
+                continue
+            if stage.name not in stage_keys:
+                stage_keys[stage.name] = artifact_name
+
+        if stage_keys:
+            logger.debug(f"Resolved stage keys from adapter: {list(stage_keys.keys())}")
+            return stage_keys
+    except ValueError as e:
+        logger.debug(
+            f"Adapter resolution failed for backend_name={backend_name}: {e}; "
+            f"falling back to hardcoded extensions"
+        )
 
     # Path 2: hardcoded extension fallback (original upstream behavior).
     fallback_extensions = {
