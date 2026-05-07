@@ -110,7 +110,7 @@ class CompilationPipelineAdapter(ABC):
         my_name = self.adapter_name
         analyzer_names = []
 
-        for _, info in AnalysisRegistry._analyzer_infos.items():
+        for _, info in AnalysisRegistry.list_analyzer_infos():
             # Include analyzers specific to this adapter or common analyzers
             if info.adapter_affinity in (my_name, None):
                 analyzer_names.append(info.name)

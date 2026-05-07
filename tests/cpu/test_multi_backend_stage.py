@@ -4,6 +4,7 @@ import unittest
 from tritonparse.backend import (
     AmdTritonAdapter,
     deserialize_stage_descriptors_from_event,
+    get_backend_registry,
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
@@ -316,9 +317,8 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.registry = PipelineAdapterRegistry()
-        self.registry.register(NvidiaTritonAdapter)
-        self.registry.register(AmdTritonAdapter)
+        # Use the module-level registry (same one the dispatcher uses)
+        self.registry = get_backend_registry()
 
         # Save original environment variable
         self.original_env = os.environ.get("TRITONPARSE_ANALYSIS")
@@ -441,7 +441,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         """Each analysis pass's required_stages should exist in the adapter."""
         amd_adapter = self.registry.resolve(adapter_name="hip_triton")
         for pass_name in amd_adapter.get_analysis_passes():
-            info = AnalysisRegistry._analyzer_infos.get(pass_name)
+            info = AnalysisRegistry.get_analyzer_info(pass_name)
             self.assertIsNotNone(info, f"Analyzer '{pass_name}' should be registered")
             for stage_name in info.required_stages:
                 self.assertIsNotNone(

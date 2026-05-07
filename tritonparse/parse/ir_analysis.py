@@ -5,8 +5,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from tritonparse.shared_vars import get_enabled_analyses
 from tritonparse.tp_logger import get_logger
@@ -70,6 +71,8 @@ class AnalysisRegistry:
             adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
                            None means common/shared analyzer.
         """
+        if analyzer_id in cls._analyzer_infos:
+            logger.debug(f"Analyzer '{analyzer_id}' is already registered. Overwriting.")
         info = AnalyzerInfo(
             name=analyzer_id,
             func=analyzer_func,
@@ -95,9 +98,10 @@ class AnalysisRegistry:
         return list(cls._analyzer_infos.keys())
 
     @classmethod
-    def clear(cls) -> None:
-        """Clear all registered analyzers (mainly for testing)."""
-        cls._analyzer_infos.clear()
+    def list_analyzer_infos(cls) -> list[tuple[str, AnalyzerInfo]]:
+        """List all registered (analyzer_id, AnalyzerInfo) pairs."""
+        return list(cls._analyzer_infos.items())
+
 
 
 # =============================================================================
@@ -1194,6 +1198,8 @@ def _generate_ir_analysis_legacy(
 # =============================================================================
 # STANDARDIZED ANALYZER WRAPPERS
 # =============================================================================
+# Wrappers use dot-extension lists (e.g. [".ttir"]) to match raw file_content keys; 
+# adapter registration uses bare stage names (e.g. "ttir").
 def _validate_required_stages(
     file_content: dict[str, str],
     required_extensions: list[str],
@@ -1219,9 +1225,11 @@ def _validate_required_stages(
     for ext in required_extensions:
         key = next((k for k in file_content if k.endswith(ext)), None)
         if not key:
+            keys_preview = list(file_content.keys())[:5]
+            suffix = "..." if len(file_content) > 5 else ""
             logger.debug(
                 f"{analysis_name} analysis required stage '{ext}' not found in file_content. "
-                f"Available keys: {list(file_content.keys())[:5]}..."  # Show first 5 keys
+                f"Available keys: {keys_preview}{suffix}"
             )
             return None
         stage_keys[ext] = key
