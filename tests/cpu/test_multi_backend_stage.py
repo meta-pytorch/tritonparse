@@ -9,9 +9,9 @@ from tritonparse.backend import (
 )
 from tritonparse.parse.ir_analysis import (
     _generate_ir_analysis,
-    _get_user_enabled_analyses,
     AnalysisRegistry,
 )
+from tritonparse.shared_vars import get_enabled_analyses
 from tritonparse.parse.ir_parser import ParserRegistry
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
@@ -470,24 +470,24 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
             amd_adapter.run_analysis_pass("nonexistent_analyzer", test_entry, None)
 
     def test_get_enabled_analyses_helper_function(self):
-        """Test _get_user_enabled_analyses() with default, ALL/none keywords, and comma list."""
+        """Test get_enabled_analyses() with default, ALL/none keywords, and comma list."""
         # Default (no env var) → enable all
         if "TRITONPARSE_ANALYSIS" in os.environ:
             del os.environ["TRITONPARSE_ANALYSIS"]
-        self.assertIsNone(_get_user_enabled_analyses())
+        self.assertIsNone(get_enabled_analyses())
 
         # "ALL" → enable all (also covers case insensitivity)
         os.environ["TRITONPARSE_ANALYSIS"] = "ALL"
-        self.assertIsNone(_get_user_enabled_analyses())
+        self.assertIsNone(get_enabled_analyses())
 
         # "none" → disable all
         os.environ["TRITONPARSE_ANALYSIS"] = "none"
-        self.assertEqual(_get_user_enabled_analyses(), set())
+        self.assertEqual(get_enabled_analyses(), set())
 
         # Comma-separated with spaces → trimmed set
         os.environ["TRITONPARSE_ANALYSIS"] = " amd_buffer_ops , loop_schedules "
         self.assertEqual(
-            _get_user_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"}
+            get_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"}
         )
 
 

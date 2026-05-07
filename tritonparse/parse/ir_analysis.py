@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
+from tritonparse.shared_vars import get_enabled_analyses
 from tritonparse.tp_logger import get_logger
 
 from .sourcemap_utils import load_ir_contents
@@ -1045,8 +1046,10 @@ def _generate_ir_analysis(
     Generate IR analysis results (adapter-driven with fallback).
 
     Two-level dispatch:
-    1. Priority: Adapter-driven (for new traces with backend_name in metadata)
-    2. Fallback: Hardcoded logic (for old traces without backend_name)
+    1. Priority: Adapter-driven (for traces with backend_name in metadata)
+    2. Fallback: Hardcoded logic (for traces without backend_name)
+
+    Both paths honor the ``TRITONPARSE_ANALYSIS`` environment variable.
 
     Args:
         entry: Trace entry containing payload
@@ -1055,6 +1058,12 @@ def _generate_ir_analysis(
     Returns:
         Dictionary of analysis results
     """
+    # Env check — shared by both paths
+    enabled_analyses = get_enabled_analyses()
+    if enabled_analyses is not None and len(enabled_analyses) == 0:
+        logger.debug("All analyses are disabled via TRITONPARSE_ANALYSIS env var")
+        return {}
+
     payload = entry.get("payload", {})
     metadata = payload.get("metadata", {})
 
@@ -1062,31 +1071,30 @@ def _generate_ir_analysis(
     backend_name = metadata.get("backend_name")
     if isinstance(backend_name, str):
         try:
-            return _generate_ir_analysis_adapter_driven(entry, procedure_checks)
+            return _generate_ir_analysis_adapter_driven(
+                entry, procedure_checks, enabled_analyses
+            )
         except ValueError as e:
             logger.warning(
                 f"Adapter-driven analysis failed: {e}. Falling back to legacy."
             )
 
     # Fallback: hardcoded logic (for traces without backend_name or adapter failure)
-    return _generate_ir_analysis_legacy(entry, procedure_checks)
+    return _generate_ir_analysis_legacy(entry, procedure_checks, enabled_analyses)
 
 
 def _generate_ir_analysis_adapter_driven(
-    entry: dict[str, Any], procedure_checks: list[dict[str, Any]] | None = None
+    entry: dict[str, Any],
+    procedure_checks: list[dict[str, Any]] | None = None,
+    enabled_analyses: set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Adapter-driven IR analysis generation.
 
-    This implements the new adapter-based analysis dispatch:
-    1. Get enabled analyses from environment variable
-    2. Resolve adapter from backend metadata
-    3. Get executable analyzers from adapter (combining registration, artifacts, user preference)
-    4. Execute each executable analysis
-
     Args:
         entry: Trace entry containing payload
         procedure_checks: Optional procedure checks configuration
+        enabled_analyses: User-enabled analysis names (from env var, resolved by caller)
 
     Returns:
         Dictionary of analysis results
@@ -1096,14 +1104,6 @@ def _generate_ir_analysis_adapter_driven(
     payload = entry.get("payload", {})
     metadata = payload.get("metadata", {})
     file_content = payload.get("file_content", {})
-
-    # Get user-enabled analysis list from environment variable
-    enabled_analyses = _get_user_enabled_analyses()
-
-    # If all analyses are disabled, return empty
-    if enabled_analyses is not None and len(enabled_analyses) == 0:
-        logger.debug("All analyses are disabled via TRITONPARSE_ANALYSIS env var")
-        return {}
 
     # Resolve adapter from backend metadata
     adapter = get_backend_registry().resolve_from_trace(metadata)
@@ -1128,7 +1128,9 @@ def _generate_ir_analysis_adapter_driven(
 
 
 def _generate_ir_analysis_legacy(
-    entry: dict[str, Any], procedure_checks: list[dict[str, Any]] | None = None
+    entry: dict[str, Any],
+    procedure_checks: list[dict[str, Any]] | None = None,
+    enabled_analyses: set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Legacy IR analysis generation (backward compatibility).
@@ -1139,6 +1141,7 @@ def _generate_ir_analysis_legacy(
     Args:
         entry: Trace entry containing payload
         procedure_checks: Optional procedure checks configuration
+        enabled_analyses: User-enabled analysis names (from env var, resolved by caller)
 
     Returns:
         Dictionary of analysis results
@@ -1157,18 +1160,24 @@ def _generate_ir_analysis_legacy(
         logger.debug("No IR found")
         return {}
     ir_analysis = {}
-    if amdgcn_key and ttgir_key:
+    if amdgcn_key and ttgir_key and (
+        enabled_analyses is None or "amd_buffer_ops" in enabled_analyses
+    ):
         io_counts = _analyze_buffer_ops(ttgir_key, amdgcn_key, file_content, file_path)
         if io_counts:
             ir_analysis["io_counts"] = io_counts
-    if ttir_key and ttgir_key:
+    if ttir_key and ttgir_key and (
+        enabled_analyses is None or "loop_schedules" in enabled_analyses
+    ):
         loop_schedule = _analyze_loop_schedules(
             ttir_key, ttgir_key, file_content, file_path, payload, source_mappings
         )
         if loop_schedule:
             ir_analysis["loop_schedules"] = loop_schedule
 
-    if procedure_checks and ttgir_key:
+    if procedure_checks and ttgir_key and (
+        enabled_analyses is None or "procedure_checks" in enabled_analyses
+    ):
         procedure_results = find_procedures_with_patterns(
             procedure_checks,
             ttgir_key,
@@ -1351,28 +1360,6 @@ def _analyze_procedures_generic(
         return {"procedure_checks": procedure_results}
     return None
 
-
-# =============================================================================
-# ENVIRONMENT VARIABLE CONTROL
-# =============================================================================
-def _get_user_enabled_analyses() -> set[str] | None:
-    """
-    Get user-enabled analysis list from environment variable.
-
-    Returns:
-        None: Enable all analyses (default)
-        set: Enabled analysis name set
-        Empty set: Disable all analyses
-    """
-    env_value = os.environ.get("TRITONPARSE_ANALYSIS", "all").strip()
-
-    if not env_value or env_value.lower() == "none":
-        return set()  # Disable all
-    elif env_value.lower() == "all":
-        return None  # Enable all (default)
-    else:
-        # Comma-separated analysis list
-        return set(name.strip() for name in env_value.split(",") if name.strip())
 
 
 # =============================================================================
