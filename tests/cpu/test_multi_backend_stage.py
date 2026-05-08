@@ -1,16 +1,20 @@
+import os
 import unittest
 
 from tritonparse.backend import (
     AmdTritonAdapter,
     deserialize_stage_descriptors_from_event,
+    get_backend_registry,
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
+from tritonparse.parse.ir_analysis import _generate_ir_analysis, AnalysisRegistry
 from tritonparse.parse.ir_parser import ParserRegistry
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
 )
+from tritonparse.shared_vars import get_enabled_analyses
 
 
 def make_event(file_content: dict, stage_descriptors: list | None = None):
@@ -303,6 +307,185 @@ class TestMultiBackendStage(unittest.TestCase):
                 generate_source_mappings(ttir_content, "ttir", None, metadata_cuda)
         finally:
             ParserRegistry.register("generic_loc", original_generic_parser)
+
+
+class TestAnalysisAdapterDriven(unittest.TestCase):
+    """Comprehensive tests for adapter-driven IR analysis (new traces with metadata)."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        # Use the module-level registry (same one the dispatcher uses)
+        self.registry = get_backend_registry()
+
+        # Save original environment variable
+        self.original_env = os.environ.get("TRITONPARSE_ANALYSIS")
+
+    def tearDown(self):
+        """Clean up after tests."""
+        # Restore original environment variable
+        if self.original_env is None:
+            os.environ.pop("TRITONPARSE_ANALYSIS", None)
+        else:
+            os.environ["TRITONPARSE_ANALYSIS"] = self.original_env
+
+    def test_analysis_adapter_driven_path(self):
+        """Adapter-driven path: returns dict with artifacts, empty dict without."""
+        # With artifacts (both backends)
+        for backend in ("hip", "cuda"):
+            trace = {
+                "payload": {
+                    "metadata": {"backend_name": backend},
+                    "file_content": {
+                        "kernel.ttir": "ttir content",
+                        "kernel.ttgir": "ttgir content",
+                    },
+                    "file_path": {},
+                    "source_mappings": {},
+                }
+            }
+            self.assertIsInstance(
+                _generate_ir_analysis(trace),
+                dict,
+                f"{backend} backend should return dict",
+            )
+
+        # Without artifacts
+        empty_trace = {
+            "payload": {
+                "metadata": {"backend_name": "hip"},
+                "file_content": {},
+                "file_path": {},
+                "source_mappings": {},
+            }
+        }
+        self.assertEqual(_generate_ir_analysis(empty_trace), {})
+
+    def test_analysis_legacy_path(self):
+        """Fallback to legacy when adapter resolution fails."""
+        # With artifacts
+        fallback_trace = {
+            "payload": {
+                "metadata": {"backend_name": "unknown"},
+                "file_content": {
+                    "kernel.ttgir": "ttgir content",
+                    "kernel.amdgcn": "amdgcn content",
+                },
+                "file_path": {},
+                "source_mappings": {},
+            }
+        }
+        result = _generate_ir_analysis(fallback_trace)
+        self.assertIsInstance(result, dict)
+        self.assertIn("io_counts", result)
+
+        # Without artifacts
+        self.assertEqual(
+            _generate_ir_analysis(
+                {
+                    "payload": {
+                        "metadata": {"backend_name": "unknown"},
+                        "file_content": {},
+                        "file_path": {},
+                        "source_mappings": {},
+                    }
+                }
+            ),
+            {},
+        )
+
+    def test_analysis_env_var_disables_all(self):
+        """TRITONPARSE_ANALYSIS='none' or '' disables all analyses."""
+        trace = {
+            "payload": {
+                "metadata": {"backend_name": "hip"},
+                "file_content": {
+                    "kernel.ttgir": "ttgir content",
+                    "kernel.amdgcn": "amdgcn content",
+                },
+                "file_path": {},
+                "source_mappings": {},
+            }
+        }
+
+        for val in ("none", ""):
+            os.environ["TRITONPARSE_ANALYSIS"] = val
+            self.assertEqual(
+                _generate_ir_analysis(trace), {}, f"env='{val}' should disable all"
+            )
+
+    def test_analysis_registry_common_and_backend_analyzers(self):
+        """Common and backend-specific analyzers are all registered after adapter init."""
+        for analyzer_id in ("loop_schedules", "procedure_checks", "amd_buffer_ops"):
+            self.assertIsNotNone(
+                AnalysisRegistry.get_analyzer(analyzer_id),
+                f"Analyzer '{analyzer_id}' should be registered",
+            )
+
+    def test_analysis_adapter_passes_differ_by_backend(self):
+        """NVIDIA only has common passes; AMD additionally has amd_buffer_ops."""
+        nvidia_passes = set(
+            self.registry.resolve(adapter_name="cuda_triton").get_analysis_passes()
+        )
+        amd_passes = set(
+            self.registry.resolve(adapter_name="hip_triton").get_analysis_passes()
+        )
+
+        self.assertIn("loop_schedules", nvidia_passes)
+        self.assertNotIn("amd_buffer_ops", nvidia_passes)
+
+        self.assertIn("loop_schedules", amd_passes)
+        self.assertIn("amd_buffer_ops", amd_passes)
+
+    def test_analysis_adapter_required_stages_consistency(self):
+        """Each analysis pass's required_stages should exist in the adapter."""
+        amd_adapter = self.registry.resolve(adapter_name="hip_triton")
+        for pass_name in amd_adapter.get_analysis_passes():
+            info = AnalysisRegistry.get_analyzer_info(pass_name)
+            self.assertIsNotNone(info, f"Analyzer '{pass_name}' should be registered")
+            for stage_name in info.required_stages:
+                self.assertIsNotNone(
+                    amd_adapter.get_stage_by_name(stage_name),
+                    f"Required stage '{stage_name}' should exist in AMD adapter",
+                )
+
+    def test_analysis_adapter_run_analysis_pass(self):
+        """run_analysis_pass: empty artifacts → None; invalid analyzer → ValueError."""
+        amd_adapter = self.registry.resolve(adapter_name="hip_triton")
+        test_entry = {
+            "payload": {
+                "metadata": {"backend_name": "hip"},
+                "file_content": {},
+                "file_path": {},
+                "source_mappings": {},
+            }
+        }
+
+        # Empty artifacts → analyzer skips due to missing required_stages
+        self.assertIsNone(
+            amd_adapter.run_analysis_pass("amd_buffer_ops", test_entry, None)
+        )
+
+        with self.assertRaises(ValueError):
+            amd_adapter.run_analysis_pass("nonexistent_analyzer", test_entry, None)
+
+    def test_get_enabled_analyses_helper_function(self):
+        """Test get_enabled_analyses() with default, ALL/none keywords, and comma list."""
+        # Default (no env var) → enable all
+        if "TRITONPARSE_ANALYSIS" in os.environ:
+            del os.environ["TRITONPARSE_ANALYSIS"]
+        self.assertIsNone(get_enabled_analyses())
+
+        # "ALL" → enable all (also covers case insensitivity)
+        os.environ["TRITONPARSE_ANALYSIS"] = "ALL"
+        self.assertIsNone(get_enabled_analyses())
+
+        # "none" → disable all
+        os.environ["TRITONPARSE_ANALYSIS"] = "none"
+        self.assertEqual(get_enabled_analyses(), set())
+
+        # Comma-separated with spaces → trimmed set
+        os.environ["TRITONPARSE_ANALYSIS"] = " amd_buffer_ops , loop_schedules "
+        self.assertEqual(get_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"})
 
 
 if __name__ == "__main__":
