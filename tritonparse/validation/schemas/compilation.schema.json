@@ -129,6 +129,11 @@
             "triton_version": {
               "type": "string",
               "description": "Triton version string."
+            },
+            "times": {
+              "type": "object",
+              "description": "Per-phase compilation timing information. Values may be numbers (nanoseconds) or lists of per-stage timings.",
+              "additionalProperties": true
             }
           }
         },
@@ -149,11 +154,6 @@
         "pt_info": {
           "$ref": "#/definitions/PtInfo",
           "description": "PyTorch compilation context."
-        },
-        "times": {
-          "type": "object",
-          "description": "Per-phase compilation timing information. Values may be numbers (nanoseconds) or lists of per-stage timings.",
-          "additionalProperties": true
         },
         "source_mappings": {
           "type": "object",
