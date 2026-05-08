@@ -447,7 +447,27 @@ def parse_logs(
                 # --all-ranks or --rank none: include no-rank files
                 ranks[Rank(Rank.NO_RANK)].append(path)
     if not ranks:
-        raise RuntimeError(f"No eligible structured trace logs found in {raw_log_dir}")
+        # Check if logs exist for other ranks and fall back to the lowest available
+        all_available = defaultdict(list)
+        for item in os.listdir(raw_log_dir):
+            path = os.path.join(raw_log_dir, item)
+            if not os.path.isfile(path) or LOG_PREFIX not in item:
+                continue
+            rank_match = LOG_RANK_REGEX.search(item)
+            if rank_match:
+                all_available[int(rank_match.group(1))].append(path)
+        if all_available:
+            fallback_rank = min(all_available.keys())
+            logger.warning(
+                f"Requested rank not found. "
+                f"Available ranks: {sorted(all_available.keys())}. "
+                f"Falling back to rank {fallback_rank}."
+            )
+            ranks[Rank(fallback_rank)] = all_available[fallback_rank]
+        else:
+            raise RuntimeError(
+                f"No eligible structured trace logs found in {raw_log_dir}"
+            )
 
     # Build kernel compile mapping from torch trace logs (if available)
     kernel_compile_mapping = _build_kernel_compile_mapping(raw_log_dir, torch_trace_dir)
