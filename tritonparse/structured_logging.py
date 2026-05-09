@@ -874,19 +874,113 @@ def extract_python_source_info(trace_data: Dict[str, Any], source):
     }
 
 
-def extract_file_content(trace_data: Dict[str, Any], metadata_group: Dict[str, str]):
+def extract_file_content(
+    trace_data: Dict[str, Any],
+    metadata_group: Dict[str, str],
+    backend_name: str,
+):
     """
     Extract file content from metadata_group and add it to trace_data.
+
+    Two-level dispatch:
+    1. Priority: Adapter-driven — uses the adapter's IR stage descriptors
+       and derived artifact registry. No backend-specific knowledge hardcoded.
+    2. Fallback: Legacy hardcoded logic when adapter resolution fails.
 
     Args:
         trace_data (Dict): Dictionary to store extracted information
         metadata_group (Dict): Dictionary mapping filenames to file paths
+        backend_name: Backend name from trace metadata (e.g., "cuda").
     """
+    try:
+        return _extract_file_content_adapter_driven(
+            trace_data, metadata_group, backend_name
+        )
+    except ValueError as e:
+        log.warning(
+            f"Adapter-driven file extraction failed: {e}. Falling back to legacy."
+        )
+
+    _extract_file_content_legacy(trace_data, metadata_group)
+
+
+def _extract_file_content_adapter_driven(
+    trace_data: Dict[str, Any],
+    metadata_group: Dict[str, str],
+    backend_name: str,
+):
+    """Adapter-driven file content extraction.
+
+    Uses IR stage descriptors for text-file detection and the derived
+    artifact registry for external tool derivation.
+    """
+    from tritonparse.backend import get_backend_registry
+    from tritonparse.shared_vars import get_enabled_derived_artifacts
+
+    adapter_name = f"{backend_name}_triton"
+    adapter = get_backend_registry().resolve(adapter_name=adapter_name)
+
+    # Text-file detection via adapter stages
+    text_extensions = {
+        stage.extension for stage in adapter.get_ir_stages() if stage.is_text
+    }
+
     for ir_filename, file_path in metadata_group.items():
-        # Add file path to trace data
         trace_data["file_path"][ir_filename] = file_path
 
-        # Check if this is a text file we can read
+        if any(ir_filename.endswith(ext) for ext in text_extensions):
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    message = f"<file too large: {file_size} bytes>"
+                    trace_data["file_content"][ir_filename] = message
+                    continue
+
+                with open(file_path, "r") as f:
+                    trace_data["file_content"][ir_filename] = f.read()
+            except (UnicodeDecodeError, OSError) as e:
+                message = f"<error reading file: {str(e)}>"
+                trace_data["file_content"][ir_filename] = message
+                log.debug(f"Error reading file {file_path}: {e}")
+
+    # Derived artifacts
+    enabled = get_enabled_derived_artifacts()
+    for info in adapter.get_derived_artifacts():
+        if enabled is not None and info.target_stage_name not in enabled:
+            continue
+        source_stage = adapter.get_stage_by_name(info.source_stage_name)
+        if not source_stage:
+            continue
+        matching_key = next(
+            (k for k in metadata_group if k.endswith(source_stage.extension)),
+            None,
+        )
+        if not matching_key:
+            continue
+        source_path = metadata_group[matching_key]
+        filename_no_ext = os.path.splitext(os.path.basename(source_path))[0]
+        target_stage = adapter.get_stage_by_name(info.target_stage_name)
+        derived_filename = f"{filename_no_ext}{target_stage.extension}"
+        try:
+            content = info.derive_func(source_path)
+            if content is not None:
+                trace_data["file_content"][derived_filename] = content
+        except subprocess.CalledProcessError as e:
+            message = f"<{info.tool_name} failed: {str(e)}>"
+            trace_data["file_content"][derived_filename] = message
+        except (OSError, Exception) as e:
+            message = f"<error dumping derived artifact: {str(e)}>"
+            trace_data["file_content"][derived_filename] = message
+
+
+def _extract_file_content_legacy(
+    trace_data: Dict[str, Any],
+    metadata_group: Dict[str, str],
+):
+    """Legacy fallback: hardcoded text-file and cubin-to-sass derivation."""
+    for ir_filename, file_path in metadata_group.items():
+        trace_data["file_path"][ir_filename] = file_path
+
         if any(ir_filename.endswith(ext) for ext in TEXT_FILE_EXTENSIONS):
             try:
                 # Check file size before reading to avoid memory issues
@@ -1349,8 +1443,9 @@ def maybe_trace_triton(
                 trace_data["pt_info"][attr_name] = attr_value
     if trace_id:
         trace_data["pt_info"]["attempt"] = trace_id.attempt
-    # Extract content from all IR and other files in the metadata group
-    extract_file_content(trace_data, metadata_group)
+    # Pass backend_name for adapter-driven file extraction
+    backend_name = trace_data["metadata"].get("backend_name", "")
+    extract_file_content(trace_data, metadata_group, backend_name)
     # Extract Python source code information if available
     extract_python_source_info(trace_data, src)
     extract_metadata_from_src(trace_data, src)
