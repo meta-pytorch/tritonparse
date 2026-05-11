@@ -26,7 +26,11 @@ from torch.utils._traceback import CapturedTraceback
 from triton.knobs import JITHook, LaunchHook
 from tritonparse._json_compat import dumps, loads
 
-from .shared_vars import DEFAULT_TRACE_FILE_PREFIX, is_fbcode
+from .shared_vars import (
+    DEFAULT_TRACE_FILE_PREFIX,
+    is_fbcode,
+    set_runtime_sass_dump_override,
+)
 
 
 log = logging.getLogger(__name__)
@@ -89,6 +93,7 @@ TRITONPARSE_DUMP_SASS = os.getenv("TRITONPARSE_DUMP_SASS", None) in [
     "true",
     "True",
 ]
+set_runtime_sass_dump_override(True if TRITONPARSE_DUMP_SASS else None)
 
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
@@ -950,6 +955,12 @@ def _extract_file_content_adapter_driven(
             continue
         source_stage = adapter.get_stage_by_name(info.source_stage_name)
         if not source_stage:
+            log.warning(
+                "Skipping derived artifact '%s': source stage '%s' is not registered for adapter '%s'.",
+                info.target_stage_name,
+                info.source_stage_name,
+                adapter_name,
+            )
             continue
         matching_key = next(
             (k for k in metadata_group if k.endswith(source_stage.extension)),
@@ -960,6 +971,14 @@ def _extract_file_content_adapter_driven(
         source_path = metadata_group[matching_key]
         filename_no_ext = os.path.splitext(os.path.basename(source_path))[0]
         target_stage = adapter.get_stage_by_name(info.target_stage_name)
+        if not target_stage:
+            log.warning(
+                "Skipping derived artifact '%s': target stage '%s' is not registered for adapter '%s'.",
+                info.target_stage_name,
+                info.target_stage_name,
+                adapter_name,
+            )
+            continue
         derived_filename = f"{filename_no_ext}{target_stage.extension}"
         try:
             content = info.derive_func(source_path)
@@ -978,6 +997,8 @@ def _extract_file_content_legacy(
     metadata_group: Dict[str, str],
 ):
     """Legacy fallback: hardcoded text-file and cubin-to-sass derivation."""
+    from tritonparse.shared_vars import get_enabled_derived_artifacts
+
     for ir_filename, file_path in metadata_group.items():
         trace_data["file_path"][ir_filename] = file_path
 
@@ -997,10 +1018,12 @@ def _extract_file_content_legacy(
                 message = f"<error reading file: {str(e)}>"
                 trace_data["file_content"][ir_filename] = message
                 log.debug(f"Error reading file {file_path}: {e}")
+
+    enabled = get_enabled_derived_artifacts()
     cubin_keys = [key for key in metadata_group.keys() if key.endswith(".cubin")]
     cubin_path = metadata_group[cubin_keys[0]] if cubin_keys else None
 
-    if TRITONPARSE_DUMP_SASS and cubin_path:
+    if cubin_path and (enabled is None or "sass" in enabled):
         filename_no_ext = os.path.splitext(os.path.basename(cubin_path))[0]
         sass_filename = f"{filename_no_ext}.sass"
         try:
@@ -1907,6 +1930,7 @@ def init(
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
+    set_runtime_sass_dump_override(True if enable_sass_dump else None)
     if enable_sass_dump:
         TRITONPARSE_DUMP_SASS = True
     if enable_tensor_blob_storage:

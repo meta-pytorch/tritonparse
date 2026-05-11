@@ -7,6 +7,8 @@ import importlib.util
 import logging
 import os
 
+_RUNTIME_SASS_DUMP_OVERRIDE: bool | None = None
+
 # The compilation information will be stored to /logs/DEFAULT_TRACE_FILE_PREFIX by default
 # unless other flags disable or set another store. Add USER to avoid permission issues in shared servers.
 DEFAULT_TRACE_FILE_PREFIX = (
@@ -85,6 +87,20 @@ def get_enabled_analyses() -> set[str] | None:
     return set(raw_names) & known if known else set(raw_names)
 
 
+def set_runtime_sass_dump_override(enabled: bool | None) -> None:
+    """Set a runtime override for SASS dump compatibility behavior."""
+    global _RUNTIME_SASS_DUMP_OVERRIDE
+    _RUNTIME_SASS_DUMP_OVERRIDE = enabled
+
+
+def is_sass_dump_enabled() -> bool:
+    """Return whether SASS dumping is enabled via runtime override or env var."""
+    if _RUNTIME_SASS_DUMP_OVERRIDE is not None:
+        return _RUNTIME_SASS_DUMP_OVERRIDE
+
+    return os.getenv("TRITONPARSE_DUMP_SASS", None) in ["1", "true", "True"]
+
+
 def get_enabled_derived_artifacts() -> set[str] | None:
     """
     Get user-enabled derived artifact list from the ``TRITONPARSE_DERIVED_ARTIFACTS`` env var.
@@ -106,36 +122,38 @@ def get_enabled_derived_artifacts() -> set[str] | None:
         set: enabled target stage names (may be empty to disable all).
     """
     logger = logging.getLogger("tritonparse")
-    from tritonparse.structured_logging import TRITONPARSE_DUMP_SASS
 
     env_value = os.environ.get("TRITONPARSE_DERIVED_ARTIFACTS", "none").strip()
 
-    if not env_value or env_value.lower() == "none":
-        if TRITONPARSE_DUMP_SASS:
-            return {"sass"}
-        return set()
-    elif env_value.lower() == "all":
-        return None
-
-    # Comma-separated target stage name list — names are case-insensitive
+    # Comma-separated target stage name list — names are case-insensitive.
+    # Treat empty input the same as "none" for backward compatibility.
     raw_names = [n.strip().lower() for n in env_value.split(",") if n.strip()]
 
-    # "all"/"none" mixed into a comma list is likely misuse
+    if not raw_names:
+        if is_sass_dump_enabled():
+            return {"sass"}
+        return set()
+
     if "all" in raw_names:
-        logger.warning(
-            "TRITONPARSE_DERIVED_ARTIFACTS contains 'all' mixed with other names. "
-            "Use 'all' alone to enable everything, or a plain comma list for specific derivations."
-        )
+        if len(raw_names) > 1:
+            logger.warning(
+                "TRITONPARSE_DERIVED_ARTIFACTS contains 'all' mixed with other names. "
+                "Use 'all' alone to enable everything, or a plain comma list for specific derivations."
+            )
         return None
+
     if "none" in raw_names:
-        logger.warning(
-            "TRITONPARSE_DERIVED_ARTIFACTS contains 'none' mixed with other names. "
-            "Use 'none' alone to disable everything."
-        )
+        if len(raw_names) > 1:
+            logger.warning(
+                "TRITONPARSE_DERIVED_ARTIFACTS contains 'none' mixed with other names. "
+                "Use 'none' alone to disable everything."
+            )
+        if is_sass_dump_enabled():
+            return {"sass"}
         return set()
 
     # Backward compat: TRITONPARSE_DUMP_SASS ensures "sass" is included
-    if TRITONPARSE_DUMP_SASS:
+    if is_sass_dump_enabled():
         raw_names.append("sass")
 
     # Validate against registered derived artifacts (lazy import to avoid circular deps)

@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 from tritonparse.backend import (
     AmdTritonAdapter,
@@ -13,7 +14,11 @@ from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
 )
-from tritonparse.shared_vars import get_enabled_analyses
+from tritonparse.shared_vars import (
+    get_enabled_analyses,
+    get_enabled_derived_artifacts,
+    set_runtime_sass_dump_override,
+)
 
 
 class TestMultiBackendStage(unittest.TestCase):
@@ -34,6 +39,49 @@ class TestMultiBackendStage(unittest.TestCase):
         event = {"payload": {"file_content": {}, "metadata": {}}}
         stage_keys = _resolve_source_mappable_stage_keys(event)
         self.assertEqual(stage_keys, {})
+
+    def test_legacy_fallback_honors_derived_artifacts_env(self):
+        from tritonparse.structured_logging import extract_file_content
+
+        original_derived_artifacts_env = os.environ.get("TRITONPARSE_DERIVED_ARTIFACTS")
+        original_dump_sass_env = os.environ.get("TRITONPARSE_DUMP_SASS")
+
+        try:
+            os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "sass"
+            os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+            set_runtime_sass_dump_override(None)
+
+            cubin_path = "/tmp/tritonparse-test/kernel.cubin"
+            payload = {
+                "metadata": {},
+                "file_path": {},
+                "file_content": {},
+            }
+            metadata_group = {
+                "kernel.cubin": cubin_path,
+            }
+
+            with patch("tritonparse.tools.disasm.extract", return_value="sass output"):
+                extract_file_content(
+                    payload,
+                    metadata_group,
+                    payload["metadata"].get("backend_name", ""),
+                )
+            self.assertEqual(payload["file_content"]["kernel.sass"], "sass output")
+        finally:
+            if original_derived_artifacts_env is None:
+                os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
+            else:
+                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = (
+                    original_derived_artifacts_env
+                )
+
+            if original_dump_sass_env is None:
+                os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+            else:
+                os.environ["TRITONPARSE_DUMP_SASS"] = original_dump_sass_env
+
+            set_runtime_sass_dump_override(None)
 
     def test_register_and_resolve(self):
         registry = PipelineAdapterRegistry()
@@ -380,6 +428,55 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         # Comma-separated with spaces → trimmed set
         os.environ["TRITONPARSE_ANALYSIS"] = " amd_buffer_ops , loop_schedules "
         self.assertEqual(get_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"})
+
+    def test_get_enabled_derived_artifacts_env_parsing(self):
+        """Derived artifact env parsing should cover defaults, keywords, lists, compat, and unknown filtering."""
+        original_derived_artifacts_env = os.environ.get("TRITONPARSE_DERIVED_ARTIFACTS")
+        original_dump_sass_env = os.environ.get("TRITONPARSE_DUMP_SASS")
+
+        try:
+            set_runtime_sass_dump_override(None)
+
+            with patch(
+                "tritonparse.backend.DerivedArtifactRegistry.list_target_stage_names",
+                return_value=["sass", "example"],
+            ):
+                os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
+                os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+                self.assertEqual(get_enabled_derived_artifacts(), set())
+
+                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "all"
+                self.assertIsNone(get_enabled_derived_artifacts())
+
+                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "none"
+                self.assertEqual(get_enabled_derived_artifacts(), set())
+
+                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = " example , sass "
+                self.assertEqual(get_enabled_derived_artifacts(), {"example", "sass"})
+
+                os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
+                os.environ["TRITONPARSE_DUMP_SASS"] = "1"
+                self.assertEqual(get_enabled_derived_artifacts(), {"sass"})
+
+                os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "example,unknown"
+                with self.assertLogs("tritonparse", level="WARNING") as logs:
+                    self.assertEqual(get_enabled_derived_artifacts(), {"example"})
+                self.assertIn("unknown target stage names", "\n".join(logs.output))
+        finally:
+            if original_derived_artifacts_env is None:
+                os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
+            else:
+                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = (
+                    original_derived_artifacts_env
+                )
+
+            if original_dump_sass_env is None:
+                os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+            else:
+                os.environ["TRITONPARSE_DUMP_SASS"] = original_dump_sass_env
+
+            set_runtime_sass_dump_override(None)
 
 
 if __name__ == "__main__":
