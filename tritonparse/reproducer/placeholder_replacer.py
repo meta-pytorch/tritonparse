@@ -193,6 +193,8 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
     VERBOSE_ARGS_PRINT_PLACEHOLDER = "# {{VERBOSE_ARGS_PRINT_PLACEHOLDER}}"
     # Placeholder for reproducer metadata in docstring
     REPRODUCER_METADATA_PLACEHOLDER = "{{REPRODUCER_METADATA_PLACEHOLDER}}"
+    # Placeholder for backend-specific synchronize call
+    SYNC_CALL_PLACEHOLDER = "# {{SYNC_CALL_PLACEHOLDER}}"
 
     def __init__(self, preserve_autotune: bool = False):
         super().__init__()
@@ -224,6 +226,8 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         self.register(
             self.REPRODUCER_METADATA_PLACEHOLDER, self._replace_reproducer_metadata
         )
+        # Register handler for backend-specific synchronize call
+        self.register(self.SYNC_CALL_PLACEHOLDER, self._replace_sync_call)
 
     def _replace_kernel_name(
         self, code: str, context_bundle: ContextBundle, **kwargs
@@ -755,13 +759,18 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         # without one the kernel launch will fail or hang.
         global_scratch_size = context_bundle.compile.get("global_scratch_size")
         if global_scratch_size and int(global_scratch_size) > 0:
+            from tritonparse.backend import get_backend_registry
+
+            _backend = context_bundle.compile.get("backend") or "cuda"
+            _adapter = get_backend_registry().resolve(adapter_name=f"{_backend}_triton")
+            _device_prefix = _adapter.pytorch_module
             body_lines.extend(
                 [
                     f"# This kernel requires scratch memory (global_scratch_size={global_scratch_size}).",
                     "# A default allocator is provided below. If the kernel hangs or produces",
                     "# incorrect results, replace this with the allocator from the original application.",
                     "def _alloc_fn(size: int, align: int, stream):",
-                    "    return torch.empty(size, dtype=torch.int8, device='cuda')",
+                    f"    return torch.empty(size, dtype=torch.int8, device='{_device_prefix}')",
                     "triton.set_allocator(_alloc_fn)",
                     "",
                 ]
@@ -848,6 +857,17 @@ To regenerate this reproducer:
     python -m tritonparse reproduce <ndjson_file> --line {line_index} --out-dir <output_dir>"""
 
         return code.replace(self.REPRODUCER_METADATA_PLACEHOLDER, metadata)
+
+    def _replace_sync_call(
+        self, code: str, context_bundle: ContextBundle, **kwargs
+    ) -> str:
+        """Replace the sync call placeholder with backend-appropriate synchronize."""
+        from tritonparse.backend import get_backend_registry
+
+        backend = context_bundle.compile.get("backend") or "cuda"
+        adapter = get_backend_registry().resolve(adapter_name=f"{backend}_triton")
+        sync_call = f"torch.{adapter.pytorch_module}.synchronize()"
+        return code.replace(self.SYNC_CALL_PLACEHOLDER, sync_call)
 
 
 @dataclass

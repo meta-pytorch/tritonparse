@@ -479,5 +479,25 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
             set_runtime_sass_dump_override(None)
 
 
+class TestNormalizeDeviceString(unittest.TestCase):
+    """Tests for adapter.normalize_device_string()."""
+
+    def test_cuda_no_index_gets_index(self):
+        adapter = NvidiaTritonAdapter()
+        self.assertEqual(adapter.normalize_device_string("cuda"), "cuda:0")
+
+    def test_cpu_unchanged(self):
+        adapter = NvidiaTritonAdapter()
+        self.assertEqual(adapter.normalize_device_string("cpu"), "cpu")
+
+    def test_hip_with_index_forced_to_zero(self):
+        adapter = AmdTritonAdapter()
+        self.assertEqual(adapter.normalize_device_string("hip:3"), "hip:0")
+
+    def test_empty_string_returns_cpu(self):
+        adapter = NvidiaTritonAdapter()
+        self.assertEqual(adapter.normalize_device_string(""), "cpu")
+
+
 if __name__ == "__main__":
     unittest.main()

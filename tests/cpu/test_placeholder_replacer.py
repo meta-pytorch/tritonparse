@@ -86,6 +86,7 @@ def _make_context_bundle(
     function_name="test_kernel",
     source_code="@triton.jit\ndef test_kernel(): pass",
     file_path="/tmp/test.py",
+    backend=None,
 ):
     """Helper to build a minimal ContextBundle for testing."""
     kernel_info = KernelInfo(
@@ -99,6 +100,8 @@ def _make_context_bundle(
         "num_stages": 2,
         "global_scratch_size": global_scratch_size,
     }
+    if backend is not None:
+        compile_block["backend"] = backend
     launch_block = {"grid": [1, 1, 1], "kwargs": {}}
     return ContextBundle(
         kernel_info=kernel_info,
@@ -410,6 +413,46 @@ class InterleavedConstexprInvocationTest(unittest.TestCase):
         self.assertIn('args_dict["is_predict"]', fallback_branch)
         self.assertIn('args_dict["FUSED_QKV"]', fallback_branch)
         self.assertIn('args_dict["BLOCK_M"]', fallback_branch)
+
+
+class TestReproducerAdapterDriven(unittest.TestCase):
+    """Tests for adapter-driven device/sync in reproducer generation."""
+
+    def test_sync_call_uses_adapter_pytorch_module(self):
+        """Verify sync call is derived from adapter.pytorch_module, not hardcoded."""
+        from unittest.mock import patch
+
+        replacer = DefaultPlaceholderReplacer()
+        ctx = _make_context_bundle(backend="cuda")
+        template = "# {{SYNC_CALL_PLACEHOLDER}}"
+
+        with patch(
+            "tritonparse.backend.NvidiaTritonAdapter.pytorch_module",
+            new_callable=lambda: property(lambda self: "example"),
+        ):
+            result = replacer._replace_sync_call(template, ctx)
+            self.assertEqual(result, "torch.example.synchronize()")
+
+    def test_allocator_uses_adapter_pytorch_module(self):
+        """Verify allocator device is derived from adapter.pytorch_module."""
+        from unittest.mock import patch
+
+        replacer = DefaultPlaceholderReplacer()
+        ctx = _make_context_bundle(global_scratch_size="1024", backend="cuda")
+        template = "# {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}"
+
+        with patch(
+            "tritonparse.backend.NvidiaTritonAdapter.pytorch_module",
+            new_callable=lambda: property(lambda self: "example"),
+        ):
+            result = replacer._replace_launch_kernel_body(
+                template,
+                ctx,
+                embed_context=False,
+                temp_json_path=MagicMock(name="ctx.json"),
+            )
+            self.assertIn("device='example'", result)
+            self.assertNotIn("device='cuda'", result)
 
 
 if __name__ == "__main__":

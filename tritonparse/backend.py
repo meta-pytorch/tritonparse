@@ -290,7 +290,10 @@ class CompilationPipelineAdapter(ABC):
         )
 
     def normalize_device_string(self, device: str) -> str:
-        return device
+        if not isinstance(device, str) or not device or device == "cpu":
+            return "cpu"
+        prefix = device.split(":")[0]
+        return f"{prefix}:0"
 
     def get_parser(self, parser_id: str):
         """
@@ -382,7 +385,7 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
 
     @property
     def pytorch_module(self) -> str:
-        return "torch.cuda"
+        return "cuda"
 
     def get_ir_stages(self) -> list[IRStageDescriptor]:
         return self._stages
@@ -433,7 +436,7 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
 
     @property
     def pytorch_module(self) -> str:
-        return "torch.cuda"
+        return "cuda"
 
     def get_ir_stages(self) -> list[IRStageDescriptor]:
         return self._stages
