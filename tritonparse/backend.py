@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from tritonparse.tp_logger import logger
+
 
 @dataclass(frozen=True)
 class IRStageDescriptor:
@@ -66,9 +68,7 @@ class DerivedArtifactRegistry:
     def register(cls, info: DerivedArtifactInfo) -> None:
         key = info.target_stage_name
         if key in cls._registry:
-            import logging
-
-            logging.getLogger("tritonparse").debug(
+            logger.debug(
                 f"Overwriting existing derived artifact registration for '{key}'"
             )
         cls._registry[key] = info
@@ -473,14 +473,20 @@ class PipelineAdapterRegistry:
             )
         return adapter
 
+    def resolve_from_backend_name(
+        self,
+        backend_name: str,
+    ) -> CompilationPipelineAdapter:
+        inferred_adapter_name = f"{backend_name}_triton"
+        return self.resolve(adapter_name=inferred_adapter_name)
+
     def resolve_from_trace(
         self,
         metadata: dict[str, Any],
     ) -> CompilationPipelineAdapter:
         backend_name = metadata.get("backend_name")
         if isinstance(backend_name, str):
-            inferred_adapter_name = f"{backend_name}_triton"
-            return self.resolve(adapter_name=inferred_adapter_name)
+            return self.resolve_from_backend_name(backend_name)
 
         raise ValueError(
             "Unable to resolve adapter from trace metadata: "

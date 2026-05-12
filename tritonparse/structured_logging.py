@@ -88,12 +88,9 @@ TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = (
 )
 # Enable NVIDIA SASS dump. It requires the CUBIN file to be localable.
 # WARNNING: it will slow down the compilation significantly.
-TRITONPARSE_DUMP_SASS = os.getenv("TRITONPARSE_DUMP_SASS", None) in [
-    "1",
-    "true",
-    "True",
-]
-set_runtime_sass_dump_override(True if TRITONPARSE_DUMP_SASS else None)
+set_runtime_sass_dump_override(
+    True if os.getenv("TRITONPARSE_DUMP_SASS", None) in ["1", "true", "True"] else None
+)
 
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
@@ -922,8 +919,8 @@ def _extract_file_content_adapter_driven(
     from tritonparse.backend import get_backend_registry
     from tritonparse.shared_vars import get_enabled_derived_artifacts
 
-    adapter_name = f"{backend_name}_triton"
-    adapter = get_backend_registry().resolve(adapter_name=adapter_name)
+    adapter = get_backend_registry().resolve_from_backend_name(backend_name)
+    adapter_name = adapter.adapter_name
 
     # Text-file detection via adapter stages
     text_extensions = {
@@ -956,9 +953,8 @@ def _extract_file_content_adapter_driven(
         source_stage = adapter.get_stage_by_name(info.source_stage_name)
         if not source_stage:
             log.warning(
-                "Skipping derived artifact '%s': source stage '%s' is not registered for adapter '%s'.",
+                "Skipping derived artifact '%s': source stage is missing from adapter '%s'.",
                 info.target_stage_name,
-                info.source_stage_name,
                 adapter_name,
             )
             continue
@@ -973,8 +969,7 @@ def _extract_file_content_adapter_driven(
         target_stage = adapter.get_stage_by_name(info.target_stage_name)
         if not target_stage:
             log.warning(
-                "Skipping derived artifact '%s': target stage '%s' is not registered for adapter '%s'.",
-                info.target_stage_name,
+                "Skipping derived artifact '%s': target stage is missing from adapter '%s'.",
                 info.target_stage_name,
                 adapter_name,
             )
@@ -987,7 +982,7 @@ def _extract_file_content_adapter_driven(
         except subprocess.CalledProcessError as e:
             message = f"<{info.tool_name} failed: {str(e)}>"
             trace_data["file_content"][derived_filename] = message
-        except (OSError, Exception) as e:
+        except (OSError, UnicodeDecodeError) as e:
             message = f"<error dumping derived artifact: {str(e)}>"
             trace_data["file_content"][derived_filename] = message
 
@@ -1909,7 +1904,7 @@ def init(
     """
     global TRITON_TRACE_LAUNCH, TRITON_TRACE_LAUNCH_WITHIN_PROFILING
     global TRITONPARSE_MORE_TENSOR_INFORMATION
-    global TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK, TRITONPARSE_DUMP_SASS
+    global TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK
     global TRITONPARSE_SAVE_TENSOR_BLOBS, TRITONPARSE_TENSOR_STORAGE_QUOTA
     global TRITON_TRACE_COMPRESSION
     global TRITONPARSE_TENSOR_SAVE_SKIP_RUNS, TRITONPARSE_TENSOR_SAVE_MAX_RUNS
@@ -1931,8 +1926,6 @@ def init(
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
     set_runtime_sass_dump_override(True if enable_sass_dump else None)
-    if enable_sass_dump:
-        TRITONPARSE_DUMP_SASS = True
     if enable_tensor_blob_storage:
         TRITONPARSE_SAVE_TENSOR_BLOBS = True
 

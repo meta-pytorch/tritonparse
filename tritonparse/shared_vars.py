@@ -4,8 +4,9 @@
 # Policy: reader-side / CLI / parse environment flags live here;
 # writer-side trace-collection flags live in structured_logging.py.
 import importlib.util
-import logging
 import os
+
+from tritonparse.tp_logger import logger
 
 _RUNTIME_SASS_DUMP_OVERRIDE: bool | None = None
 
@@ -48,7 +49,6 @@ def get_enabled_analyses() -> set[str] | None:
         None: enable all analyses (default).
         set: enabled analysis names (may be empty to disable all).
     """
-    logger = logging.getLogger("tritonparse")
     env_value = os.environ.get("TRITONPARSE_ANALYSIS", "all").strip()
 
     if not env_value or env_value.lower() == "none":
@@ -121,8 +121,6 @@ def get_enabled_derived_artifacts() -> set[str] | None:
         None: enable all available derivations.
         set: enabled target stage names (may be empty to disable all).
     """
-    logger = logging.getLogger("tritonparse")
-
     env_value = os.environ.get("TRITONPARSE_DERIVED_ARTIFACTS", "none").strip()
 
     # Comma-separated target stage name list — names are case-insensitive.
