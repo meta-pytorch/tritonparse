@@ -4,7 +4,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from tritonparse.tp_logger import logger
 
 
 @dataclass(frozen=True)
@@ -32,21 +34,60 @@ class IRStageDescriptor:
     syntax_id: str
 
 
-@dataclass(frozen=True)
-class DerivedArtifactDescriptor:
+@dataclass
+class DerivedArtifactInfo:
     """Describes an artifact derived by running tools on another stage's output.
 
     Fields:
-        source_extension: Extension of the source artifact (e.g., ".ptx").
-        output_stage_name: Name of the stage this derived artifact belongs to.
-        output_extension: Extension for the derived artifact (e.g., ".sass").
-        tool_name: Name of the tool used to generate the artifact.
+        source_stage_name: Name of the source stage (e.g., "cubin").
+        target_stage_name: Name of the target stage (e.g., "sass").
+        tool_name: Name of the tool used to generate the artifact (e.g., "nvdisasm").
+        adapter_affinity: Name of the adapter this derivation belongs to.
+        derive_func: Callable that takes a source file path and returns derived content,
+            or None if the tool is unavailable or derivation fails.
     """
 
-    source_extension: str
-    output_stage_name: str
-    output_extension: str
+    source_stage_name: str
+    target_stage_name: str
     tool_name: str
+    adapter_affinity: str
+    derive_func: Callable[[str], str | None]
+
+
+class DerivedArtifactRegistry:
+    """Registry for managing derived artifact info objects.
+
+    Adapters register their derived artifacts here. The registry supports
+    lookup by target stage name and listing all known target stage names
+    (useful for env-var validation).
+    """
+
+    _registry: dict[str, DerivedArtifactInfo] = {}
+
+    @classmethod
+    def register(cls, info: DerivedArtifactInfo) -> None:
+        key = info.target_stage_name
+        if key in cls._registry:
+            logger.debug(
+                f"Overwriting existing derived artifact registration for '{key}'"
+            )
+        cls._registry[key] = info
+
+    @classmethod
+    def get_by_target(cls, target_stage_name: str) -> DerivedArtifactInfo | None:
+        return cls._registry.get(target_stage_name)
+
+    @classmethod
+    def list_for_adapter(cls, adapter_name: str) -> list[DerivedArtifactInfo]:
+        return [
+            info
+            for info in cls._registry.values()
+            if info.adapter_affinity == adapter_name
+        ]
+
+    @classmethod
+    def list_target_stage_names(cls) -> list[str]:
+        return list(cls._registry.keys())
 
 
 class CompilationPipelineAdapter(ABC):
@@ -93,8 +134,32 @@ class CompilationPipelineAdapter(ABC):
     def known_stage_extensions(self) -> set[str]:
         return {stage.extension for stage in self.get_ir_stages()}
 
-    def get_derived_artifacts(self) -> list[DerivedArtifactDescriptor]:
-        return []
+    def get_derived_artifacts(self) -> list[DerivedArtifactInfo]:
+        return DerivedArtifactRegistry.list_for_adapter(self.adapter_name)
+
+    def register_backend_derived_artifact(
+        self,
+        source_stage_name: str,
+        target_stage_name: str,
+        tool_name: str,
+        derive_func: Callable[[str], str | None],
+    ) -> None:
+        """Register a backend-specific derived artifact to the registry."""
+        DerivedArtifactRegistry.register(
+            DerivedArtifactInfo(
+                source_stage_name=source_stage_name,
+                target_stage_name=target_stage_name,
+                tool_name=tool_name,
+                adapter_affinity=self.adapter_name,
+                derive_func=derive_func,
+            )
+        )
+
+    def collect_derived_artifact_contents(
+        self, source_path: str, info: DerivedArtifactInfo
+    ) -> str | None:
+        """Run the derivation tool and return the generated artifact contents."""
+        return info.derive_func(source_path)
 
     def get_analysis_passes(self) -> list[str]:
         """
@@ -279,6 +344,11 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
         self.register_backend_parser("ptx_loc", _parse_ptx_loc)
         self.register_backend_parser("sass_loc", _parse_sass_loc)
 
+        # Register NVIDIA-specific derived artifacts
+        from tritonparse.tools.disasm import extract as derive_sass
+
+        self.register_backend_derived_artifact("cubin", "sass", "nvdisasm", derive_sass)
+
         # Pre-initialize stage descriptors (immutable objects, can be reused)
         self._stages = [
             IRStageDescriptor(
@@ -403,14 +473,20 @@ class PipelineAdapterRegistry:
             )
         return adapter
 
+    def resolve_from_backend_name(
+        self,
+        backend_name: str,
+    ) -> CompilationPipelineAdapter:
+        inferred_adapter_name = f"{backend_name}_triton"
+        return self.resolve(adapter_name=inferred_adapter_name)
+
     def resolve_from_trace(
         self,
         metadata: dict[str, Any],
     ) -> CompilationPipelineAdapter:
         backend_name = metadata.get("backend_name")
         if isinstance(backend_name, str):
-            inferred_adapter_name = f"{backend_name}_triton"
-            return self.resolve(adapter_name=inferred_adapter_name)
+            return self.resolve_from_backend_name(backend_name)
 
         raise ValueError(
             "Unable to resolve adapter from trace metadata: "
