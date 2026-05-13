@@ -601,7 +601,7 @@ def parse_logs(
     split_inductor_compilations: bool = True,
     torch_trace_dir: Optional[str] = None,
     procedure_checks: list = None,
-    enable_pre_init_attribution: bool = False,
+    enable_pre_init_attribution: bool = True,
 ) -> Tuple[str, dict]:
     """
     Parse logs.
@@ -620,9 +620,14 @@ def parse_logs(
             If None, auto-discovers torch trace files in the same directory as tritonparse logs.
         procedure_checks: List of procedure check configurations for FileCheck-based
             pattern detection. If None, uses default patterns.
-        enable_pre_init_attribution: When True, no-rank trace files whose PID
-            also appears in a ranked file are re-attributed to that rank.
-            Defaults to False.
+        enable_pre_init_attribution: When True (default), no-rank trace files
+            whose PID also appears in a ranked file are re-attributed to
+            that rank — so kernels compiled before `dist.init_process_group`
+            are visible under their owning rank in `--rank N` / `--all-ranks`
+            output. Disable via the CLI flag `--no-pre-init-attribution` (or
+            this kwarg) to debug the boundary between pre/post-init kernels.
+            `--rank none` always shows the unattributed view regardless of
+            this flag.
     Returns:
         Tuple of (parsed log directory, file mapping)
     """

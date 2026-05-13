@@ -97,6 +97,17 @@ def _add_parse_args(parser: argparse.ArgumentParser) -> None:
         type=str,
         dest="procedure_checks_file",
     )
+    parser.add_argument(
+        "--no-pre-init-attribution",
+        help=(
+            "Disable automatic re-attribution of no-rank trace files (those "
+            "produced before torch.distributed init) to the rank with the "
+            "matching PID. By default, pre-init kernels appear under their "
+            "owning rank in --rank N / --all-ranks output. Use this flag to "
+            "debug the boundary between pre-init and post-init kernels."
+        ),
+        action="store_true",
+    )
     if is_fbcode():
         from tritonparse.fb.utils import append_parser
 
@@ -114,6 +125,7 @@ def oss_run(
     skip_logger: bool = True,
     torch_trace_dir: Optional[str] = None,
     procedure_checks: list = None,
+    no_pre_init_attribution: bool = False,
 ):
     """
     Main function for tritonparse. It is for OSS only.
@@ -129,6 +141,10 @@ def oss_run(
         torch_trace_dir: Path to directory containing inductor torch trace logs.
         procedure_checks: List of procedure check configurations for FileCheck-based
             pattern detection. If None, uses default patterns.
+        no_pre_init_attribution: Disable pre-init kernel re-attribution (the
+            CLI flag --no-pre-init-attribution). Default False, so by
+            default no-rank trace files with PID matching a ranked file
+            are merged into that rank's output.
     """
     source = Source(source, verbose)
     rank_config = RankConfig.from_cli_args(rank, all_ranks, source.type)
@@ -165,6 +181,7 @@ def oss_run(
             split_inductor_compilations=split_inductor_compilations,
             torch_trace_dir=torch_trace_dir,
             procedure_checks=procedure_checks,
+            enable_pre_init_attribution=not no_pre_init_attribution,
         )
     else:
         parsed_log_dir = source.value
@@ -191,6 +208,7 @@ def unified_parse(
     skip_logger: bool = False,
     torch_trace_dir: Optional[str] = None,
     procedure_checks_file: Optional[str] = None,
+    no_pre_init_attribution: bool = False,
     **kwargs,
 ):
     """
@@ -207,6 +225,10 @@ def unified_parse(
         torch_trace_dir: Path to directory containing inductor torch trace logs.
         procedure_checks_file: Path to a JSON file containing custom procedure check
             configurations. If not specified, uses built-in default patterns.
+        no_pre_init_attribution: When True, disable pre-init kernel
+            re-attribution (CLI flag --no-pre-init-attribution). See
+            ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
+            §7.7.
     """
     # Log usage for API invocations
     if not skip_logger and is_fbcode():
@@ -240,6 +262,7 @@ def unified_parse(
         skip_logger=skip_logger,
         torch_trace_dir=torch_trace_dir,
         procedure_checks=procedure_checks,
+        no_pre_init_attribution=no_pre_init_attribution,
         **kwargs,
     )
     return output
