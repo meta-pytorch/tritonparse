@@ -226,9 +226,10 @@ def unified_parse(
         procedure_checks_file: Path to a JSON file containing custom procedure check
             configurations. If not specified, uses built-in default patterns.
         no_pre_init_attribution: When True, disable pre-init kernel
-            re-attribution (CLI flag --no-pre-init-attribution). See
-            ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
-            §7.7.
+            re-attribution (CLI flag --no-pre-init-attribution). By
+            default, no-rank trace files whose PID matches a ranked file
+            are merged into that rank's output so kernels compiled before
+            torch.distributed init are visible under their owning rank.
     """
     # Log usage for API invocations
     if not skip_logger and is_fbcode():

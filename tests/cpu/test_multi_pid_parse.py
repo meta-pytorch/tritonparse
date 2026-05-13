@@ -2,6 +2,10 @@
 """
 Tests for parse_single_rank — the multi-input batch entry point that merges
 events across multiple trace files (typically PID files for one rank).
+
+When subprocess compile workers serve the same inductor frame, their per-PID
+output filenames collide; cross-PID merge by kernel_hash produces one
+correct output per frame.
 """
 
 import json

@@ -1,16 +1,13 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-End-to-end tests for the Diff 5 user-visible behavior change: by default,
-no-rank trace files whose PID matches a ranked file are re-attributed to
-that rank, so kernels compiled before `dist.init_process_group` show up
-under their owning rank.
+End-to-end tests for `parse_logs(enable_pre_init_attribution=True)`: by
+default, no-rank trace files whose PID matches a ranked file are
+re-attributed to that rank, so kernels compiled before
+`dist.init_process_group` show up under their owning rank.
 
-Bucket-level Pass 2 unit tests live in `test_legacy_filename_compat.py`
+Bucket-level unit tests live in `test_legacy_filename_compat.py`
 (CollectAndBucketFilesTest); this file focuses on the e2e `parse_logs`
-output contents and CLI plumbing.
-
-See ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
-§7.7, §9.2.1, and §10 Diff 5.
+output contents and CLI plumbing through `oss_run`.
 """
 
 import gzip

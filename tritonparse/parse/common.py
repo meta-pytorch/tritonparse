@@ -124,9 +124,10 @@ def _collect_and_bucket_files(
 
     Pass 2 (gated) — when enable_pre_init_attribution is True AND rank_config
     is not "no rank", re-attribute no-rank files whose (host, pid) is in
-    host_pid_to_rank into the matching ranked bucket. With the default
-    Diff 2 setting (False), this pass is a no-op and behavior is
-    identical to v1.
+    host_pid_to_rank into the matching ranked bucket. This makes pre-init
+    kernels (compiled before torch.distributed init) visible under their
+    owning rank. With enable_pre_init_attribution=False, this pass is a
+    no-op.
 
     Pass 3 — apply rank_config filtering: --all-ranks keeps every ranked
     bucket; --rank N keeps only that one; --rank none keeps no ranked

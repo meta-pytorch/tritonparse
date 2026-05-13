@@ -9,10 +9,10 @@ Covers:
 - Mixed old (no-PID) + new (PID-tagged) files in the same rank land in one
   bucket and merge into one output directory (no per-file subdir).
 - _collect_and_bucket_files Pass 2 (pre-init re-attribution) is gated by
-  enable_pre_init_attribution; default False is identical to v1 behavior.
+  enable_pre_init_attribution; with the gate off, behavior matches the
+  pre-attribution version.
 - When Pass 2 is enabled, legacy no-PID no-rank files still stay in the
   NO_RANK bucket (cannot be re-attributed without a PID).
-
 """
 
 import gzip

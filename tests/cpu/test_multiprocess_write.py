@@ -36,7 +36,6 @@ but related guarantees of the Phase 1 fix:
      Sanity check using the natural single-syscall write path. Tends to
      pass before the fix on local SSD (false negative for the bug), which
      is itself useful information when debugging FS-specific behavior.
-
 """
 
 from __future__ import annotations

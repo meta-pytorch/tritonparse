@@ -14,7 +14,6 @@ Bug manifestation matches the synthetic test:
   Before fix: all worker subprocesses share one
               `dedicated_log_triton_trace_{user}_.ndjson` file.
   After fix:  each worker writes its own `..._pid_{PID}_.ndjson`.
-
 """
 
 from __future__ import annotations

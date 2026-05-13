@@ -711,6 +711,12 @@ def parse_single_rank(
     when files are processed in their input order — caller should pass files
     sorted by PID for deterministic output.
 
+    Background: subprocess compile workers each write their own
+    PID-tagged trace file but typically share the same inductor frame_id,
+    so per-file output names would collide if processed independently.
+    Cross-PID merge by kernel_hash produces one correct output per frame
+    regardless of how many PIDs contributed.
+
     Args:
         file_paths: Trace file paths to process together. Sort by PID before
             calling for deterministic output.
