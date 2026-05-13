@@ -26,7 +26,6 @@ import os
 import re
 import shutil
 import tempfile
-import unittest
 
 import torch
 import tritonparse.structured_logging
@@ -117,10 +116,6 @@ class MultiprocessWriteInductorTest(GPUTestBase):
             compiled(x)
         torch.cuda.synchronize()
 
-    # Expected to FAIL at this commit (PID suffix not yet added in the writer);
-    # the next stack diff (Phase 1 writer fix) removes this decorator and the
-    # test passes for real.
-    @unittest.expectedFailure
     def test_inductor_main_process_uses_pid_filename(self):
         """
         Verify the writer fix's PID suffix is wired through real inductor flow.

@@ -326,11 +326,6 @@ class MultiprocessWriteTest(unittest.TestCase):
             )
         return diagnostic
 
-    # Expected to FAIL at this commit (PID suffix not yet added in the writer);
-    # the next stack diff (Phase 1 writer fix) removes this decorator and the
-    # test passes for real. Keeps Phabricator CI green at this commit while
-    # preserving the design-intended "land repro tests as failing first".
-    @unittest.expectedFailure
     def test_each_worker_writes_to_distinct_pid_file(self):
         """
         Primary fix verification: with PID suffix, N workers → N distinct files.
@@ -385,10 +380,6 @@ class MultiprocessWriteTest(unittest.TestCase):
             f"Record count mismatch (lost data?):{diagnostic}",
         )
 
-    # Expected to FAIL at this commit (PID suffix not yet added; workers share
-    # one file, fragmented writes interleave). Removed by the Phase 1 writer
-    # fix in the next stack diff.
-    @unittest.expectedFailure
     def test_corruption_under_fragmented_writes(self):
         """
         Faithfully reproduce the production data-corruption symptom on local

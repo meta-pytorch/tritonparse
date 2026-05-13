@@ -9,6 +9,7 @@ import io
 import logging
 import math
 import os
+import re
 import subprocess
 import tempfile
 from collections import defaultdict
@@ -140,6 +141,26 @@ TRITONPARSE_TRACE_MANIFOLD = os.getenv(
 TRITON_TRACE_HANDLER = None
 # Global tensor blob manager instance
 TENSOR_BLOB_MANAGER = None
+
+# Cached on first call; gethostname() is constant for the process lifetime.
+_CACHED_HOSTNAME: Optional[str] = None
+
+
+def _get_sanitized_hostname() -> str:
+    """Return short hostname, sanitized to filename-safe characters.
+
+    Replaces any character not in [a-zA-Z0-9-] with '-' so the result is
+    unambiguous when extracted by the parser via the host_(...)_ regex.
+    Falls back to 'unknown' for the empty-hostname edge case.
+    """
+    global _CACHED_HOSTNAME
+    if _CACHED_HOSTNAME is None:
+        import socket
+
+        raw = socket.gethostname()
+        short = raw.split(".")[0]
+        _CACHED_HOSTNAME = re.sub(r"[^a-zA-Z0-9-]", "-", short) or "unknown"
+    return _CACHED_HOSTNAME
 
 
 class TensorBlobManager:
@@ -1188,10 +1209,26 @@ class TritonTraceHandler(logging.StreamHandler):
                 root_dir = self.get_root_dir()
                 if root_dir is not None:
                     os.makedirs(root_dir, exist_ok=True)
-                    ranksuffix = ""
-                    if current_rank is not None:
-                        ranksuffix = f"rank_{current_rank}_"
-                    filename = f"{self.prefix}{ranksuffix}"
+                    # Always emit a rank token so the downloader can
+                    # express "rank N or no-rank" as a single regex
+                    # `_rank_(N|none)_`. Without an explicit "none" sentinel,
+                    # no-rank files lack a discoverable token in their
+                    # filename and require either a fragile regex or an
+                    # over-broad prefix-match download.
+                    rank_token = current_rank if current_rank is not None else "none"
+                    ranksuffix = f"rank_{rank_token}_"
+                    # PID suffix gives every process its own file, eliminating
+                    # the cross-process file-sharing root cause of multiprocess
+                    # write corruption (see ~/ai_discussions/tritonparse/refactor/
+                    # multiprocess_trace_filename_refactor.md §3.5 finding F).
+                    pidsuffix = f"pid_{os.getpid()}_"
+                    # Host suffix isolates files across hosts in multi-host
+                    # distributed jobs where PIDs are not globally unique. Without
+                    # it, two hosts that happen to share a PID would have their
+                    # pre-init no-rank files attributed to the same rank during
+                    # parsing.
+                    hostsuffix = f"host_{_get_sanitized_hostname()}_"
+                    filename = f"{self.prefix}{ranksuffix}{pidsuffix}{hostsuffix}"
                     self._ensure_stream_closed()
                     # Choose file extension and mode based on compression setting
                     if TRITON_TRACE_COMPRESSION == "gzip":
