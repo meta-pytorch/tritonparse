@@ -259,6 +259,41 @@ class CollectAndBucketFilesTest(unittest.TestCase):
         self.assertEqual(set(keyed), {Rank.NO_RANK})
         self.assertEqual(keyed[Rank.NO_RANK], [no_rank])
 
+    def test_no_rank_fallback_when_only_no_rank_files_exist(self) -> None:
+        """Default RankConfig (rank 0) falls back to no-rank files when no ranked files exist.
+
+        Covers the single-GPU / no-distributed-init scenario where the job
+        never called dist.init_process_group and all files are no-rank.
+        """
+        no_rank = self._touch("dedicated_log_triton_trace_user_pid_1001_host_h_.ndjson")
+
+        buckets = _collect_and_bucket_files(
+            self.tmpdir,
+            RankConfig(rank=Rank(0)),
+            enable_pre_init_attribution=False,
+        )
+
+        keyed = {r.value: files for r, files in buckets.items()}
+        self.assertEqual(set(keyed), {Rank.NO_RANK})
+        self.assertEqual(keyed[Rank.NO_RANK], [no_rank])
+
+    def test_no_rank_fallback_not_triggered_when_ranked_files_exist(self) -> None:
+        """Fallback does NOT activate when ranked files exist (even if no-rank files also exist)."""
+        ranked = self._touch(
+            "dedicated_log_triton_trace_user_rank_0_pid_1001_host_h_.ndjson"
+        )
+        self._touch("dedicated_log_triton_trace_user_pid_1002_host_h_.ndjson")
+
+        buckets = _collect_and_bucket_files(
+            self.tmpdir,
+            RankConfig(rank=Rank(0)),
+            enable_pre_init_attribution=False,
+        )
+
+        keyed = {r.value: files for r, files in buckets.items()}
+        self.assertEqual(set(keyed), {0})
+        self.assertEqual(keyed[0], [ranked])
+
     def test_parse_metadata_extracts_host_from_new_filename(self) -> None:
         """parse_trace_filename_metadata pulls the hostname from a host-suffixed name."""
         from tritonparse.parse.common import parse_trace_filename_metadata

@@ -36,6 +36,39 @@ def _format_id_ranges(ids: List[int]) -> str:
     return ", ".join(ranges)
 
 
+def _dedup_compilations_by_hash(
+    compilation_events: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Order-preserving dedup of compilation events by `payload.metadata.hash`.
+
+    `parse_single_rank` deliberately appends a compilation event to its
+    autotune session bucket EVERY time it sees the hash — even when an
+    earlier file already recorded a real compilation for that hash —
+    because per-PID session metadata may differ and ingest must preserve
+    it. Analysis-time consumers MUST dedup by hash before deciding "is
+    this a real benchmark session", otherwise N PIDs hitting the same
+    Triton cache would be mis-counted as N distinct configs.
+
+    First-seen wins, matching the cross-PID merge semantics in
+    parse_single_rank's kernels_by_hash.
+    """
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for comp in compilation_events:
+        comp_hash = comp.get("payload", {}).get("metadata", {}).get("hash")
+        if not comp_hash:
+            # Defensive: malformed event without a hash. Keep it so we
+            # don't silently lose data; downstream code already filters
+            # by hash presence when building configs.
+            deduped.append(comp)
+            continue
+        if comp_hash in seen:
+            continue
+        seen.add(comp_hash)
+        deduped.append(comp)
+    return deduped
+
+
 def _generate_autotune_analysis_events(
     autotune_sessions: Dict[str, Dict[str, Any]],
     autotune_winners: Dict[str, str],
@@ -62,6 +95,16 @@ def _generate_autotune_analysis_events(
     """
     output_events: Dict[str, List[str]] = defaultdict(list)
 
+    # Pre-compute hash-deduped compilations per session. Cross-PID merge
+    # in parse_single_rank intentionally appends every observation; the
+    # analysis below MUST collapse them by hash before counting "configs"
+    # or judging "is this a benchmark session". See
+    # _dedup_compilations_by_hash for the rationale.
+    deduped_compilations: Dict[str, List[Dict[str, Any]]] = {
+        sid: _dedup_compilations_by_hash(sd.get("compilations", []) if sd else [])
+        for sid, sd in autotune_sessions.items()
+    }
+
     # First pass: Build hash → groups mapping from sessions with benchmarks
     # Each compilation hash maps to a list of groups it belongs to
     # This allows cached sessions to be associated with all possible groups
@@ -70,7 +113,7 @@ def _generate_autotune_analysis_events(
     for _session_id, session_data in autotune_sessions.items():
         if not session_data:
             continue
-        compilation_events = session_data.get("compilations", [])
+        compilation_events = deduped_compilations[_session_id]
         if len(compilation_events) < 2:
             # Only sessions with actual benchmarks (2+ compilations) define groups
             continue
@@ -98,8 +141,9 @@ def _generate_autotune_analysis_events(
         if not session_data:
             continue
 
-        # Get compilation and launch data
-        compilation_events = session_data["compilations"]
+        # Get compilation and launch data — compilations come from the
+        # hash-deduped cache so cross-PID duplicates don't inflate counts.
+        compilation_events = deduped_compilations[session_id]
         launch_group_hashes = session_data.get("launch_group_hashes", set())
         # Convert to a deterministically ordered list for downstream analysis
         launch_group_hashes = sorted(

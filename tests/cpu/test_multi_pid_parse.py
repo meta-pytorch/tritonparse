@@ -72,6 +72,63 @@ def _make_launch_event(
     }
 
 
+def _autotune_stack(user_call_id: str = "0") -> list[dict]:
+    """Build a stack that `get_autotune_session_id` recognizes as autotune.
+
+    The user-level frame must be stable across PIDs so the session_id hash
+    matches; vary `user_call_id` only across distinct call sites.
+    """
+    return [
+        {
+            "filename": f"/user/code_{user_call_id}.py",
+            "name": "user_func",
+            "line": 10,
+        },
+        # Autotuner boundary frame — `get_autotune_session_id` and
+        # `_is_autotune_benchmark_launch` both recognize this filename
+        # + name combination (see sourcemap_utils.py).
+        {
+            "filename": "triton/runtime/autotuner.py",
+            "name": "_bench",
+            "line": 100,
+        },
+    ]
+
+
+def _make_autotune_compilation_event(
+    kernel_hash: str,
+    kernel_name: str,
+    *,
+    user_call_id: str = "0",
+    num_warps: int = 4,
+    num_stages: int = 2,
+    pid: int = 12345,
+) -> dict:
+    """Compilation event whose stack triggers autotune session attribution.
+
+    `num_warps` / `num_stages` end up in `compilation_analysis.configs`,
+    so vary them across hashes to make the per-config view distinguishable.
+    """
+    return {
+        "event_type": "compilation",
+        "pid": pid,
+        "timestamp": "2026-05-06T00:00:00",
+        "stack": _autotune_stack(user_call_id),
+        "payload": {
+            "metadata": {
+                "hash": kernel_hash,
+                "name": kernel_name,
+                "num_warps": num_warps,
+                "num_stages": num_stages,
+                "num_ctas": 1,
+            },
+            "pt_info": {"frame_id": 0, "frame_compile_id": 0},
+            "file_content": {},
+            "file_path": {},
+        },
+    }
+
+
 def _write_trace_file(events: list[dict], path: str) -> None:
     with open(path, "w") as f:
         for ev in events:
@@ -290,3 +347,163 @@ class MultiPidParseTest(unittest.TestCase):
             rank_events = _read_jsonl(os.path.join(out_rank, fname))
             file_events = _read_jsonl(os.path.join(out_file, fname))
             self.assertEqual(rank_events, file_events)
+
+
+class DedupCompilationsByHashUnitTest(unittest.TestCase):
+    """Unit tests for `_dedup_compilations_by_hash`.
+
+    The helper is the foundation for cross-PID autotune analysis
+    correctness — N PIDs hitting the same Triton cache must collapse
+    to 1 logical config, not be counted as N.
+    """
+
+    def test_empty_input(self) -> None:
+        from tritonparse.parse.event_diff import _dedup_compilations_by_hash
+
+        self.assertEqual(_dedup_compilations_by_hash([]), [])
+
+    def test_all_unique_passes_through(self) -> None:
+        from tritonparse.parse.event_diff import _dedup_compilations_by_hash
+
+        events = [_make_compilation_event(f"hash_{i}", f"k_{i}") for i in range(3)]
+        result = _dedup_compilations_by_hash(events)
+        self.assertEqual(
+            [e["payload"]["metadata"]["hash"] for e in result],
+            ["hash_0", "hash_1", "hash_2"],
+        )
+
+    def test_duplicates_collapsed_first_wins(self) -> None:
+        """[A, B, A, C] → [A, B, C]; the second A (different PID) is dropped."""
+        from tritonparse.parse.event_diff import _dedup_compilations_by_hash
+
+        a1 = _make_compilation_event("hash_A", "k_A", pid=1)
+        b = _make_compilation_event("hash_B", "k_B", pid=1)
+        a2 = _make_compilation_event("hash_A", "k_A", pid=2)
+        c = _make_compilation_event("hash_C", "k_C", pid=2)
+        result = _dedup_compilations_by_hash([a1, b, a2, c])
+        self.assertEqual(
+            [e["payload"]["metadata"]["hash"] for e in result],
+            ["hash_A", "hash_B", "hash_C"],
+        )
+        # First-seen wins: pid=1's hash_A is kept, pid=2's is dropped.
+        self.assertEqual(result[0]["pid"], 1)
+
+    def test_event_without_hash_kept_defensively(self) -> None:
+        """Malformed events without a hash should NOT be silently dropped."""
+        from tritonparse.parse.event_diff import _dedup_compilations_by_hash
+
+        broken = {
+            "event_type": "compilation",
+            "pid": 1,
+            "payload": {"metadata": {}, "pt_info": {}},
+        }
+        good = _make_compilation_event("hash_A", "k_A")
+        result = _dedup_compilations_by_hash([broken, good])
+        self.assertEqual(len(result), 2)
+
+
+class CrossPidAutotuneDedupE2ETest(unittest.TestCase):
+    """End-to-end: parse_single_rank + cross-PID autotune session merge.
+
+    Verifies the analysis-side fix in `_generate_autotune_analysis_events`:
+    duplicate compilation events from different PIDs that share the same
+    autotune session_id and the same kernel hash must NOT be mis-counted
+    as multiple distinct benchmark configs.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="tritonparse_autotune_dedup_")
+        self.input_dir = os.path.join(self.tmpdir, "input")
+        self.output_dir = os.path.join(self.tmpdir, "output")
+        os.makedirs(self.input_dir)
+        os.makedirs(self.output_dir)
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_pid(self, pid: int, hashes: list[str]) -> str:
+        """Write a per-PID trace file containing one autotune compilation per hash.
+
+        All compilations share the same `_autotune_stack(user_call_id="0")`
+        so they collapse to a single autotune session_id.
+        """
+        path = os.path.join(
+            self.input_dir, f"dedicated_log_triton_trace_user_pid_{pid}_.ndjson"
+        )
+        events = []
+        for i, h in enumerate(hashes):
+            events.append(
+                _make_autotune_compilation_event(
+                    h,
+                    f"k_{h}",
+                    user_call_id="0",
+                    # Vary num_warps so per-config views are distinguishable
+                    # in the positive test.
+                    num_warps=4 + i,
+                    pid=pid,
+                )
+            )
+        _write_trace_file(events, path)
+        return path
+
+    def _autotune_analysis_events(self) -> list[dict]:
+        """Collect autotune_analysis events across all output files."""
+        out: list[dict] = []
+        for fname in os.listdir(self.output_dir):
+            if not fname.endswith(".ndjson"):
+                continue
+            for ev in _read_jsonl(os.path.join(self.output_dir, fname)):
+                if ev.get("event_type") == "autotune_analysis":
+                    out.append(ev)
+        return out
+
+    def test_two_pids_same_session_same_hash_no_autotune_analysis(self) -> None:
+        """2 PIDs + same session_id + same single hash → NOT a benchmark session.
+
+        Without dedup, `len(compilation_events)` is 2 (one per PID),
+        which would falsely satisfy the `>= 2` benchmark threshold and
+        emit an autotune_analysis event.
+        """
+        path_a = self._write_pid(pid=1001, hashes=["hash_X"])
+        path_b = self._write_pid(pid=1002, hashes=["hash_X"])
+
+        parse_single_rank([path_a, path_b], self.output_dir)
+
+        analyses = self._autotune_analysis_events()
+        self.assertEqual(
+            analyses,
+            [],
+            f"Expected no autotune_analysis (single hash collapses to 1 config); "
+            f"got {len(analyses)}: {analyses}",
+        )
+
+    def test_two_pids_same_session_two_hashes_one_analysis_with_two_configs(
+        self,
+    ) -> None:
+        """Same session + 2 distinct hashes across 2 PIDs → 1 analysis, 2 configs.
+
+        Without dedup, this would emit `compilation_analysis.configs` with
+        4 entries (2 hashes × 2 PIDs). With dedup, exactly 2 entries.
+        """
+        path_a = self._write_pid(pid=1001, hashes=["hash_A", "hash_B"])
+        path_b = self._write_pid(pid=1002, hashes=["hash_A", "hash_B"])
+
+        parse_single_rank([path_a, path_b], self.output_dir)
+
+        analyses = self._autotune_analysis_events()
+        self.assertEqual(
+            len(analyses), 1, f"Expected 1 autotune_analysis; got {analyses}"
+        )
+
+        ca = analyses[0].get("compilation_analysis", {})
+        configs = ca.get("configs", [])
+        config_hashes = sorted(c.get("compilation_hash") for c in configs)
+        self.assertEqual(
+            config_hashes,
+            ["hash_A", "hash_B"],
+            f"Expected exactly 2 deduped configs; got {len(configs)}: {configs}",
+        )
+        # compilation_hashes (the parallel list) should also be deduped.
+        self.assertEqual(sorted(ca.get("compilation_hashes", [])), ["hash_A", "hash_B"])
