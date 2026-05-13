@@ -15,7 +15,6 @@ Bug manifestation matches the synthetic test:
               `dedicated_log_triton_trace_{user}_.ndjson` file.
   After fix:  each worker writes its own `..._pid_{PID}_.ndjson`.
 
-See: ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
 """
 
 from __future__ import annotations

@@ -37,7 +37,6 @@ but related guarantees of the Phase 1 fix:
      pass before the fix on local SSD (false negative for the bug), which
      is itself useful information when debugging FS-specific behavior.
 
-See: ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
 """
 
 from __future__ import annotations

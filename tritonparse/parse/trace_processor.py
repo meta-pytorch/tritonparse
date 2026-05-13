@@ -711,9 +711,6 @@ def parse_single_rank(
     when files are processed in their input order — caller should pass files
     sorted by PID for deterministic output.
 
-    See ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
-    §7.2 for the design background.
-
     Args:
         file_paths: Trace file paths to process together. Sort by PID before
             calling for deterministic output.

@@ -1218,9 +1218,7 @@ class TritonTraceHandler(logging.StreamHandler):
                     rank_token = current_rank if current_rank is not None else "none"
                     ranksuffix = f"rank_{rank_token}_"
                     # PID suffix gives every process its own file, eliminating
-                    # the cross-process file-sharing root cause of multiprocess
-                    # write corruption (see ~/ai_discussions/tritonparse/refactor/
-                    # multiprocess_trace_filename_refactor.md §3.5 finding F).
+                    # cross-process write corruption.
                     pidsuffix = f"pid_{os.getpid()}_"
                     # Host suffix isolates files across hosts in multi-host
                     # distributed jobs where PIDs are not globally unique. Without

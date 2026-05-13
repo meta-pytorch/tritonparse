@@ -2,9 +2,6 @@
 """
 Tests for parse_single_rank — the multi-input batch entry point that merges
 events across multiple trace files (typically PID files for one rank).
-
-See ~/ai_discussions/tritonparse/refactor/multiprocess_trace_filename_refactor.md
-§7.2 (rationale) and §9.2 (test spec).
 """
 
 import json

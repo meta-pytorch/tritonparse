@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import zstandard as zstd
 from tritonparse._json_compat import dumps
@@ -17,9 +17,222 @@ from tritonparse.shared_vars import (
 )
 from tritonparse.tp_logger import logger
 
-from .extract_source_mappings import parse_single_file
+from .trace_processor import parse_single_rank
 
-LOG_RANK_REGEX = re.compile(r"rank_(\d+)")
+
+class TraceFilenameMetadata(NamedTuple):
+    """Structured suffixes extracted from a tritonparse trace log basename.
+
+    Each field is None if the corresponding suffix is absent from the
+    basename — legacy logs may omit any combination of rank/pid/host.
+    """
+
+    rank: Optional[int]
+    pid: Optional[int]
+    host: Optional[str]
+
+
+_OUTER_COMPRESSION_EXTS = (".gz", ".zst")
+# Longest first — `.bin.ndjson` MUST be tried before `.ndjson` so we don't
+# strip just `.ndjson` and leave a stray `.bin` on the basename.
+_INNER_FORMAT_EXTS = (".bin.ndjson", ".ndjson", ".clp")
+
+# Each suffix regex anchors with `fullmatch` to the END of the (already
+# inner-stripped) basename, so the greedy `.*` always lands on the
+# RIGHTMOST occurrence of the suffix. This is the whole point of the
+# right-to-left peeling strategy: substrings inside USER that look like
+# `_pid_NNN_` / `_host_X_` / `_rank_N_` cannot be mistaken for the real
+# logger-emitted suffix.
+_HOST_TAIL = re.compile(r"(?P<rest>.*)_host_(?P<host>[a-zA-Z0-9-]+)_")
+_PID_TAIL = re.compile(r"(?P<rest>.*)_pid_(?P<pid>\d+)_")
+_RANK_TAIL = re.compile(r"(?P<rest>.*)_rank_(?P<rank>\d+)_")
+
+
+def _strip_extensions(basename: str) -> str:
+    """Strip outer compression + ndjson/clp extension(s) in the right order.
+
+    The logger emits one of:
+      .ndjson | .bin.ndjson | .bin.ndjson.gz | .bin.ndjson.zst |
+      .ndjson.gz | .clp
+    """
+    for ext in _OUTER_COMPRESSION_EXTS:
+        if basename.endswith(ext):
+            basename = basename[: -len(ext)]
+            break
+    for ext in _INNER_FORMAT_EXTS:
+        if basename.endswith(ext):
+            basename = basename[: -len(ext)]
+            break
+    return basename
+
+
+def parse_trace_filename_metadata(basename: str) -> TraceFilenameMetadata:
+    """Extract (rank, pid, host) from a tritonparse trace log basename.
+
+    The structured logger appends suffixes in fixed order at the END of
+    the basename, before the extension::
+
+        {USER}_rank_{N}_pid_{PID}_host_{HOST}_.ndjson[.gz|.zst]
+                                              ^- trailing `_` always present
+
+    Some suffixes are absent in legacy files (any combination is allowed).
+    USER may itself contain underscores AND substrings that look like
+    suffixes (e.g. service account `pid_123_team`). To stay correct under
+    such adversarial usernames, this helper strips from the RIGHT —
+    `fullmatch` anchored at end-of-string with greedy `.*` — rather than
+    `re.search()` from the left, which would mis-attribute substrings
+    inside USER as the real metadata.
+
+    Returns a TraceFilenameMetadata; any field is None when its suffix
+    is absent.
+    """
+    stripped = _strip_extensions(basename)
+
+    host: Optional[str] = None
+    if (m := _HOST_TAIL.fullmatch(stripped)) is not None:
+        host = m["host"]
+        # Re-add the trailing `_` so the next peel's anchor still matches.
+        stripped = m["rest"] + "_"
+
+    pid: Optional[int] = None
+    if (m := _PID_TAIL.fullmatch(stripped)) is not None:
+        pid = int(m["pid"])
+        stripped = m["rest"] + "_"
+
+    rank: Optional[int] = None
+    if (m := _RANK_TAIL.fullmatch(stripped)) is not None:
+        rank = int(m["rank"])
+
+    return TraceFilenameMetadata(rank=rank, pid=pid, host=host)
+
+
+def _collect_and_bucket_files(
+    raw_log_dir: str,
+    rank_config: "RankConfig",
+    enable_pre_init_attribution: bool,
+) -> Dict["Rank", List[str]]:
+    """Collect tritonparse log files and bucket them by Rank.
+
+    Three-pass algorithm:
+
+    Pass 1 — scan the directory; for each eligible log file extract its
+    rank/PID/host via `parse_trace_filename_metadata` (right-to-left
+    suffix peeling, immune to look-alike substrings inside USER); build
+    raw_ranked + raw_no_rank lists and a host_pid_to_rank lookup keyed
+    by (host, pid) tuple. Tuple key is necessary because PIDs are not
+    globally unique across hosts in a multi-host distributed job.
+
+    Pass 2 (gated) — when enable_pre_init_attribution is True AND rank_config
+    is not "no rank", re-attribute no-rank files whose (host, pid) is in
+    host_pid_to_rank into the matching ranked bucket. With the default
+    Diff 2 setting (False), this pass is a no-op and behavior is
+    identical to v1.
+
+    Pass 3 — apply rank_config filtering: --all-ranks keeps every ranked
+    bucket; --rank N keeps only that one; --rank none keeps no ranked
+    buckets; default (no flag) keeps rank 0. NO_RANK bucket is added only
+    when --all-ranks or --rank none is in effect.
+
+    Each bucket is sorted by (host, pid) for deterministic output
+    (legacy no-host/no-PID files sort first; cross-PID occurrence_id
+    ordering depends on this).
+    """
+    # (host, pid) tuple key — PIDs are not globally unique across hosts,
+    # so we need both to identify a unique process. Legacy files (no host
+    # suffix) get host=None and stay in their own namespace; they cannot
+    # be confused with new-format files even when PIDs collide.
+    host_pid_to_rank: Dict[Tuple[Optional[str], int], int] = {}
+    raw_ranked: Dict[int, List[str]] = defaultdict(list)
+    raw_no_rank: List[str] = []
+
+    # Sort listdir for deterministic conflict resolution (first-wins) when
+    # the same (host, pid) appears in more than one ranked file.
+    for item in sorted(os.listdir(raw_log_dir)):
+        path = os.path.join(raw_log_dir, item)
+        if not os.path.isfile(path):
+            continue
+        # Use 'in' instead of 'startswith' to support lg's --store-by-source
+        # format which produces filenames like
+        # log.source.dedicated_log_triton_trace_xxx_.ndjson.
+        if LOG_PREFIX not in item:
+            continue
+        meta = parse_trace_filename_metadata(item)
+        if meta.rank is not None:
+            raw_ranked[meta.rank].append(path)
+            if meta.pid is not None:
+                key = (meta.host, meta.pid)
+                existing = host_pid_to_rank.get(key)
+                if existing is not None and existing != meta.rank:
+                    logger.warning(
+                        "Conflicting rank attribution for "
+                        "(host=%s, pid=%d): existing rank %d vs new rank %d "
+                        "— keeping existing",
+                        meta.host,
+                        meta.pid,
+                        existing,
+                        meta.rank,
+                    )
+                else:
+                    host_pid_to_rank[key] = meta.rank
+        else:
+            raw_no_rank.append(path)
+
+    # Pass 2: re-attribute pre-init no-rank files to their (host, PID)-matched rank.
+    # Skipped under --rank none (user explicitly wants the unattributed view).
+    truly_no_rank: List[str] = []
+    if enable_pre_init_attribution and not rank_config.is_no_rank:
+        for path in raw_no_rank:
+            meta = parse_trace_filename_metadata(os.path.basename(path))
+            key = (meta.host, meta.pid) if meta.pid is not None else None
+            if key is not None and key in host_pid_to_rank:
+                raw_ranked[host_pid_to_rank[key]].append(path)
+            else:
+                truly_no_rank.append(path)
+    else:
+        truly_no_rank = list(raw_no_rank)
+
+    buckets: Dict["Rank", List[str]] = {}
+    for rank_value, files in raw_ranked.items():
+        rank_obj = Rank(rank_value)
+        if rank_config.all_ranks:
+            buckets[rank_obj] = files
+        elif rank_config.is_no_rank:
+            continue
+        elif rank_config.rank is not None:
+            if rank_config.rank.value == rank_value:
+                buckets[rank_obj] = files
+        else:
+            # Default (no --rank, no --all-ranks): include rank 0 only.
+            if rank_value == 0:
+                buckets[rank_obj] = files
+
+    if (rank_config.all_ranks or rank_config.is_no_rank) and truly_no_rank:
+        buckets[Rank(Rank.NO_RANK)] = truly_no_rank
+    elif not buckets and truly_no_rank:
+        # No ranked files matched the requested rank config, but no-rank
+        # files exist (e.g. single-GPU job without dist.init). Fall back
+        # to parsing no-rank files instead of raising an error downstream.
+        logger.info(
+            "No ranked files found; falling back to %d no-rank file(s).",
+            len(truly_no_rank),
+        )
+        buckets[Rank(Rank.NO_RANK)] = truly_no_rank
+
+    # Sort each bucket by (host, PID, path) for deterministic occurrence_id
+    # ordering. Legacy no-host/no-PID files sort first (host="", pid=-1).
+    # Single helper call per file vs. the previous two-call approach.
+    def _bucket_sort_key(path: str) -> Tuple[str, int, str]:
+        meta = parse_trace_filename_metadata(os.path.basename(path))
+        return (
+            meta.host or "",
+            meta.pid if meta.pid is not None else -1,
+            path,
+        )
+
+    for rank in buckets:
+        buckets[rank].sort(key=_bucket_sort_key)
+
+    return buckets
 
 
 if is_fbcode():
@@ -388,6 +601,7 @@ def parse_logs(
     split_inductor_compilations: bool = True,
     torch_trace_dir: Optional[str] = None,
     procedure_checks: list = None,
+    enable_pre_init_attribution: bool = False,
 ) -> Tuple[str, dict]:
     """
     Parse logs.
@@ -406,64 +620,35 @@ def parse_logs(
             If None, auto-discovers torch trace files in the same directory as tritonparse logs.
         procedure_checks: List of procedure check configurations for FileCheck-based
             pattern detection. If None, uses default patterns.
+        enable_pre_init_attribution: When True, no-rank trace files whose PID
+            also appears in a ranked file are re-attributed to that rank.
+            Defaults to False.
     Returns:
         Tuple of (parsed log directory, file mapping)
     """
 
     raw_log_dir = logs_to_parse
     parsed_log_dir = tempfile.mkdtemp()
-    # Dictionary to store ranks and their log files
-    ranks = defaultdict(list)  # Dict[Rank, List[str]]
-    # Find all eligible logs in the raw log directory
-    for item in os.listdir(raw_log_dir):
-        path = os.path.join(raw_log_dir, item)
-        if not os.path.isfile(path):
-            continue
-        # Check if this is a tritonparse log file
-        # Use 'in' instead of 'startswith' to support lg's --store-by-source format
-        # which produces filenames like: log.source.dedicated_log_triton_trace_xxx_.ndjson
-        if LOG_PREFIX not in item:
-            continue
 
-        # Check if the log has a rank in its name
-        rank_match = LOG_RANK_REGEX.search(item)
-        if rank_match:
-            # File has rank suffix: dedicated_log_triton_trace_{USER}_rank_{N}_.ndjson.gz
-            rank_value = int(rank_match.group(1))
-            if rank_config.all_ranks:
-                # --all-ranks: include all ranked files
-                ranks[Rank(rank_value)].append(path)
-            elif not rank_config.is_no_rank and rank_config.rank is not None:
-                # --rank N: only include specified rank
-                if rank_config.rank.value == rank_value:
-                    ranks[Rank(rank_value)].append(path)
-            elif rank_config.rank is None and not rank_config.all_ranks:
-                # Default case (no --rank, no --all-ranks): include rank 0
-                if rank_value == 0:
-                    ranks[Rank(rank_value)].append(path)
-        else:
-            # File has no rank suffix: dedicated_log_triton_trace_{USER}_.ndjson.gz
-            if rank_config.all_ranks or rank_config.is_no_rank:
-                # --all-ranks or --rank none: include no-rank files
-                ranks[Rank(Rank.NO_RANK)].append(path)
-    if not ranks:
-        # Check if logs exist for other ranks and fall back to the lowest available
-        all_available = defaultdict(list)
+    buckets = _collect_and_bucket_files(
+        raw_log_dir, rank_config, enable_pre_init_attribution
+    )
+    if not buckets:
+        # Scan for files of ANY rank to give a helpful error message.
+        all_available: dict[int, list[str]] = defaultdict(list)
         for item in os.listdir(raw_log_dir):
             path = os.path.join(raw_log_dir, item)
             if not os.path.isfile(path) or LOG_PREFIX not in item:
                 continue
-            rank_match = LOG_RANK_REGEX.search(item)
-            if rank_match:
-                all_available[int(rank_match.group(1))].append(path)
+            meta = parse_trace_filename_metadata(item)
+            if meta.rank is not None:
+                all_available[meta.rank].append(path)
         if all_available:
-            fallback_rank = min(all_available.keys())
-            logger.warning(
-                f"Requested rank not found. "
+            raise RuntimeError(
+                f"Rank {rank_config.to_rank().to_int()} not found. "
                 f"Available ranks: {sorted(all_available.keys())}. "
-                f"Falling back to rank {fallback_rank}."
+                f"Use --rank N to select a specific rank, or --all-ranks."
             )
-            ranks[Rank(fallback_rank)] = all_available[fallback_rank]
         else:
             raise RuntimeError(
                 f"No eligible structured trace logs found in {raw_log_dir}"
@@ -473,75 +658,53 @@ def parse_logs(
     kernel_compile_mapping = _build_kernel_compile_mapping(raw_log_dir, torch_trace_dir)
 
     file_mapping = {"tritonparse_url_prefix": tritonparse_url_prefix}
-    # Parse each eligible log
-    for rank, files in ranks.items():
-        use_filenames = False
-        if len(files) > 1:
-            logger.warning(
-                "Warning: multiple logs found for the same rank. Using filenames."
-            )
-            use_filenames = True
-        # Determine rank key for file mapping
+    # Process one rank at a time. parse_single_rank merges events across all
+    # PID files in the bucket by kernel_hash, so per-frame outputs no longer
+    # collide between PIDs (the §3.5 finding A scenario).
+    for rank, files in buckets.items():
         if rank.is_default:
             rank_key = "rank_default"
         elif rank.is_no_rank:
             rank_key = "rank_none"
         else:
             rank_key = f"rank_{rank.value}"
-        for file_path in files:
-            filename = os.path.basename(file_path)
-            input_file = os.path.join(raw_log_dir, filename)
 
-            relative_path = ""
-            if use_filenames:
-                # For no-rank files, don't create a subdirectory (same as default)
-                rank_prefix = (
-                    ""
-                    if (rank.is_default or rank.is_no_rank)
-                    else f"{rank.to_string('')}/"
-                )
-                relative_path = f"{rank_prefix}{filename}"
-            else:
-                # For no-rank files, output directly to parsed_log_dir (no subdirectory)
-                relative_path = "" if rank.is_no_rank else rank.to_string("")
-            output_dir = os.path.join(parsed_log_dir, relative_path)
-            # Parse the file
-            parse_single_file(
-                input_file,
-                output_dir,
-                split_inductor_compilations,
-                kernel_compile_mapping=kernel_compile_mapping,
-                procedure_checks=procedure_checks,
+        # No-rank files go directly to parsed_log_dir (no subdirectory).
+        relative_path = "" if rank.is_no_rank else rank.to_string("")
+        output_dir = os.path.join(parsed_log_dir, relative_path)
+        os.makedirs(output_dir, exist_ok=True)
+
+        parse_single_rank(
+            files,
+            output_dir,
+            split_inductor_compilations,
+            kernel_compile_mapping=kernel_compile_mapping,
+            procedure_checks=procedure_checks,
+        )
+
+        # Collect generated files and gzip them immediately.
+        if os.path.exists(output_dir):
+            generated_files = []
+            mapped_file = None
+
+            for generated_item in os.listdir(output_dir):
+                generated_path = os.path.join(output_dir, generated_item)
+                if os.path.isfile(generated_path):
+                    gz_file_path = compress_single_file(generated_path, verbose=verbose)
+                    gz_filename = os.path.basename(gz_file_path)
+                    if "mapped" in generated_item.lower():
+                        mapped_file = gz_filename
+                    else:
+                        generated_files.append(gz_filename)
+
+            if rank_key not in file_mapping:
+                file_mapping[rank_key] = {"regular_files": [], "mapped_file": None}
+            file_mapping[rank_key]["regular_files"].extend(generated_files)
+            file_mapping[rank_key]["rank_suffix"] = rank_config.to_rank().to_string(
+                suffix="/"
             )
-            # Collect generated files after parsing and gzip them immediately
-            if os.path.exists(output_dir):
-                generated_files = []
-                mapped_file = None
-
-                for generated_item in os.listdir(output_dir):
-                    generated_path = os.path.join(output_dir, generated_item)
-                    if os.path.isfile(generated_path):
-                        # Gzip the file immediately after parsing
-                        gz_file_path = compress_single_file(
-                            generated_path, verbose=verbose
-                        )
-                        gz_filename = os.path.basename(gz_file_path)
-                        # Check if it's a mapped file (assuming files with 'mapped' in name)
-                        if "mapped" in generated_item.lower():
-                            mapped_file = gz_filename
-                        else:
-                            generated_files.append(gz_filename)
-                # Initialize rank entry if not exists
-                if rank_key not in file_mapping:
-                    file_mapping[rank_key] = {"regular_files": [], "mapped_file": None}
-                # Add files to the mapping (now with .gz extensions)
-                file_mapping[rank_key]["regular_files"].extend(generated_files)
-                # this is used to generate the tritonparse url
-                file_mapping[rank_key]["rank_suffix"] = rank_config.to_rank().to_string(
-                    suffix="/"
-                )
-                if mapped_file:
-                    file_mapping[rank_key]["mapped_file"] = mapped_file
+            if mapped_file:
+                file_mapping[rank_key]["mapped_file"] = mapped_file
 
     # Clean up the file mapping - remove None mapped_files and ensure no duplicates
     for rank_key, rank_data in file_mapping.items():
