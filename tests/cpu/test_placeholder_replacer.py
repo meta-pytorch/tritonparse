@@ -420,39 +420,32 @@ class TestReproducerAdapterDriven(unittest.TestCase):
 
     def test_sync_call_uses_adapter_pytorch_module(self):
         """Verify sync call is derived from adapter.pytorch_module, not hardcoded."""
-        from unittest.mock import patch
-
         replacer = DefaultPlaceholderReplacer()
         ctx = _make_context_bundle(backend="cuda")
         template = "# {{SYNC_CALL_PLACEHOLDER}}"
 
-        with patch(
-            "tritonparse.backend.NvidiaTritonAdapter.pytorch_module",
-            new_callable=lambda: property(lambda self: "example"),
-        ):
-            result = replacer._replace_sync_call(template, ctx)
-            self.assertEqual(result, "torch.example.synchronize()")
+        result = replacer._replace_sync_call(
+            template,
+            ctx,
+            pytorch_module="example",
+        )
+        self.assertEqual(result, "torch.example.synchronize()")
 
     def test_allocator_uses_adapter_pytorch_module(self):
         """Verify allocator device is derived from adapter.pytorch_module."""
-        from unittest.mock import patch
-
         replacer = DefaultPlaceholderReplacer()
         ctx = _make_context_bundle(global_scratch_size="1024", backend="cuda")
         template = "# {{LAUNCH_KERNEL_BODY_PLACEHOLDER}}"
 
-        with patch(
-            "tritonparse.backend.NvidiaTritonAdapter.pytorch_module",
-            new_callable=lambda: property(lambda self: "example"),
-        ):
-            result = replacer._replace_launch_kernel_body(
-                template,
-                ctx,
-                embed_context=False,
-                temp_json_path=MagicMock(name="ctx.json"),
-            )
-            self.assertIn("device='example'", result)
-            self.assertNotIn("device='cuda'", result)
+        result = replacer._replace_launch_kernel_body(
+            template,
+            ctx,
+            embed_context=False,
+            temp_json_path=MagicMock(name="ctx.json"),
+            pytorch_module="example",
+        )
+        self.assertIn("device='example'", result)
+        self.assertNotIn("device='cuda'", result)
 
 
 if __name__ == "__main__":

@@ -87,18 +87,6 @@ def reproduce(
     context_bundle = build_context_bundle(events, line_index)
     context_bundle.source_repo_dir = source_repo_dir
 
-    # Adapter-driven device normalization: set device strings in tensor args
-    # based on the adapter's pytorch_module prefix, covering both file mode
-    # and embed mode. GPU args are normalized to {prefix}:0; CPU args stay.
-    from tritonparse.backend import get_backend_registry
-
-    _backend = context_bundle.compile.get("backend") or "cuda"
-    _adapter = get_backend_registry().resolve(adapter_name=f"{_backend}_triton")
-    _normalized_device = f"{_adapter.pytorch_module}:0"
-    for _arg in context_bundle.raw_launch_event.get("extracted_args", {}).values():
-        if isinstance(_arg, dict) and _arg.get("device", "cpu") != "cpu":
-            _arg["device"] = _normalized_device
-
     logger.debug(
         f"Built context bundle for kernel: {context_bundle.kernel_info.function_name}"
     )
@@ -125,6 +113,11 @@ def reproduce(
     logger.debug("Loading reproducer template.")
     template_code = load_template_code(template)
 
+    from tritonparse.backend import get_backend_registry
+
+    backend = context_bundle.compile.get("backend") or "cuda"
+    adapter = get_backend_registry().resolve_from_backend_name(backend)
+
     # Use PlaceholderReplacer to replace all placeholders
     # If no custom replacer provided, use the default one
     if replacer is None:
@@ -138,6 +131,7 @@ def reproduce(
         embed_context=embed_context,
         input_path=input_path,
         line_index=line_index,
+        pytorch_module=adapter.pytorch_module,
         template=template,
     )
 

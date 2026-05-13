@@ -9,6 +9,19 @@ from typing import Any, Callable
 from tritonparse.tp_logger import logger
 
 
+def normalize_accelerator_device_string(device: str) -> str:
+    """Normalize accelerator device strings to index 0, preserving CPU."""
+    if not isinstance(device, str):
+        return "cpu"
+
+    normalized = device.strip()
+    if not normalized or normalized == "cpu":
+        return "cpu"
+
+    prefix = normalized.split(":")[0]
+    return f"{prefix}:0"
+
+
 @dataclass(frozen=True)
 class IRStageDescriptor:
     """Describes an IR stage in the compilation pipeline.
@@ -111,6 +124,12 @@ class CompilationPipelineAdapter(ABC):
     @property
     @abstractmethod
     def pytorch_module(self) -> str:
+        """Device-family prefix used for torch device strings and sync calls.
+
+        Examples: "cuda", "xpu", "mps".
+        Used as f"{prefix}:0" for device strings and
+        f"torch.{prefix}.synchronize()" for synchronization.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -289,11 +308,9 @@ class CompilationPipelineAdapter(ABC):
             analyzer_id, analyzer_func, required_stages, adapter_affinity
         )
 
-    def normalize_device_string(self, device: str) -> str:
-        if not isinstance(device, str) or not device or device == "cpu":
-            return "cpu"
-        prefix = device.split(":")[0]
-        return f"{prefix}:0"
+    def get_canonical_device_string(self) -> str:
+        """Return the adapter's canonical accelerator device string."""
+        return normalize_accelerator_device_string(self.pytorch_module)
 
     def get_parser(self, parser_id: str):
         """

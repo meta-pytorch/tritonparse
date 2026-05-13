@@ -759,18 +759,14 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         # without one the kernel launch will fail or hang.
         global_scratch_size = context_bundle.compile.get("global_scratch_size")
         if global_scratch_size and int(global_scratch_size) > 0:
-            from tritonparse.backend import get_backend_registry
-
-            _backend = context_bundle.compile.get("backend") or "cuda"
-            _adapter = get_backend_registry().resolve(adapter_name=f"{_backend}_triton")
-            _device_prefix = _adapter.pytorch_module
+            device_prefix = kwargs.get("pytorch_module")
             body_lines.extend(
                 [
                     f"# This kernel requires scratch memory (global_scratch_size={global_scratch_size}).",
                     "# A default allocator is provided below. If the kernel hangs or produces",
                     "# incorrect results, replace this with the allocator from the original application.",
                     "def _alloc_fn(size: int, align: int, stream):",
-                    f"    return torch.empty(size, dtype=torch.int8, device='{_device_prefix}')",
+                    f"    return torch.empty(size, dtype=torch.int8, device='{device_prefix}')",
                     "triton.set_allocator(_alloc_fn)",
                     "",
                 ]
@@ -862,11 +858,8 @@ To regenerate this reproducer:
         self, code: str, context_bundle: ContextBundle, **kwargs
     ) -> str:
         """Replace the sync call placeholder with backend-appropriate synchronize."""
-        from tritonparse.backend import get_backend_registry
-
-        backend = context_bundle.compile.get("backend") or "cuda"
-        adapter = get_backend_registry().resolve(adapter_name=f"{backend}_triton")
-        sync_call = f"torch.{adapter.pytorch_module}.synchronize()"
+        pytorch_module = kwargs.get("pytorch_module")
+        sync_call = f"torch.{pytorch_module}.synchronize()"
         return code.replace(self.SYNC_CALL_PLACEHOLDER, sync_call)
 
 

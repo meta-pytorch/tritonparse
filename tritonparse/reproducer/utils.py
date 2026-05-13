@@ -227,8 +227,12 @@ def _create_base_tensor(arg_info) -> torch.Tensor:
     Returns:
         torch.Tensor: The created base tensor
     """
+    from tritonparse.backend import normalize_accelerator_device_string
+
+    device = normalize_accelerator_device_string(arg_info.get("device", "cpu"))
+
     if arg_info.get("blob_path"):
-        return load_tensor(arg_info.get("blob_path"), arg_info.get("device"))
+        return load_tensor(arg_info.get("blob_path"), device)
 
     # Extract basic tensor properties
     dtype_str = arg_info.get("dtype")
@@ -239,16 +243,6 @@ def _create_base_tensor(arg_info) -> torch.Tensor:
         torch_dtype = torch.float32
 
     shape = arg_info.get("shape", [])
-    device = arg_info.get("device", "cpu")
-    # Safety net: normalize accelerator device to device index 0.
-    # Primary normalization is done by the adapter at generation time.
-    if isinstance(device, str):
-        device = device.strip()
-        if not device:
-            device = "cpu"
-        elif device != "cpu":
-            prefix = device.split(":")[0]
-            device = f"{prefix}:0"
 
     # Extract statistical information if available
     mean = arg_info.get("mean")
