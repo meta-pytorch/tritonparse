@@ -3,8 +3,8 @@ import { DiffEditor } from "@monaco-editor/react";
 
 interface DiffOptions {
   ignoreWhitespace?: boolean;
-  wordLevel?: boolean; // kept for future, Monaco uses its own algorithm
-  context?: number; // lines of context when hiding unchanged regions
+  wordLevel?: boolean;
+  context?: number;
   wordWrap?: "off" | "on";
   onlyChanged?: boolean;
 }
@@ -12,6 +12,8 @@ interface DiffOptions {
 interface DiffComparisonViewProps {
   leftContent: string;
   rightContent: string;
+  leftLabel?: string;
+  rightLabel?: string;
   language?: string;
   height?: string;
   options?: DiffOptions;
@@ -60,6 +62,8 @@ interface MonacoSubEditor {
 const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
   leftContent,
   rightContent,
+  leftLabel,
+  rightLabel,
   language = "plaintext",
   height = "calc(100vh - 12rem)",
   options,
@@ -194,6 +198,10 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
           } catch { /* ignore resize errors */ }
         }}
       >
+      <div className="flex justify-between mb-2 px-2 pt-2">
+        <span className="text-sm font-medium text-gray-600">{leftLabel || "Original"}</span>
+        <span className="text-sm font-medium text-gray-600">{rightLabel || "Modified"}</span>
+      </div>
       <DiffEditor
         height="100%"
         language={language === "python" ? "python" : "plaintext"}
