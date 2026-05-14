@@ -7,7 +7,6 @@ It contains a smallest testing example for a Triton kernel.
 
 import logging
 
-import torch
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ def launch_kernel():
 
     # {{KERNEL_INVOCATION_PLACEHOLDER}}
 
-    torch.cuda.synchronize()
+    # {{SYNC_CALL_PLACEHOLDER}}
     print("Kernel execution finished.")
 
 

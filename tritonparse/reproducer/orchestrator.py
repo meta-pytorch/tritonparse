@@ -113,6 +113,11 @@ def reproduce(
     logger.debug("Loading reproducer template.")
     template_code = load_template_code(template)
 
+    from tritonparse.backend import get_backend_registry
+
+    backend = context_bundle.compile.get("backend") or "cuda"
+    adapter = get_backend_registry().resolve_from_backend_name(backend)
+
     # Use PlaceholderReplacer to replace all placeholders
     # If no custom replacer provided, use the default one
     if replacer is None:
@@ -126,6 +131,7 @@ def reproduce(
         embed_context=embed_context,
         input_path=input_path,
         line_index=line_index,
+        pytorch_module=adapter.pytorch_module,
         template=template,
     )
 

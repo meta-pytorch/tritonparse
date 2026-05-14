@@ -479,5 +479,32 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
             set_runtime_sass_dump_override(None)
 
 
+class TestDeviceStringHelpers(unittest.TestCase):
+    """Tests for device-string normalization helpers."""
+
+    def test_adapter_returns_canonical_cuda_device(self):
+        adapter = NvidiaTritonAdapter()
+        self.assertEqual(adapter.get_canonical_device_string(), "cuda:0")
+
+    def test_adapter_returns_canonical_hip_device(self):
+        adapter = AmdTritonAdapter()
+        self.assertEqual(adapter.get_canonical_device_string(), "cuda:0")
+
+    def test_public_helper_keeps_cpu(self):
+        from tritonparse.backend import normalize_accelerator_device_string
+
+        self.assertEqual(normalize_accelerator_device_string("cpu"), "cpu")
+
+    def test_public_helper_normalizes_indexed_device(self):
+        from tritonparse.backend import normalize_accelerator_device_string
+
+        self.assertEqual(normalize_accelerator_device_string("hip:3"), "hip:0")
+
+    def test_public_helper_maps_empty_to_cpu(self):
+        from tritonparse.backend import normalize_accelerator_device_string
+
+        self.assertEqual(normalize_accelerator_device_string(""), "cpu")
+
+
 if __name__ == "__main__":
     unittest.main()
