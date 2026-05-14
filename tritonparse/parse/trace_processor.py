@@ -478,6 +478,28 @@ def parse_single_trace_content(trace_content: str) -> str:
         # Returns: {"ttir": "kernel.ttir", "ttgir": "kernel.ttgir", ...}
         stage_keys = _resolve_source_mappable_stage_keys(entry)
 
+        # Add ir_stages descriptor to payload for frontend consumption.
+        # Placed before the early return so compilations without IR files
+        # still carry stage metadata.
+        try:
+            from tritonparse.backend import get_backend_registry
+
+            adapter = get_backend_registry().resolve_from_trace(metadata)
+            payload["ir_stages"] = [
+                {
+                    "name": stage.name,
+                    "extension": stage.extension,
+                    "display_name": stage.display_name,
+                    "display_order": stage.display_order,
+                    "is_text": stage.is_text,
+                    "supports_source_mapping": stage.supports_source_mapping,
+                    "syntax_id": stage.syntax_id,
+                }
+                for stage in adapter.get_ir_stages()
+            ]
+        except ValueError:
+            logger.debug("Could not resolve adapter for ir_stages; skipping")
+
         # Extract original num_warps from TTGIR for warp-specialized kernels.
         # If upstream Triton already set num_warps_base, trust it; otherwise
         # recover the value from the TTGIR "ttg.num-warps" module attribute.
