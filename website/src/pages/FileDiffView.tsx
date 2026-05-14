@@ -24,6 +24,8 @@ const PARAM_WORD_LEVEL = "word_level";
 const PARAM_CONTEXT = "context";
 const PARAM_WRAP = "wrap";
 const PARAM_ONLY_CHANGED = "only_changed";
+const PARAM_LEFT_LABEL = "left_label";
+const PARAM_RIGHT_LABEL = "right_label";
 
 function findKernelIndexByHash(hash: string | null, kernels: ProcessedKernel[]): number {
   if (!hash) return -1;
@@ -112,6 +114,12 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   });
   const [onlyChanged, setOnlyChanged] = useState<boolean>(() =>
     initialParams.get(PARAM_ONLY_CHANGED) === "1"
+  );
+  const [leftLabel, setLeftLabel] = useState<string>(() =>
+    initialParams.get(PARAM_LEFT_LABEL) || ""
+  );
+  const [rightLabel, setRightLabel] = useState<string>(() =>
+    initialParams.get(PARAM_RIGHT_LABEL) || ""
   );
 
   // Render-time state adjustment: update leftIdx when kernelsLeft changes and URL has a kernel hash
@@ -262,10 +270,15 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     params.set(PARAM_CONTEXT, String(contextLines));
     params.set(PARAM_WRAP, wordWrap);
     params.set(PARAM_ONLY_CHANGED, onlyChanged ? "1" : "0");
+    // labels
+    if (leftLabel) params.set(PARAM_LEFT_LABEL, leftLabel);
+    else params.delete(PARAM_LEFT_LABEL);
+    if (rightLabel) params.set(PARAM_RIGHT_LABEL, rightLabel);
+    else params.delete(PARAM_RIGHT_LABEL);
     const newUrl = new URL(window.location.href);
     newUrl.search = params.toString();
     window.history.replaceState({}, "", newUrl.toString());
-  }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl, leftKernelsFromLocal, leftKernelsFromUrl]);
+  }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl, leftKernelsFromLocal, leftKernelsFromUrl, leftLabel, rightLabel]);
 
   // Debounce URL updates to reduce history churn
   useEffect(() => {
@@ -307,11 +320,29 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             {missingRight && <span>Right: Not available</span>}
           </div>
         </div>
+        <div className="flex items-center gap-4 mb-2">
+          <input
+            type="text"
+            placeholder="Left label..."
+            className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+            value={leftLabel}
+            onChange={(e) => setLeftLabel(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="Right label..."
+            className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+            value={rightLabel}
+            onChange={(e) => setRightLabel(e.target.value)}
+          />
+        </div>
         {!hideDiff && (
           <DiffComparisonView
             key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
             leftContent={leftContent}
             rightContent={rightContent}
+            leftLabel={leftLabel}
+            rightLabel={rightLabel}
             height="calc(100vh - 14rem)"
             language={effectiveIrType === "python" ? "python" : "plaintext"}
             options={{
@@ -353,11 +384,29 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               </button>
               {isOpen && (
                 <div className="px-2 pb-2">
+                  <div className="flex items-center gap-4 mb-2">
+                    <input
+                      type="text"
+                      placeholder="Left label..."
+                      className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+                      value={leftLabel}
+                      onChange={(e) => setLeftLabel(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Right label..."
+                      className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+                      value={rightLabel}
+                      onChange={(e) => setRightLabel(e.target.value)}
+                    />
+                  </div>
                   {!hideDiff && (
                     <DiffComparisonView
                       key={`all-${t}-${leftIdx}-${rightIdx}`}
                       leftContent={leftContent}
                       rightContent={rightContent}
+                      leftLabel={leftLabel}
+                      rightLabel={rightLabel}
                       height="calc(100vh - 14rem)"
                       language={t === "python" ? "python" : "plaintext"}
                       options={{
