@@ -139,15 +139,23 @@ def _find_filecheck_binary() -> str | None:
     return None
 
 
-FILECHECK_BINARY_PATH = _find_filecheck_binary()
-logger.debug(f"FILECHECK_BINARY_PATH is {FILECHECK_BINARY_PATH}")
-FILECHECK_AVAILABLE = FILECHECK_BINARY_PATH is not None
+_filecheck_binary_path: str | None = None
+_filecheck_detected: bool = False
 
-if not FILECHECK_AVAILABLE:
-    logger.warning(
-        "FileCheck binary not found. Procedure detection will not work. "
-        "Set FILECHECK_PATH env var or install Triton (includes FileCheck)."
-    )
+
+def _get_filecheck_binary() -> str | None:
+    """Return the FileCheck binary path, detecting it on first call."""
+    global _filecheck_binary_path, _filecheck_detected
+    if not _filecheck_detected:
+        _filecheck_binary_path = _find_filecheck_binary()
+        _filecheck_detected = True
+        logger.debug(f"FILECHECK_BINARY_PATH is {_filecheck_binary_path}")
+        if _filecheck_binary_path is None:
+            logger.warning(
+                "FileCheck binary not found. Procedure detection will not work. "
+                "Set FILECHECK_PATH env var or install Triton (includes FileCheck)."
+            )
+    return _filecheck_binary_path
 
 
 # =============================================================================
@@ -236,7 +244,8 @@ def run_filecheck(
             display_attributes=display_attributes or [],
         )
 
-    if FILECHECK_AVAILABLE:
+    filecheck_path = _get_filecheck_binary()
+    if filecheck_path is not None:
         try:
             # Add semicolon prefix to each CHECK line for FileCheck format
             check_lines = []
@@ -257,7 +266,7 @@ def run_filecheck(
 
                 result = subprocess.run(
                     [
-                        FILECHECK_BINARY_PATH,
+                        filecheck_path,
                         check_file,
                         "--input-file",
                         input_file,
