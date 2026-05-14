@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { ProcessedKernel, getIRType } from "../utils/dataLoader";
+import { ProcessedKernel, getIRType, getDefaultPanels } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
@@ -14,26 +14,27 @@ interface CodeViewProps {
 }
 
 /**
- * Helper function to find default IR files for left and right panels
+ * Helper function to find default IR files for left and right panels.
+ * Uses getDefaultPanels() to determine which stages to select, then
+ * matches stage names to actual filenames in irFiles.
+ * Falls back to legacy logic for old traces without ir_stages.
  */
-function findDefaultIRFiles(irFiles: string[]): { left: string; right: string } {
-  let left = "";
-  let right = "";
+function findDefaultIRFiles(irFiles: string[], kernel?: ProcessedKernel): { left: string; right: string } {
+  const defaultPanels = kernel ? getDefaultPanels(kernel) : { left: "ttgir", right: "ptx" };
 
-  const ttgirFile = irFiles.find(key => key.toLowerCase().includes("ttgir"));
-  if (ttgirFile) {
-    left = ttgirFile;
-  } else if (irFiles.length > 0) {
-    left = irFiles[0];
-  }
+  const leftFile = irFiles.find(key => key.toLowerCase().includes(defaultPanels.left));
+  const rightFile = irFiles.find(key => key.toLowerCase().includes(defaultPanels.right));
 
-  const ptxFile = irFiles.find(key => key.toLowerCase().includes("ptx"));
-  if (ptxFile) {
-    right = ptxFile;
-  } else if (irFiles.length > 1) {
-    right = irFiles[1];
-  } else if (irFiles.length === 1) {
-    right = irFiles[0];
+  let left = leftFile || irFiles[0] || "";
+  let right = rightFile || irFiles[1] || irFiles[0] || "";
+
+  // Legacy fallback: if ir_stages was absent and getDefaultPanels returned defaults
+  // that don't match any file, try the old ttgir/ptx heuristic
+  if (!kernel?.ir_stages) {
+    const ttgirFile = irFiles.find(key => key.toLowerCase().includes("ttgir"));
+    if (ttgirFile) left = ttgirFile;
+    const ptxFile = irFiles.find(key => key.toLowerCase().includes("ptx"));
+    if (ptxFile) right = ptxFile;
   }
 
   return { left, right };
@@ -91,7 +92,7 @@ const CodeViewInner: React.FC<{
           </select>
           {leftIR && (
             <div className="text-sm text-gray-600 mt-1">
-              Language: {getDisplayLanguage(leftIR)}
+              Language: {getDisplayLanguage(leftIR, kernel?.ir_stages)}
             </div>
           )}
         </div>
@@ -134,7 +135,7 @@ const CodeViewInner: React.FC<{
           </select>
           {rightIR && (
             <div className="text-sm text-gray-600 mt-1">
-              Language: {getDisplayLanguage(rightIR)}
+              Language: {getDisplayLanguage(rightIR, kernel?.ir_stages)}
             </div>
           )}
         </div>
@@ -175,7 +176,7 @@ const CodeViewInner: React.FC<{
                 content: kernel.irFiles[leftIR],
                 source_mapping: kernel.sourceMappings?.[getIRType(leftIR)] || {}
               },
-              language: mapLanguageToHighlighter(leftIR),
+              language: mapLanguageToHighlighter(leftIR, kernel?.ir_stages),
               title: leftIR
             }}
             rightPanel={{
@@ -183,12 +184,13 @@ const CodeViewInner: React.FC<{
                 content: kernel.irFiles[rightIR],
                 source_mapping: kernel.sourceMappings?.[getIRType(rightIR)] || {}
               },
-              language: mapLanguageToHighlighter(rightIR),
+              language: mapLanguageToHighlighter(rightIR, kernel?.ir_stages),
               title: rightIR
             }}
             py_code_info={kernel.pythonSourceInfo}
             showPythonSource={showPythonSource && hasPythonSource}
             pythonMapping={kernel.sourceMappings?.["python"] || {}}
+            irStages={kernel.ir_stages}
           />
         </div>
       ) : (
@@ -219,8 +221,8 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
   // Compute default IR files
   const defaultIRFiles = useMemo(() => {
     if (irFiles.length === 0) return { left: "", right: "" };
-    return findDefaultIRFiles(irFiles);
-  }, [irFiles]);
+    return findDefaultIRFiles(irFiles, kernel ?? undefined);
+  }, [irFiles, kernel]);
 
   // Return a message if no kernel data is available
   if (!kernel) {
