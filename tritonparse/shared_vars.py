@@ -73,18 +73,9 @@ def get_enabled_analyses() -> set[str] | None:
         )
         return set()
 
-    # Validate against registered analyzers (lazy import to avoid circular deps)
-    from tritonparse.backend import AnalysisRegistry
-
-    known = {name.lower() for name in AnalysisRegistry.list_analyzers()}
-    unknown = {n for n in raw_names if n not in known}
-    if unknown:
-        logger.warning(
-            f"TRITONPARSE_ANALYSIS contains unknown analyzer names: {unknown}. "
-            f"Available: {sorted(known)}"
-        )
-
-    return set(raw_names) & known if known else set(raw_names)
+    # Validation happens at adapter level (get_executable_analyzers)
+    # where the adapter's instance registry is available.
+    return set(raw_names)
 
 
 def set_runtime_sass_dump_override(enabled: bool | None) -> None:
@@ -154,15 +145,5 @@ def get_enabled_derived_artifacts() -> set[str] | None:
     if is_sass_dump_enabled():
         raw_names.append("sass")
 
-    # Validate against registered derived artifacts (lazy import to avoid circular deps)
-    from tritonparse.backend import DerivedArtifactRegistry
-
-    known = {name.lower() for name in DerivedArtifactRegistry.list_target_stage_names()}
-    unknown = {n for n in raw_names if n not in known}
-    if unknown and known:
-        logger.warning(
-            f"TRITONPARSE_DERIVED_ARTIFACTS contains unknown target stage names: {unknown}. "
-            f"Available: {sorted(known)}"
-        )
-
-    return set(raw_names) & known if known else set(raw_names)
+    # Validation happens at adapter level where the instance registry is available.
+    return set(raw_names)
