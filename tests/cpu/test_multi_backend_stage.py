@@ -4,12 +4,13 @@ from unittest.mock import patch
 
 from tritonparse.backend import (
     AmdTritonAdapter,
+    AnalysisRegistry,
     get_backend_registry,
     NvidiaTritonAdapter,
+    ParserRegistry,
     PipelineAdapterRegistry,
 )
-from tritonparse.parse.ir_analysis import _generate_ir_analysis, AnalysisRegistry
-from tritonparse.parse.ir_parser import ParserRegistry
+from tritonparse.parse.ir_analysis import _generate_ir_analysis
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,

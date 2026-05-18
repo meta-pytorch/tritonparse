@@ -74,7 +74,7 @@ def get_enabled_analyses() -> set[str] | None:
         return set()
 
     # Validate against registered analyzers (lazy import to avoid circular deps)
-    from tritonparse.parse.ir_analysis import AnalysisRegistry
+    from tritonparse.backend import AnalysisRegistry
 
     known = {name.lower() for name in AnalysisRegistry.list_analyzers()}
     unknown = {n for n in raw_names if n not in known}

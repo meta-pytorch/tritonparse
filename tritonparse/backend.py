@@ -103,6 +103,107 @@ class DerivedArtifactRegistry:
         return list(cls._registry.keys())
 
 
+# =============================================================================
+# PARSER REGISTRY
+# =============================================================================
+class ParserRegistry:
+    """Registry for managing IR parser functions.
+
+    This registry allows adapters to register and retrieve parser functions
+    by parser_id. It supports both common parsers (shared across backends)
+    and backend-specific parsers.
+    """
+
+    _parsers: dict[str, Callable] = {}
+
+    @classmethod
+    def register(cls, parser_id: str, parser_func: Callable) -> None:
+        if parser_id in cls._parsers:
+            logger.warning(
+                f"Parser '{parser_id}' is already registered. "
+                f"Overwriting with new parser function."
+            )
+        cls._parsers[parser_id] = parser_func
+        logger.debug(f"Registered parser: {parser_id}")
+
+    @classmethod
+    def get_parser(cls, parser_id: str) -> Callable | None:
+        return cls._parsers.get(parser_id)
+
+    @classmethod
+    def list_parsers(cls) -> list[str]:
+        return list(cls._parsers.keys())
+
+
+# =============================================================================
+# ANALYSIS REGISTRY
+# =============================================================================
+@dataclass
+class AnalyzerInfo:
+    """Information about a registered analyzer.
+
+    Attributes:
+        name: Analyzer name (e.g., "amd_buffer_ops")
+        func: Analyzer function with signature (entry, procedure_checks) -> dict | None
+        required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
+        adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
+                       None means common/shared analyzer.
+    """
+
+    name: str
+    func: Callable
+    required_stages: tuple[str, ...]
+    adapter_affinity: str | None = None
+
+
+class AnalysisRegistry:
+    """Registry for managing IR analysis functions and their metadata.
+
+    This registry allows adapters to register and retrieve analysis functions
+    by analysis_id. It supports both common analyzers (shared across backends)
+    and backend-specific analyzers.
+    """
+
+    _analyzer_infos: dict[str, AnalyzerInfo] = {}
+
+    @classmethod
+    def register(
+        cls,
+        analyzer_id: str,
+        analyzer_func: Callable,
+        required_stages: tuple[str, ...],
+        adapter_affinity: str | None = None,
+    ) -> None:
+        if analyzer_id in cls._analyzer_infos:
+            logger.debug(
+                f"Analyzer '{analyzer_id}' is already registered. Overwriting."
+            )
+        info = AnalyzerInfo(
+            name=analyzer_id,
+            func=analyzer_func,
+            required_stages=required_stages,
+            adapter_affinity=adapter_affinity,
+        )
+        cls._analyzer_infos[analyzer_id] = info
+
+    @classmethod
+    def get_analyzer_info(cls, analyzer_id: str) -> AnalyzerInfo | None:
+        return cls._analyzer_infos.get(analyzer_id)
+
+    @classmethod
+    def get_analyzer(cls, analyzer_id: str) -> Callable | None:
+        info = cls._analyzer_infos.get(analyzer_id)
+        return info.func if info else None
+
+    @classmethod
+    def list_analyzers(cls) -> list[str]:
+        return list(cls._analyzer_infos.keys())
+
+    @classmethod
+    def list_analyzer_infos(cls) -> list[tuple[str, AnalyzerInfo]]:
+        return list(cls._analyzer_infos.items())
+
+
 class CompilationPipelineAdapter(ABC):
     """Abstract base class for compilation pipeline adapters.
 
@@ -189,13 +290,10 @@ class CompilationPipelineAdapter(ABC):
 
         Can be overridden by subclasses for custom behavior.
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
-
         my_name = self.adapter_name
         analyzer_names = []
 
         for _, info in AnalysisRegistry.list_analyzer_infos():
-            # Include analyzers specific to this adapter or common analyzers
             if info.adapter_affinity in (my_name, None):
                 analyzer_names.append(info.name)
 
@@ -218,9 +316,6 @@ class CompilationPipelineAdapter(ABC):
         Returns:
             List of executable analyzer names
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
-
-        # Get declared analyzers for this adapter (already registered)
         declared_analyzers = self.get_analysis_passes()
         executable = []
 
@@ -271,8 +366,6 @@ class CompilationPipelineAdapter(ABC):
         Raises:
             ValueError: If the pass_name is not found in the registry
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
-
         analyzer = AnalysisRegistry.get_analyzer(pass_name)
         if analyzer is None:
             available = AnalysisRegistry.list_analyzers()
@@ -300,9 +393,6 @@ class CompilationPipelineAdapter(ABC):
                           (entry, procedure_checks) -> dict | None
             required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
-
-        # Use this adapter's name as affinity
         adapter_affinity = self.adapter_name
         AnalysisRegistry.register(
             analyzer_id, analyzer_func, required_stages, adapter_affinity
@@ -328,8 +418,6 @@ class CompilationPipelineAdapter(ABC):
         Raises:
             ValueError: If the parser_id is not found in the registry
         """
-        from tritonparse.parse.ir_parser import ParserRegistry
-
         parser = ParserRegistry.get_parser(parser_id)
         if parser is None:
             available_parsers = ParserRegistry.list_parsers()
@@ -350,8 +438,6 @@ class CompilationPipelineAdapter(ABC):
             parser_id: The parser identifier (e.g., "ascend_ir")
             parser_func: The parser function
         """
-        from tritonparse.parse.ir_parser import ParserRegistry
-
         ParserRegistry.register(parser_id, parser_func)
 
 
@@ -513,6 +599,41 @@ class PipelineAdapterRegistry:
             f"backend_name={backend_name!r}"
         )
 
+
+# =============================================================================
+# COMMON PARSER / ANALYZER INITIALIZATION
+# =============================================================================
+def _initialize_common_parsers() -> None:
+    from tritonparse.parse.ir_parser import _parse_generic_loc, _parse_none
+
+    ParserRegistry.register("generic_loc", _parse_generic_loc)
+    ParserRegistry.register("none", _parse_none)
+    logger.debug("Common parsers registered successfully")
+
+
+def _initialize_common_analyzers() -> None:
+    from tritonparse.parse.ir_analysis import (
+        _analyze_loop_schedules_generic,
+        _analyze_procedures_generic,
+    )
+
+    AnalysisRegistry.register(
+        "loop_schedules",
+        _analyze_loop_schedules_generic,
+        required_stages=("ttir", "ttgir"),
+        adapter_affinity=None,
+    )
+    AnalysisRegistry.register(
+        "procedure_checks",
+        _analyze_procedures_generic,
+        required_stages=("ttgir",),
+        adapter_affinity=None,
+    )
+    logger.debug("Common analyzers registered successfully")
+
+
+_initialize_common_parsers()
+_initialize_common_analyzers()
 
 _REGISTRY = PipelineAdapterRegistry()
 for _adapter_cls in (NvidiaTritonAdapter, AmdTritonAdapter):
