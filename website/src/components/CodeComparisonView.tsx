@@ -229,8 +229,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     // ==================== Pure Utility Functions ====================
 
     /**
-     * Pure function: Calculate mapped lines from source to target IR
-     * No external dependencies - only uses parameters
+     * Calculate mapped lines from source to target IR.
+     * Depends on irStages for dynamic stage discovery.
      * @param sourceMappings Source mapping record
      * @param lineNumber Line number in source
      * @param targetTitle Target panel title (to determine IR type)
@@ -273,7 +273,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             return [];
         },
-        [] // Empty deps - pure function, never recreated
+        [irStages]
     );
 
     /**

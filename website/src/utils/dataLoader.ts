@@ -734,8 +734,7 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
  * Get viewable stages sorted by display_order.
  * Viewable = is_text AND supports_source_mapping.
  */
-function getViewableStages(kernel: ProcessedKernel): IRStageDescriptor[] {
-    const stages = kernel.ir_stages;
+function getViewableStages(stages?: IRStageDescriptor[]): IRStageDescriptor[] {
     if (!stages || stages.length === 0) return [];
     return stages
         .filter(s => s.is_text && s.supports_source_mapping)
@@ -747,8 +746,8 @@ function getViewableStages(kernel: ProcessedKernel): IRStageDescriptor[] {
  * Rule: top 2 by display_order among viewable stages.
  * Fallback: legacy hardcoded values for old traces without ir_stages.
  */
-export function getDefaultPanels(kernel: ProcessedKernel): { left: string; right: string } {
-    const viewable = getViewableStages(kernel);
+export function getDefaultPanels(stages?: IRStageDescriptor[]): { left: string; right: string } {
+    const viewable = getViewableStages(stages);
     if (viewable.length >= 2) {
         return { left: viewable[0].name, right: viewable[1].name };
     }
@@ -765,8 +764,8 @@ export function getDefaultPanels(kernel: ProcessedKernel): { left: string; right
  * AMD:    [ttir, ttgir, llir, amdgcn]    → llir
  * Fallback: "ttgir" for old traces without ir_stages.
  */
-export function getGroupingAnchor(kernel: ProcessedKernel): string {
-    const viewable = getViewableStages(kernel);
+export function getGroupingAnchor(stages?: IRStageDescriptor[]): string {
+    const viewable = getViewableStages(stages);
     if (viewable.length > 0) {
         return viewable[Math.floor(viewable.length / 2)].name;
     }
