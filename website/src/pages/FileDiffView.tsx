@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DiffComparisonView from "../components/DiffComparisonView";
 import { useFileDiffSession } from "../context/FileDiffSession";
-import { ProcessedKernel, loadLogData, loadLogDataFromFile, processKernelData, getIRType, getDefaultPanels } from "../utils/dataLoader";
+import { ProcessedKernel, loadLogData, loadLogDataFromFile, processKernelData, getIRType } from "../utils/dataLoader";
 import { normalizeDataUrl } from "../utils/urlUtils";
 import "../types/global.d.ts";
 
@@ -240,7 +240,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   const leftKernel = leftArrayResolved[leftIdx];
   const rightKernel = kernelsRight[rightIdx];
 
-  const effectiveIrType = irType || (unionIrTypes.length > 0 ? unionIrTypes[0] : getDefaultPanels(leftKernel).left);
+  const effectiveIrType = irType || unionIrTypes[0];
 
   // Update URL on state changes (File Diff owns its params)
   const syncUrl = useCallback(() => {

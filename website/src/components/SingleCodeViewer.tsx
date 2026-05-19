@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import CodeViewer from "./CodeViewer";
-import { IRFile, IRStageDescriptor, ProcessedKernel, getGroupingAnchor } from "../utils/dataLoader";
+import { IRFile, IRStageDescriptor, getGroupingAnchor } from "../utils/dataLoader";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import CopyCodeButton from "./CopyCodeButton";
 import { ArrowLeftIcon } from "./icons";
@@ -49,9 +49,7 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
     if (sourceMapping) {
       const lineKey = lineNumber.toString();
       const clickedMapping = sourceMapping[lineKey] as Record<string, unknown> | undefined;
-      const anchorStage = irStages
-        ? getGroupingAnchor({ ir_stages: irStages } as ProcessedKernel)
-        : "ttgir";
+      const anchorStage = getGroupingAnchor(irStages);
       const anchorProperty = `${anchorStage}_line`;
 
       if (clickedMapping && clickedMapping[anchorProperty] != null) {

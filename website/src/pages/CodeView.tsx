@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { ProcessedKernel, getIRType, getDefaultPanels } from "../utils/dataLoader";
+import { ProcessedKernel, getIRType, getDefaultPanels, IRStageDescriptor } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
@@ -19,23 +19,14 @@ interface CodeViewProps {
  * matches stage names to actual filenames in irFiles.
  * Falls back to legacy logic for old traces without ir_stages.
  */
-function findDefaultIRFiles(irFiles: string[], kernel?: ProcessedKernel): { left: string; right: string } {
-  const defaultPanels = kernel ? getDefaultPanels(kernel) : { left: "ttgir", right: "ptx" };
+function findDefaultIRFiles(irFiles: string[], irStages?: IRStageDescriptor[]): { left: string; right: string } {
+  const defaultPanels = getDefaultPanels(irStages);
 
   const leftFile = irFiles.find(key => key.toLowerCase().includes(defaultPanels.left));
   const rightFile = irFiles.find(key => key.toLowerCase().includes(defaultPanels.right));
 
-  let left = leftFile || irFiles[0] || "";
-  let right = rightFile || irFiles[1] || irFiles[0] || "";
-
-  // Legacy fallback: if ir_stages was absent and getDefaultPanels returned defaults
-  // that don't match any file, try the old ttgir/ptx heuristic
-  if (!kernel?.ir_stages) {
-    const ttgirFile = irFiles.find(key => key.toLowerCase().includes("ttgir"));
-    if (ttgirFile) left = ttgirFile;
-    const ptxFile = irFiles.find(key => key.toLowerCase().includes("ptx"));
-    if (ptxFile) right = ptxFile;
-  }
+  const left = leftFile || irFiles[0] || "";
+  const right = rightFile || irFiles[1] || irFiles[0] || "";
 
   return { left, right };
 }
@@ -221,8 +212,8 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
   // Compute default IR files
   const defaultIRFiles = useMemo(() => {
     if (irFiles.length === 0) return { left: "", right: "" };
-    return findDefaultIRFiles(irFiles, kernel ?? undefined);
-  }, [irFiles, kernel]);
+    return findDefaultIRFiles(irFiles, kernel?.ir_stages);
+  }, [irFiles, kernel?.ir_stages]);
 
   // Return a message if no kernel data is available
   if (!kernel) {
