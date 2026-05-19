@@ -498,7 +498,7 @@ def parse_single_trace_content(trace_content: str) -> str:
                 for stage in adapter.get_ir_stages()
             ]
         except ValueError:
-            logger.debug("Could not resolve adapter for ir_stages; skipping")
+            logger.warning("Could not resolve adapter for ir_stages; skipping")
 
         # Extract original num_warps from TTGIR for warp-specialized kernels.
         # If upstream Triton already set num_warps_base, trust it; otherwise

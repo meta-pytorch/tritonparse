@@ -159,6 +159,11 @@
           "type": "object",
           "description": "IR-to-source-code line mappings keyed by IR type (added during processing).",
           "additionalProperties": true
+        },
+        "ir_stages": {
+          "type": "array",
+          "description": "Ordered list of IR compilation stages for this kernel, resolved from the backend adapter.",
+          "items": { "$ref": "#/definitions/IRStage" }
         }
       }
     },
@@ -191,6 +196,43 @@
         "function_end_line": {
           "type": "integer",
           "description": "Function end line (with full-file mode)."
+        }
+      }
+    },
+    "IRStage": {
+      "type": "object",
+      "description": "Metadata for a single IR compilation stage.",
+      "required": ["name", "extension", "display_name", "display_order", "is_text", "supports_source_mapping", "syntax_id"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Internal stage identifier (e.g., 'ttir', 'ttgir', 'llir')."
+        },
+        "extension": {
+          "type": "string",
+          "description": "File extension for this stage's IR artifact (e.g., '.ttir', '.ptx')."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Human-readable stage name for UI display."
+        },
+        "display_order": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Order in which to display this stage relative to others."
+        },
+        "is_text": {
+          "type": "boolean",
+          "description": "Whether the IR content is human-readable text."
+        },
+        "supports_source_mapping": {
+          "type": "boolean",
+          "description": "Whether this stage supports source-to-IR line mapping."
+        },
+        "syntax_id": {
+          "type": "string",
+          "description": "Identifier for the syntax highlighting mode to use."
         }
       }
     },
