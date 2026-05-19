@@ -6,6 +6,7 @@ import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
 import {
     IRFile,
+    IRStageDescriptor,
     PythonSourceCodeInfo,
     SourceMapping,
     getIRType,
@@ -31,6 +32,7 @@ interface CodeComparisonViewProps {
     py_code_info?: PythonSourceCodeInfo;
     showPythonSource?: boolean;
     pythonMapping?: Record<string, SourceMapping>;
+    irStages?: IRStageDescriptor[];
 }
 
 /**
@@ -79,6 +81,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     py_code_info,
     showPythonSource = false,
     pythonMapping,
+    irStages,
 }) => {
     // ==================== State Management ====================
 
@@ -195,8 +198,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         title: leftPanel.title || "TTGIR",
         content: leftPanel.content || leftPanel.code?.content || "",
         sourceMapping: leftPanel.code?.source_mapping || {},
-        displayLanguage: getDisplayLanguage(leftPanel.title || "TTGIR")
-    }), [leftPanel.title, leftPanel.content, leftPanel.code]);
+        displayLanguage: getDisplayLanguage(leftPanel.title || "TTGIR", irStages)
+    }), [leftPanel.title, leftPanel.content, leftPanel.code, irStages]);
 
     /**
      * Memoized right panel data
@@ -206,8 +209,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         title: rightPanel.title || "PTX",
         content: rightPanel.content || rightPanel.code?.content || "",
         sourceMapping: rightPanel.code?.source_mapping || {},
-        displayLanguage: getDisplayLanguage(rightPanel.title || "PTX")
-    }), [rightPanel.title, rightPanel.content, rightPanel.code]);
+        displayLanguage: getDisplayLanguage(rightPanel.title || "PTX", irStages)
+    }), [rightPanel.title, rightPanel.content, rightPanel.code, irStages]);
 
     /**
      * Memoized Python source info
@@ -226,8 +229,8 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
     // ==================== Pure Utility Functions ====================
 
     /**
-     * Pure function: Calculate mapped lines from source to target IR
-     * No external dependencies - only uses parameters
+     * Calculate mapped lines from source to target IR.
+     * Depends on irStages for dynamic stage discovery.
      * @param sourceMappings Source mapping record
      * @param lineNumber Line number in source
      * @param targetTitle Target panel title (to determine IR type)
@@ -245,14 +248,18 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
             const sourceMapping = sourceMappings[lineKey];
             const targetIRType = getIRType(targetTitle);
 
-            const irTypesToCheck = [
-                { type: "ttgir", property: "ttgir_lines" },
-                { type: "ttir", property: "ttir_lines" },
-                { type: "ptx", property: "ptx_lines" },
-                { type: "llir", property: "llir_lines" },
-                { type: "amdgcn", property: "amdgcn_lines" },
-                { type: "sass", property: "sass_lines" }
-            ];
+            const irTypesToCheck = irStages && irStages.length > 0
+                ? irStages
+                    .filter(s => s.supports_source_mapping)
+                    .map(s => ({ type: s.name, property: `${s.name}_lines` }))
+                : [
+                    { type: "ttgir", property: "ttgir_lines" },
+                    { type: "ttir", property: "ttir_lines" },
+                    { type: "ptx", property: "ptx_lines" },
+                    { type: "llir", property: "llir_lines" },
+                    { type: "amdgcn", property: "amdgcn_lines" },
+                    { type: "sass", property: "sass_lines" }
+                ];
 
             for (const { type, property } of irTypesToCheck) {
                 if (targetIRType === type &&
@@ -266,7 +273,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             return [];
         },
-        [] // Empty deps - pure function, never recreated
+        [irStages]
     );
 
     /**

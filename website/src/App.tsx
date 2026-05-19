@@ -401,8 +401,9 @@ function App() {
         <SingleCodeViewer
           irFile={irFile}
           title={selectedIR}
-          language={mapLanguageToHighlighter(selectedIR)}
+          language={mapLanguageToHighlighter(selectedIR, kernel?.ir_stages)}
           onBack={handleBackFromIRView}
+          irStages={kernel?.ir_stages}
         />
       );
     } else if (sess.preview.active) {
