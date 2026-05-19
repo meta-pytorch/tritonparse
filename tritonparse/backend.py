@@ -54,7 +54,6 @@ class DerivedArtifactInfo:
         source_stage_name: Name of the source stage (e.g., "cubin").
         target_stage_name: Name of the target stage (e.g., "sass").
         tool_name: Name of the tool used to generate the artifact (e.g., "nvdisasm").
-        adapter_affinity: Name of the adapter this derivation belongs to.
         derive_func: Callable that takes a source file path and returns derived content,
             or None if the tool is unavailable or derivation fails.
     """
@@ -62,7 +61,6 @@ class DerivedArtifactInfo:
     source_stage_name: str
     target_stage_name: str
     tool_name: str
-    adapter_affinity: str
     derive_func: Callable[[str], str | None]
 
 
@@ -130,14 +128,11 @@ class AnalyzerInfo:
         name: Analyzer name (e.g., "amd_buffer_ops")
         func: Analyzer function with signature (entry, procedure_checks) -> dict | None
         required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
-        adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
-                       None means common/shared analyzer.
     """
 
     name: str
     func: Callable
     required_stages: tuple[str, ...]
-    adapter_affinity: str | None = None
 
 
 class AnalysisRegistry:
@@ -151,7 +146,6 @@ class AnalysisRegistry:
         analyzer_id: str,
         analyzer_func: Callable,
         required_stages: tuple[str, ...],
-        adapter_affinity: str | None = None,
     ) -> None:
         """Register an analyzer with its metadata."""
         if analyzer_id in self._analyzer_infos:
@@ -162,7 +156,6 @@ class AnalysisRegistry:
             name=analyzer_id,
             func=analyzer_func,
             required_stages=required_stages,
-            adapter_affinity=adapter_affinity,
         )
         self._analyzer_infos[analyzer_id] = info
 
@@ -224,13 +217,11 @@ class CompilationPipelineAdapter(ABC):
             "loop_schedules",
             _analyze_loop_schedules_generic,
             required_stages=("ttir", "ttgir"),
-            adapter_affinity=None,
         )
         self._analysis_registry.register(
             "procedure_checks",
             _analyze_procedures_generic,
             required_stages=("ttgir",),
-            adapter_affinity=None,
         )
 
     def get_ir_stages(self) -> list[IRStageDescriptor]:
@@ -260,8 +251,9 @@ class CompilationPipelineAdapter(ABC):
         all_artifacts = self._derived_artifact_registry.list_all()
 
         if enabled_derived_artifacts is not None:
+            enabled_normalized = {n.lower() for n in enabled_derived_artifacts}
             known = {info.target_stage_name.lower() for info in all_artifacts}
-            unknown = {n for n in enabled_derived_artifacts if n not in known}
+            unknown = enabled_normalized - known
             if unknown:
                 logger.warning(
                     f"TRITONPARSE_DERIVED_ARTIFACTS contains unknown target stage names: {unknown}. "
@@ -270,7 +262,7 @@ class CompilationPipelineAdapter(ABC):
             return [
                 info
                 for info in all_artifacts
-                if info.target_stage_name in enabled_derived_artifacts
+                if info.target_stage_name.lower() in enabled_normalized
             ]
 
         return all_artifacts
@@ -288,10 +280,13 @@ class CompilationPipelineAdapter(ABC):
                 source_stage_name=source_stage_name,
                 target_stage_name=target_stage_name,
                 tool_name=tool_name,
-                adapter_affinity=self.adapter_name,
                 derive_func=derive_func,
             )
         )
+
+    def list_parsers(self) -> list[str]:
+        """List all registered parser IDs (common + backend-specific)."""
+        return self._parser_registry.list_parsers()
 
     def get_analysis_passes(self) -> list[str]:
         """
@@ -301,6 +296,13 @@ class CompilationPipelineAdapter(ABC):
         (common + backend-specific).
         """
         return self._analysis_registry.list_analyzers()
+
+    def get_analyzer_required_stages(
+        self, analyzer_name: str
+    ) -> tuple[str, ...] | None:
+        """Return required stages for the given analyzer, or None if not registered."""
+        info = self._analysis_registry.get_analyzer_info(analyzer_name)
+        return info.required_stages if info else None
 
     def get_executable_analyzers(
         self,
@@ -322,9 +324,14 @@ class CompilationPipelineAdapter(ABC):
             List of executable analyzer names
         """
         # Validate user-provided names against known analyzers
-        if enabled_analyses is not None:
+        enabled_normalized = (
+            {n.lower() for n in enabled_analyses}
+            if enabled_analyses is not None
+            else None
+        )
+        if enabled_normalized is not None:
             known = {name.lower() for name in self._analysis_registry.list_analyzers()}
-            unknown = {n for n in enabled_analyses if n not in known}
+            unknown = enabled_normalized - known
             if unknown:
                 logger.warning(
                     f"TRITONPARSE_ANALYSIS contains unknown analyzer names: {unknown}. "
@@ -336,7 +343,10 @@ class CompilationPipelineAdapter(ABC):
 
         for analyzer_name in declared_analyzers:
             # Check 1: Is it enabled by user?
-            if enabled_analyses is not None and analyzer_name not in enabled_analyses:
+            if (
+                enabled_normalized is not None
+                and analyzer_name.lower() not in enabled_normalized
+            ):
                 continue
 
             # Check 2: Are required stages available?
@@ -468,7 +478,6 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
                 source_stage_name="cubin",
                 target_stage_name="sass",
                 tool_name="nvdisasm",
-                adapter_affinity=self.adapter_name,
                 derive_func=derive_sass,
             )
         )
@@ -517,7 +526,6 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
             "amd_buffer_ops",
             _analyze_amd_buffer_ops,
             required_stages=("ttgir", "amdgcn"),
-            adapter_affinity=self.adapter_name,
         )
 
         # Pre-initialize stage descriptors (immutable objects, can be reused)

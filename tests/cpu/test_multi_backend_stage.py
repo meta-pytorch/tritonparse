@@ -123,18 +123,18 @@ class TestMultiBackendStage(unittest.TestCase):
 
         # Common parsers present in both
         for adapter in (nvidia, amd):
-            parsers = adapter._parser_registry.list_parsers()
+            parsers = adapter.list_parsers()
             self.assertIn("generic_loc", parsers)
             self.assertIn("none", parsers)
 
         # NVIDIA-specific parsers only in NVIDIA adapter
-        nvidia_parsers = nvidia._parser_registry.list_parsers()
+        nvidia_parsers = nvidia.list_parsers()
         self.assertIn("ptx_loc", nvidia_parsers)
         self.assertIn("sass_loc", nvidia_parsers)
         self.assertNotIn("amdgcn_loc", nvidia_parsers)
 
         # AMD-specific parser only in AMD adapter
-        amd_parsers = amd._parser_registry.list_parsers()
+        amd_parsers = amd.list_parsers()
         self.assertIn("amdgcn_loc", amd_parsers)
         self.assertNotIn("ptx_loc", amd_parsers)
         self.assertNotIn("sass_loc", amd_parsers)
@@ -189,7 +189,7 @@ class TestMultiBackendStage(unittest.TestCase):
         def sentinel_generic_loc_parser(*args, **kwargs):
             return sentinel_mapping
 
-        original_generic_parser = nvidia._parser_registry.get_parser("generic_loc")
+        original_generic_parser = nvidia.get_parser("generic_loc")
         self.assertIsNotNone(original_generic_parser)
 
         # Test with metadata (adapter-driven parser selection)
@@ -241,7 +241,7 @@ class TestMultiBackendStage(unittest.TestCase):
         def failing_generic_loc_parser(*args, **kwargs):
             raise RuntimeError("parser execution failed")
 
-        original_generic_parser = nvidia._parser_registry.get_parser("generic_loc")
+        original_generic_parser = nvidia.get_parser("generic_loc")
         self.assertIsNotNone(original_generic_parser)
 
         try:
@@ -364,13 +364,13 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
 
         # Common analyzers present in both
         for adapter in (nvidia, amd):
-            analyzers = adapter._analysis_registry.list_analyzers()
+            analyzers = adapter.get_analysis_passes()
             self.assertIn("loop_schedules", analyzers)
             self.assertIn("procedure_checks", analyzers)
 
         # Only AMD adapter has amd_buffer_ops
-        self.assertIn("amd_buffer_ops", amd._analysis_registry.list_analyzers())
-        self.assertNotIn("amd_buffer_ops", nvidia._analysis_registry.list_analyzers())
+        self.assertIn("amd_buffer_ops", amd.get_analysis_passes())
+        self.assertNotIn("amd_buffer_ops", nvidia.get_analysis_passes())
 
     def test_analysis_adapter_passes_differ_by_backend(self):
         """NVIDIA only has common passes; AMD additionally has amd_buffer_ops."""
@@ -391,9 +391,12 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         """Each analysis pass's required_stages should exist in the adapter."""
         amd_adapter = self.registry.resolve(adapter_name="hip_triton")
         for pass_name in amd_adapter.get_analysis_passes():
-            info = amd_adapter._analysis_registry.get_analyzer_info(pass_name)
-            self.assertIsNotNone(info, f"Analyzer '{pass_name}' should be registered")
-            for stage_name in info.required_stages:
+            required_stages = amd_adapter.get_analyzer_required_stages(pass_name)
+            self.assertIsNotNone(
+                required_stages, f"Analyzer '{pass_name}' should be registered"
+            )
+            assert required_stages is not None  # for type checker
+            for stage_name in required_stages:
                 self.assertIsNotNone(
                     amd_adapter.get_stage_by_name(stage_name),
                     f"Required stage '{stage_name}' should exist in AMD adapter",
