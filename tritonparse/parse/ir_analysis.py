@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -18,91 +17,6 @@ logger = get_logger("IRAnalysis")
 
 # Default timeout (in seconds) for FileCheck subprocess calls
 FILECHECK_TIMEOUT_SECONDS = 30
-
-
-# =============================================================================
-# ANALYSIS REGISTRY
-# =============================================================================
-@dataclass
-class AnalyzerInfo:
-    """
-    Information about a registered analyzer.
-
-    Attributes:
-        name: Analyzer name (e.g., "amd_buffer_ops")
-        func: Analyzer function with signature (entry, procedure_checks) -> dict | None
-        required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
-        adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
-                       None means common/shared analyzer.
-    """
-
-    name: str
-    func: Callable
-    required_stages: tuple[str, ...]
-    adapter_affinity: str | None = None
-
-
-class AnalysisRegistry:
-    """
-    Registry for managing IR analysis functions and their metadata.
-
-    This registry allows adapters to register and retrieve analysis functions
-    by analysis_id. It supports both common analyzers (shared across backends)
-    and backend-specific analyzers.
-    """
-
-    _analyzer_infos: dict[str, AnalyzerInfo] = {}
-
-    @classmethod
-    def register(
-        cls,
-        analyzer_id: str,
-        analyzer_func: Callable,
-        required_stages: tuple[str, ...],
-        adapter_affinity: str | None = None,
-    ) -> None:
-        """
-        Register an analyzer with its metadata.
-
-        Args:
-            analyzer_id: Analyzer identifier (e.g., "amd_buffer_ops")
-            analyzer_func: Analyzer function
-            required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
-            adapter_affinity: Which backend this analyzer belongs to (e.g., "hip_triton").
-                           None means common/shared analyzer.
-        """
-        if analyzer_id in cls._analyzer_infos:
-            logger.debug(
-                f"Analyzer '{analyzer_id}' is already registered. Overwriting."
-            )
-        info = AnalyzerInfo(
-            name=analyzer_id,
-            func=analyzer_func,
-            required_stages=required_stages,
-            adapter_affinity=adapter_affinity,
-        )
-        cls._analyzer_infos[analyzer_id] = info
-
-    @classmethod
-    def get_analyzer_info(cls, analyzer_id: str) -> AnalyzerInfo | None:
-        """Get analyzer info by name."""
-        return cls._analyzer_infos.get(analyzer_id)
-
-    @classmethod
-    def get_analyzer(cls, analyzer_id: str) -> Callable | None:
-        """Get the analyzer function by name."""
-        info = cls._analyzer_infos.get(analyzer_id)
-        return info.func if info else None
-
-    @classmethod
-    def list_analyzers(cls) -> list[str]:
-        """List all registered analyzer IDs."""
-        return list(cls._analyzer_infos.keys())
-
-    @classmethod
-    def list_analyzer_infos(cls) -> list[tuple[str, AnalyzerInfo]]:
-        """List all registered (analyzer_id, AnalyzerInfo) pairs."""
-        return list(cls._analyzer_infos.items())
 
 
 # =============================================================================
@@ -1375,26 +1289,3 @@ def _analyze_procedures_generic(
     if procedure_results:
         return {"procedure_checks": procedure_results}
     return None
-
-
-# =============================================================================
-# COMMON ANALYZER INITIALIZATION
-# =============================================================================
-def _initialize_common_analyzers() -> None:
-    """Register common analyzers that are shared across all backends."""
-    AnalysisRegistry.register(
-        "loop_schedules",
-        _analyze_loop_schedules_generic,
-        required_stages=("ttir", "ttgir"),
-        adapter_affinity=None,  # Common analyzer
-    )
-    AnalysisRegistry.register(
-        "procedure_checks",
-        _analyze_procedures_generic,
-        required_stages=("ttgir",),
-        adapter_affinity=None,  # Common analyzer
-    )
-
-
-# Initialize common analyzers on module load
-_initialize_common_analyzers()

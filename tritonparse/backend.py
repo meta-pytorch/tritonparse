@@ -1,9 +1,8 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable
 
 from tritonparse.tp_logger import logger
@@ -55,7 +54,6 @@ class DerivedArtifactInfo:
         source_stage_name: Name of the source stage (e.g., "cubin").
         target_stage_name: Name of the target stage (e.g., "sass").
         tool_name: Name of the tool used to generate the artifact (e.g., "nvdisasm").
-        adapter_affinity: Name of the adapter this derivation belongs to.
         derive_func: Callable that takes a source file path and returns derived content,
             or None if the tool is unavailable or derivation fails.
     """
@@ -63,78 +61,171 @@ class DerivedArtifactInfo:
     source_stage_name: str
     target_stage_name: str
     tool_name: str
-    adapter_affinity: str
     derive_func: Callable[[str], str | None]
 
 
+# =============================================================================
+# INSTANCE-LEVEL REGISTRIES
+# =============================================================================
 class DerivedArtifactRegistry:
-    """Registry for managing derived artifact info objects.
+    """Per-adapter registry for managing derived artifact info objects."""
 
-    Adapters register their derived artifacts here. The registry supports
-    lookup by target stage name and listing all known target stage names
-    (useful for env-var validation).
-    """
+    def __init__(self) -> None:
+        self._registry: dict[str, DerivedArtifactInfo] = {}
 
-    _registry: dict[str, DerivedArtifactInfo] = {}
-
-    @classmethod
-    def register(cls, info: DerivedArtifactInfo) -> None:
+    def register(self, info: DerivedArtifactInfo) -> None:
         key = info.target_stage_name
-        if key in cls._registry:
+        if key in self._registry:
             logger.debug(
                 f"Overwriting existing derived artifact registration for '{key}'"
             )
-        cls._registry[key] = info
+        self._registry[key] = info
 
-    @classmethod
-    def get_by_target(cls, target_stage_name: str) -> DerivedArtifactInfo | None:
-        return cls._registry.get(target_stage_name)
+    def get_by_target(self, target_stage_name: str) -> DerivedArtifactInfo | None:
+        return self._registry.get(target_stage_name)
 
-    @classmethod
-    def list_for_adapter(cls, adapter_name: str) -> list[DerivedArtifactInfo]:
-        return [
-            info
-            for info in cls._registry.values()
-            if info.adapter_affinity == adapter_name
-        ]
+    def list_all(self) -> list[DerivedArtifactInfo]:
+        return list(self._registry.values())
 
-    @classmethod
-    def list_target_stage_names(cls) -> list[str]:
-        return list(cls._registry.keys())
+    def list_target_stage_names(self) -> list[str]:
+        return list(self._registry.keys())
 
 
+class ParserRegistry:
+    """Per-adapter registry for managing IR parser functions."""
+
+    def __init__(self) -> None:
+        self._parsers: dict[str, Callable] = {}
+
+    def register(self, parser_id: str, parser_func: Callable) -> None:
+        """Register a parser function with the given parser_id.
+
+        If parser_id is already registered, the existing parser is overwritten
+        and a warning is logged.
+        """
+        if parser_id in self._parsers:
+            logger.warning(
+                f"Parser '{parser_id}' is already registered. "
+                f"Overwriting with new parser function."
+            )
+        self._parsers[parser_id] = parser_func
+        logger.debug(f"Registered parser: {parser_id}")
+
+    def get_parser(self, parser_id: str) -> Callable | None:
+        """Get a parser function by parser_id."""
+        return self._parsers.get(parser_id)
+
+    def list_parsers(self) -> list[str]:
+        """List all registered parser IDs."""
+        return list(self._parsers.keys())
+
+
+@dataclass
+class AnalyzerInfo:
+    """Information about a registered analyzer.
+
+    Attributes:
+        name: Analyzer name (e.g., "amd_buffer_ops")
+        func: Analyzer function with signature (entry, procedure_checks) -> dict | None
+        required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
+    """
+
+    name: str
+    func: Callable
+    required_stages: tuple[str, ...]
+
+
+class AnalysisRegistry:
+    """Per-adapter registry for managing IR analysis functions and their metadata."""
+
+    def __init__(self) -> None:
+        self._analyzer_infos: dict[str, AnalyzerInfo] = {}
+
+    def register(
+        self,
+        analyzer_id: str,
+        analyzer_func: Callable,
+        required_stages: tuple[str, ...],
+    ) -> None:
+        """Register an analyzer with its metadata."""
+        if analyzer_id in self._analyzer_infos:
+            logger.debug(
+                f"Analyzer '{analyzer_id}' is already registered. Overwriting."
+            )
+        info = AnalyzerInfo(
+            name=analyzer_id,
+            func=analyzer_func,
+            required_stages=required_stages,
+        )
+        self._analyzer_infos[analyzer_id] = info
+
+    def get_analyzer_info(self, analyzer_id: str) -> AnalyzerInfo | None:
+        """Get analyzer info by name."""
+        return self._analyzer_infos.get(analyzer_id)
+
+    def get_analyzer(self, analyzer_id: str) -> Callable | None:
+        """Get the analyzer function by name."""
+        info = self._analyzer_infos.get(analyzer_id)
+        return info.func if info else None
+
+    def list_analyzers(self) -> list[str]:
+        """List all registered analyzer IDs."""
+        return list(self._analyzer_infos.keys())
+
+    def list_analyzer_infos(self) -> list[tuple[str, AnalyzerInfo]]:
+        """List all registered (analyzer_id, AnalyzerInfo) pairs."""
+        return list(self._analyzer_infos.items())
+
+
+# =============================================================================
+# ADAPTER BASE CLASS
+# =============================================================================
 class CompilationPipelineAdapter(ABC):
     """Abstract base class for compilation pipeline adapters.
 
     Adapters provide backend-specific configuration for different
     compilation pipelines (e.g., CUDA vs HIP). Each adapter defines the
     IR stages, derived artifacts, and analysis passes for its pipeline.
+
+    Each adapter instance holds its own isolated registries (parsers,
+    analyzers, derived artifacts), ensuring complete backend isolation.
     """
 
-    @property
-    @abstractmethod
-    def adapter_name(self) -> str:
-        raise NotImplementedError
+    adapter_name: str
+    runtime_backend: str
+    pytorch_module: str
 
-    @property
-    @abstractmethod
-    def runtime_backend(self) -> str:
-        raise NotImplementedError
+    def __init__(self):
+        self._stages: list[IRStageDescriptor] = []
+        self._parser_registry = ParserRegistry()
+        self._analysis_registry = AnalysisRegistry()
+        self._derived_artifact_registry = DerivedArtifactRegistry()
 
-    @property
-    @abstractmethod
-    def pytorch_module(self) -> str:
-        """Device-family prefix used for torch device strings and sync calls.
+        # Register common parsers (shared across all backends)
+        from tritonparse.parse.ir_parser import _parse_generic_loc, _parse_none
 
-        Examples: "cuda", "xpu", "mps".
-        Used as f"{prefix}:0" for device strings and
-        f"torch.{prefix}.synchronize()" for synchronization.
-        """
-        raise NotImplementedError
+        self._parser_registry.register("generic_loc", _parse_generic_loc)
+        self._parser_registry.register("none", _parse_none)
 
-    @abstractmethod
+        # Register common analyzers (shared across all backends)
+        from tritonparse.parse.ir_analysis import (
+            _analyze_loop_schedules_generic,
+            _analyze_procedures_generic,
+        )
+
+        self._analysis_registry.register(
+            "loop_schedules",
+            _analyze_loop_schedules_generic,
+            required_stages=("ttir", "ttgir"),
+        )
+        self._analysis_registry.register(
+            "procedure_checks",
+            _analyze_procedures_generic,
+            required_stages=("ttgir",),
+        )
+
     def get_ir_stages(self) -> list[IRStageDescriptor]:
-        raise NotImplementedError
+        return self._stages
 
     def get_stage_by_name(self, stage_name: str) -> IRStageDescriptor | None:
         for stage in self.get_ir_stages():
@@ -142,19 +233,39 @@ class CompilationPipelineAdapter(ABC):
                 return stage
         return None
 
-    def get_stage_by_artifact(self, artifact_name: str) -> IRStageDescriptor | None:
-        artifact_suffix = Path(artifact_name).suffix
-        for stage in self.get_ir_stages():
-            if stage.extension == artifact_suffix:
-                return stage
-        return None
+    def get_applicable_derived_artifacts(
+        self,
+        enabled_derived_artifacts: set[str] | None = None,
+    ) -> list[DerivedArtifactInfo]:
+        """
+        Get derived artifacts applicable to this adapter, filtered by user-enabled list.
 
-    @property
-    def known_stage_extensions(self) -> set[str]:
-        return {stage.extension for stage in self.get_ir_stages()}
+        Validates user-provided names and warns about unknowns.
 
-    def get_derived_artifacts(self) -> list[DerivedArtifactInfo]:
-        return DerivedArtifactRegistry.list_for_adapter(self.adapter_name)
+        Args:
+            enabled_derived_artifacts: User-enabled target stage names (None = all)
+
+        Returns:
+            List of applicable DerivedArtifactInfo
+        """
+        all_artifacts = self._derived_artifact_registry.list_all()
+
+        if enabled_derived_artifacts is not None:
+            enabled_normalized = {n.lower() for n in enabled_derived_artifacts}
+            known = {info.target_stage_name.lower() for info in all_artifacts}
+            unknown = enabled_normalized - known
+            if unknown:
+                logger.warning(
+                    f"TRITONPARSE_DERIVED_ARTIFACTS contains unknown target stage names: {unknown}. "
+                    f"Available for {self.adapter_name}: {sorted(known)}"
+                )
+            return [
+                info
+                for info in all_artifacts
+                if info.target_stage_name.lower() in enabled_normalized
+            ]
+
+        return all_artifacts
 
     def register_backend_derived_artifact(
         self,
@@ -163,43 +274,35 @@ class CompilationPipelineAdapter(ABC):
         tool_name: str,
         derive_func: Callable[[str], str | None],
     ) -> None:
-        """Register a backend-specific derived artifact to the registry."""
-        DerivedArtifactRegistry.register(
+        """Register a backend-specific derived artifact to the adapter's registry."""
+        self._derived_artifact_registry.register(
             DerivedArtifactInfo(
                 source_stage_name=source_stage_name,
                 target_stage_name=target_stage_name,
                 tool_name=tool_name,
-                adapter_affinity=self.adapter_name,
                 derive_func=derive_func,
             )
         )
 
-    def collect_derived_artifact_contents(
-        self, source_path: str, info: DerivedArtifactInfo
-    ) -> str | None:
-        """Run the derivation tool and return the generated artifact contents."""
-        return info.derive_func(source_path)
+    def list_parsers(self) -> list[str]:
+        """List all registered parser IDs (common + backend-specific)."""
+        return self._parser_registry.list_parsers()
 
     def get_analysis_passes(self) -> list[str]:
         """
         Return list of analysis pass names for this adapter.
 
-        Base implementation: gets analyzers from AnalysisRegistry
-        that match this adapter's affinity or are common (no affinity).
-
-        Can be overridden by subclasses for custom behavior.
+        All analyzers in the adapter's instance registry are included
+        (common + backend-specific).
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
+        return self._analysis_registry.list_analyzers()
 
-        my_name = self.adapter_name
-        analyzer_names = []
-
-        for _, info in AnalysisRegistry.list_analyzer_infos():
-            # Include analyzers specific to this adapter or common analyzers
-            if info.adapter_affinity in (my_name, None):
-                analyzer_names.append(info.name)
-
-        return analyzer_names
+    def get_analyzer_required_stages(
+        self, analyzer_name: str
+    ) -> tuple[str, ...] | None:
+        """Return required stages for the given analyzer, or None if not registered."""
+        info = self._analysis_registry.get_analyzer_info(analyzer_name)
+        return info.required_stages if info else None
 
     def get_executable_analyzers(
         self,
@@ -211,6 +314,8 @@ class CompilationPipelineAdapter(ABC):
         1. User-enabled analyses (from environment variable)
         2. Available intermediate products (file_content)
 
+        Also validates user-provided analyzer names and warns about unknowns.
+
         Args:
             file_content: Dictionary mapping file keys to file content
             enabled_analyses: User-enabled analysis names (None = all)
@@ -218,19 +323,34 @@ class CompilationPipelineAdapter(ABC):
         Returns:
             List of executable analyzer names
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
+        # Validate user-provided names against known analyzers
+        enabled_normalized = (
+            {n.lower() for n in enabled_analyses}
+            if enabled_analyses is not None
+            else None
+        )
+        if enabled_normalized is not None:
+            known = {name.lower() for name in self._analysis_registry.list_analyzers()}
+            unknown = enabled_normalized - known
+            if unknown:
+                logger.warning(
+                    f"TRITONPARSE_ANALYSIS contains unknown analyzer names: {unknown}. "
+                    f"Available for {self.adapter_name}: {sorted(known)}"
+                )
 
-        # Get declared analyzers for this adapter (already registered)
         declared_analyzers = self.get_analysis_passes()
         executable = []
 
         for analyzer_name in declared_analyzers:
             # Check 1: Is it enabled by user?
-            if enabled_analyses is not None and analyzer_name not in enabled_analyses:
+            if (
+                enabled_normalized is not None
+                and analyzer_name.lower() not in enabled_normalized
+            ):
                 continue
 
             # Check 2: Are required stages available?
-            info = AnalysisRegistry.get_analyzer_info(analyzer_name)
+            info = self._analysis_registry.get_analyzer_info(analyzer_name)
             if not info:
                 continue
 
@@ -271,11 +391,9 @@ class CompilationPipelineAdapter(ABC):
         Raises:
             ValueError: If the pass_name is not found in the registry
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
-
-        analyzer = AnalysisRegistry.get_analyzer(pass_name)
+        analyzer = self._analysis_registry.get_analyzer(pass_name)
         if analyzer is None:
-            available = AnalysisRegistry.list_analyzers()
+            available = self._analysis_registry.list_analyzers()
             raise ValueError(
                 f"Analyzer '{pass_name}' not found. Available analyzers: {available}"
             )
@@ -289,10 +407,7 @@ class CompilationPipelineAdapter(ABC):
         required_stages: tuple[str, ...],
     ) -> None:
         """
-        Register a backend-specific analyzer to the analyzer registry.
-
-        This allows adapters to register custom analyzers for backend-specific
-        analysis passes that are not part of the common analyzer registry.
+        Register a backend-specific analyzer to the adapter's registry.
 
         Args:
             analyzer_id: The analyzer identifier (e.g., "amd_buffer_ops")
@@ -300,12 +415,8 @@ class CompilationPipelineAdapter(ABC):
                           (entry, procedure_checks) -> dict | None
             required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
         """
-        from tritonparse.parse.ir_analysis import AnalysisRegistry
-
-        # Use this adapter's name as affinity
-        adapter_affinity = self.adapter_name
-        AnalysisRegistry.register(
-            analyzer_id, analyzer_func, required_stages, adapter_affinity
+        self._analysis_registry.register(
+            analyzer_id, analyzer_func, required_stages, self.adapter_name
         )
 
     def get_canonical_device_string(self) -> str:
@@ -314,10 +425,7 @@ class CompilationPipelineAdapter(ABC):
 
     def get_parser(self, parser_id: str):
         """
-        Get parser function by parser_id from the parser registry.
-
-        This is a generic implementation that works for most backends.
-        Subclasses can override this method if they need custom parser resolution.
+        Get parser function by parser_id from the adapter's parser registry.
 
         Args:
             parser_id: The parser identifier (e.g., "generic_loc", "ptx_loc")
@@ -328,11 +436,9 @@ class CompilationPipelineAdapter(ABC):
         Raises:
             ValueError: If the parser_id is not found in the registry
         """
-        from tritonparse.parse.ir_parser import ParserRegistry
-
-        parser = ParserRegistry.get_parser(parser_id)
+        parser = self._parser_registry.get_parser(parser_id)
         if parser is None:
-            available_parsers = ParserRegistry.list_parsers()
+            available_parsers = self._parser_registry.list_parsers()
             raise ValueError(
                 f"Parser '{parser_id}' not found. "
                 f"Available parsers: {available_parsers}"
@@ -341,33 +447,40 @@ class CompilationPipelineAdapter(ABC):
 
     def register_backend_parser(self, parser_id: str, parser_func) -> None:
         """
-        Register a backend-specific parser to the parser registry.
-
-        This allows adapters to register custom parsers for backend-specific
-        IR formats that are not part of the common parser registry.
+        Register a backend-specific parser to the adapter's parser registry.
 
         Args:
             parser_id: The parser identifier (e.g., "ascend_ir")
             parser_func: The parser function
         """
-        from tritonparse.parse.ir_parser import ParserRegistry
-
-        ParserRegistry.register(parser_id, parser_func)
+        self._parser_registry.register(parser_id, parser_func)
 
 
 class NvidiaTritonAdapter(CompilationPipelineAdapter):
+    adapter_name: str = "cuda_triton"
+    runtime_backend: str = "cuda"
+    pytorch_module: str = "cuda"
+
     def __init__(self):
-        """Initialize and register backend-specific parsers and stage descriptors."""
-        from tritonparse.parse.ir_parser import _parse_ptx_loc, _parse_sass_loc
+        super().__init__()
 
         # Register NVIDIA-specific parsers
-        self.register_backend_parser("ptx_loc", _parse_ptx_loc)
-        self.register_backend_parser("sass_loc", _parse_sass_loc)
+        from tritonparse.parse.ir_parser import _parse_ptx_loc, _parse_sass_loc
+
+        self._parser_registry.register("ptx_loc", _parse_ptx_loc)
+        self._parser_registry.register("sass_loc", _parse_sass_loc)
 
         # Register NVIDIA-specific derived artifacts
         from tritonparse.tools.disasm import extract as derive_sass
 
-        self.register_backend_derived_artifact("cubin", "sass", "nvdisasm", derive_sass)
+        self._derived_artifact_registry.register(
+            DerivedArtifactInfo(
+                source_stage_name="cubin",
+                target_stage_name="sass",
+                tool_name="nvdisasm",
+                derive_func=derive_sass,
+            )
+        )
 
         # Pre-initialize stage descriptors (immutable objects, can be reused)
         self._stages = [
@@ -392,33 +505,24 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
             ),
         ]
 
-    @property
-    def adapter_name(self) -> str:
-        return "cuda_triton"
-
-    @property
-    def runtime_backend(self) -> str:
-        return "cuda"
-
-    @property
-    def pytorch_module(self) -> str:
-        return "cuda"
-
-    def get_ir_stages(self) -> list[IRStageDescriptor]:
-        return self._stages
-
 
 class AmdTritonAdapter(CompilationPipelineAdapter):
+    adapter_name: str = "hip_triton"
+    runtime_backend: str = "hip"
+    pytorch_module: str = "cuda"
+
     def __init__(self):
-        """Initialize and register backend-specific parsers and analyzers."""
-        from tritonparse.parse.ir_analysis import _analyze_amd_buffer_ops
-        from tritonparse.parse.ir_parser import _parse_amdgcn_loc
+        super().__init__()
 
         # Register AMD-specific parsers
-        self.register_backend_parser("amdgcn_loc", _parse_amdgcn_loc)
+        from tritonparse.parse.ir_parser import _parse_amdgcn_loc
+
+        self._parser_registry.register("amdgcn_loc", _parse_amdgcn_loc)
 
         # Register AMD-specific analyzers
-        self.register_backend_analyzer(
+        from tritonparse.parse.ir_analysis import _analyze_amd_buffer_ops
+
+        self._analysis_registry.register(
             "amd_buffer_ops",
             _analyze_amd_buffer_ops,
             required_stages=("ttgir", "amdgcn"),
@@ -443,53 +547,42 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
             ),
         ]
 
-    @property
-    def adapter_name(self) -> str:
-        return "hip_triton"
 
-    @property
-    def runtime_backend(self) -> str:
-        return "hip"
-
-    @property
-    def pytorch_module(self) -> str:
-        return "cuda"
-
-    def get_ir_stages(self) -> list[IRStageDescriptor]:
-        return self._stages
-
-
+# =============================================================================
+# ADAPTER REGISTRY (LAZY INITIALIZATION)
+# =============================================================================
 class PipelineAdapterRegistry:
     """Registry for managing and resolving compilation pipeline adapters.
 
-    Provides registration and resolution methods for different backend adapters.
-    Adapters can be looked up by name or inferred from trace metadata.
-
-    Note: Adapters are instantiated once during registration and reused for all
-    subsequent resolutions. This ensures parsers are registered only once and
-    stage descriptors are initialized only once.
+    Adapters are registered as classes and lazily instantiated on first use.
+    This avoids importing backend-specific modules until they are needed.
     """
 
     def __init__(self) -> None:
-        self._adapters: dict[str, CompilationPipelineAdapter] = {}
+        self._adapter_classes: dict[str, type[CompilationPipelineAdapter]] = {}
+        self._adapter_instances: dict[str, CompilationPipelineAdapter] = {}
 
     def register(self, adapter_cls: type[CompilationPipelineAdapter]) -> None:
-        adapter = adapter_cls()
-        self._adapters[adapter.adapter_name.lower()] = adapter
+        key = adapter_cls.adapter_name.lower()
+        self._adapter_classes[key] = adapter_cls
 
-    def create_all(self) -> list[CompilationPipelineAdapter]:
-        return list(self._adapters.values())
+    def _ensure_initialized(self, adapter_name: str) -> None:
+        key = adapter_name.lower()
+        if key not in self._adapter_instances and key in self._adapter_classes:
+            self._adapter_instances[key] = self._adapter_classes[key]()
 
     def resolve(
         self,
         *,
         adapter_name: str,
     ) -> CompilationPipelineAdapter:
-        adapter = self._adapters.get(adapter_name.lower())
+        self._ensure_initialized(adapter_name)
+        adapter = self._adapter_instances.get(adapter_name.lower())
         if adapter is None:
+            available = list(self._adapter_classes.keys())
             raise ValueError(
                 "Unable to resolve adapter from adapter_name: "
-                f"adapter_name={adapter_name!r}"
+                f"adapter_name={adapter_name!r}. Available: {available}"
             )
         return adapter
 
@@ -514,9 +607,10 @@ class PipelineAdapterRegistry:
         )
 
 
+# Module-level registration (no instantiation at import time)
 _REGISTRY = PipelineAdapterRegistry()
-for _adapter_cls in (NvidiaTritonAdapter, AmdTritonAdapter):
-    _REGISTRY.register(_adapter_cls)
+_REGISTRY.register(NvidiaTritonAdapter)
+_REGISTRY.register(AmdTritonAdapter)
 
 
 def get_backend_registry() -> PipelineAdapterRegistry:

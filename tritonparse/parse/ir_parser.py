@@ -3,7 +3,7 @@
 import os
 import re
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from tritonparse.tp_logger import get_logger
 
@@ -60,64 +60,6 @@ ALIAS_SIMPLE_PATTERN = re.compile(r"#loc(\d+)\s*=\s*loc\(\s*#loc(\d*)\s*\)")
 CALLSITE_PATTERN = re.compile(
     r"#loc(\d+)\s*=\s*loc\(\s*callsite\(\s*#loc(\d*)\s+at\s+#loc(\d*)\s*\)\s*\)"
 )
-
-
-# =============================================================================
-# PARSER REGISTRY
-# =============================================================================
-class ParserRegistry:
-    """
-    Registry for managing IR parser functions.
-
-    This registry allows adapters to register and retrieve parser functions
-    by parser_id. It supports both common parsers (shared across backends)
-    and backend-specific parsers.
-    """
-
-    _parsers: Dict[str, Callable] = {}
-
-    @classmethod
-    def register(cls, parser_id: str, parser_func: Callable) -> None:
-        """
-        Register a parser function with the given parser_id.
-
-        Args:
-            parser_id: The parser identifier (e.g., "generic_loc", "ptx_loc")
-            parser_func: The parser function
-
-        If parser_id is already registered, the existing parser is overwritten
-        and a warning is logged.
-        """
-        if parser_id in cls._parsers:
-            logger.warning(
-                f"Parser '{parser_id}' is already registered. "
-                f"Overwriting with new parser function."
-            )
-        cls._parsers[parser_id] = parser_func
-        logger.debug(f"Registered parser: {parser_id}")
-
-    @classmethod
-    def get_parser(cls, parser_id: str) -> Optional[Callable]:
-        """
-        Get a parser function by parser_id.
-
-        Args:
-            parser_id: The parser identifier
-
-        Returns:
-            The parser function, or None if not found
-        """
-        return cls._parsers.get(parser_id)
-
-    @classmethod
-    def list_parsers(cls) -> List[str]:
-        """
-        List all registered parser IDs.
-
-        Returns:
-            List of parser IDs
-        """
-        return list(cls._parsers.keys())
 
 
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
@@ -712,25 +654,3 @@ def _parse_none(
         Empty dictionary
     """
     return {}
-
-
-# =============================================================================
-# REGISTER COMMON PARSERS
-# =============================================================================
-def _initialize_common_parsers() -> None:
-    """
-    Register common parsers that are shared across all backends.
-
-    Common parsers are those that work across all backends (e.g., TTIR/TTGIR/LLIR
-    which use generic #loc directives).
-
-    Backend-specific parsers (PTX, SASS, AMDGCN) are registered by their
-    respective adapters.
-    """
-    ParserRegistry.register("generic_loc", _parse_generic_loc)
-    ParserRegistry.register("none", _parse_none)
-    logger.debug("Common parsers registered successfully")
-
-
-# Initialize parsers at module import time
-_initialize_common_parsers()

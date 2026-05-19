@@ -8,8 +8,7 @@ from tritonparse.backend import (
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
-from tritonparse.parse.ir_analysis import _generate_ir_analysis, AnalysisRegistry
-from tritonparse.parse.ir_parser import ParserRegistry
+from tritonparse.parse.ir_analysis import _generate_ir_analysis
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
@@ -114,63 +113,67 @@ class TestMultiBackendStage(unittest.TestCase):
             registry.resolve_from_trace(metadata={})
 
     def test_parser_registry_and_layered_registration(self):
-        """Test ParserRegistry and layered parser registration (common + backend-specific)."""
-        # Step 1: Verify common parsers are pre-registered
-        common_parsers = {"generic_loc", "none"}
-        for parser_id in common_parsers:
-            parser = ParserRegistry.get_parser(parser_id)
-            self.assertIsNotNone(
-                parser, f"Common parser '{parser_id}' should be pre-registered"
-            )
-
-        # Step 2: Create adapters (triggers backend-specific parser registration)
+        """Test per-adapter parser isolation: each adapter has common + its own parsers."""
         registry = PipelineAdapterRegistry()
         registry.register(NvidiaTritonAdapter)
         registry.register(AmdTritonAdapter)
 
-        # Step 3: Verify all parsers are listed (check registry list functionality)
-        all_parsers = ParserRegistry.list_parsers()
-        self.assertIn("generic_loc", all_parsers)
-        self.assertIn("none", all_parsers)
-        self.assertIn("ptx_loc", all_parsers)
-        self.assertIn("sass_loc", all_parsers)
-        self.assertIn("amdgcn_loc", all_parsers)
+        nvidia = registry.resolve(adapter_name="cuda_triton")
+        amd = registry.resolve(adapter_name="hip_triton")
+
+        # Common parsers present in both
+        for adapter in (nvidia, amd):
+            parsers = adapter.list_parsers()
+            self.assertIn("generic_loc", parsers)
+            self.assertIn("none", parsers)
+
+        # NVIDIA-specific parsers only in NVIDIA adapter
+        nvidia_parsers = nvidia.list_parsers()
+        self.assertIn("ptx_loc", nvidia_parsers)
+        self.assertIn("sass_loc", nvidia_parsers)
+        self.assertNotIn("amdgcn_loc", nvidia_parsers)
+
+        # AMD-specific parser only in AMD adapter
+        amd_parsers = amd.list_parsers()
+        self.assertIn("amdgcn_loc", amd_parsers)
+        self.assertNotIn("ptx_loc", amd_parsers)
+        self.assertNotIn("sass_loc", amd_parsers)
 
     def test_adapter_get_parser_method(self):
-        """Test adapter.get_parser() method with both common and backend-specific parsers."""
+        """Test adapter.get_parser() with isolated per-adapter registries."""
         registry = PipelineAdapterRegistry()
         registry.register(NvidiaTritonAdapter)
         registry.register(AmdTritonAdapter)
 
-        # Get NVIDIA adapter
-        nvidia_adapter = registry.resolve(adapter_name="cuda_triton")
+        nvidia = registry.resolve(adapter_name="cuda_triton")
+        amd = registry.resolve(adapter_name="hip_triton")
 
-        # Test getting common parser (generic_loc)
-        generic_parser = nvidia_adapter.get_parser("generic_loc")
+        # Common parser works on both
+        generic_parser = nvidia.get_parser("generic_loc")
         self.assertIsNotNone(generic_parser)
+        generic_parser_amd = amd.get_parser("generic_loc")
+        self.assertIsNotNone(generic_parser_amd)
 
-        # Test getting NVIDIA-specific parser
-        ptx_parser = nvidia_adapter.get_parser("ptx_loc")
+        # Backend-specific parsers only work on their own adapter
+        ptx_parser = nvidia.get_parser("ptx_loc")
         self.assertIsNotNone(ptx_parser)
-
-        # Test getting AMD parser (also works because parsers are globally registered)
-        amdgcn_parser = nvidia_adapter.get_parser("amdgcn_loc")
+        amdgcn_parser = amd.get_parser("amdgcn_loc")
         self.assertIsNotNone(amdgcn_parser)
 
-        # Get AMD adapter and test NVIDIA parser (also works for symmetrical access)
-        amd_adapter = registry.resolve(adapter_name="hip_triton")
-        ptx_parser_amd = amd_adapter.get_parser("ptx_loc")
-        self.assertIsNotNone(ptx_parser_amd)
-
-        # Test getting unknown parser should raise ValueError
+        # Cross-backend access should fail (isolation)
         with self.assertRaises(ValueError):
-            nvidia_adapter.get_parser("unknown_parser")
+            nvidia.get_parser("amdgcn_loc")
+        with self.assertRaises(ValueError):
+            amd.get_parser("ptx_loc")
+
+        # Unknown parser
+        with self.assertRaises(ValueError):
+            nvidia.get_parser("unknown_parser")
 
     def test_adapter_driven_parser_selection_and_fallback(self):
         """Test adapter-driven parser selection with backward compatibility fallback."""
-        registry = PipelineAdapterRegistry()
-        registry.register(NvidiaTritonAdapter)
-        registry.register(AmdTritonAdapter)
+        # Use module-level registry so generate_source_mappings sees the same adapter
+        nvidia = get_backend_registry().resolve(adapter_name="cuda_triton")
 
         # Test content (TTIR with #loc directives)
         ttir_content = """
@@ -186,13 +189,13 @@ class TestMultiBackendStage(unittest.TestCase):
         def sentinel_generic_loc_parser(*args, **kwargs):
             return sentinel_mapping
 
-        original_generic_parser = ParserRegistry.get_parser("generic_loc")
+        original_generic_parser = nvidia.get_parser("generic_loc")
         self.assertIsNotNone(original_generic_parser)
 
         # Test with metadata (adapter-driven parser selection)
         metadata_cuda = {"backend_name": "cuda"}
         try:
-            ParserRegistry.register("generic_loc", sentinel_generic_loc_parser)
+            nvidia.register_backend_parser("generic_loc", sentinel_generic_loc_parser)
 
             result_with_metadata = generate_source_mappings(
                 ttir_content, "ttir", None, metadata_cuda
@@ -220,13 +223,12 @@ class TestMultiBackendStage(unittest.TestCase):
             self.assertEqual(result_fallback["4"]["line"], 20)
             self.assertIn("ttir_line", result_fallback["4"])
         finally:
-            ParserRegistry.register("generic_loc", original_generic_parser)
+            nvidia.register_backend_parser("generic_loc", original_generic_parser)
 
     def test_adapter_parser_execution_errors_are_not_silently_swallowed(self):
         """Adapter-selected parser execution failures should propagate instead of falling back."""
-        registry = PipelineAdapterRegistry()
-        registry.register(NvidiaTritonAdapter)
-        registry.register(AmdTritonAdapter)
+        # Use module-level registry so generate_source_mappings sees the same adapter
+        nvidia = get_backend_registry().resolve(adapter_name="cuda_triton")
 
         ttir_content = """
             #loc = loc("test.py":10:5)
@@ -239,16 +241,16 @@ class TestMultiBackendStage(unittest.TestCase):
         def failing_generic_loc_parser(*args, **kwargs):
             raise RuntimeError("parser execution failed")
 
-        original_generic_parser = ParserRegistry.get_parser("generic_loc")
+        original_generic_parser = nvidia.get_parser("generic_loc")
         self.assertIsNotNone(original_generic_parser)
 
         try:
-            ParserRegistry.register("generic_loc", failing_generic_loc_parser)
+            nvidia.register_backend_parser("generic_loc", failing_generic_loc_parser)
 
             with self.assertRaisesRegex(RuntimeError, "parser execution failed"):
                 generate_source_mappings(ttir_content, "ttir", None, metadata_cuda)
         finally:
-            ParserRegistry.register("generic_loc", original_generic_parser)
+            nvidia.register_backend_parser("generic_loc", original_generic_parser)
 
 
 class TestAnalysisAdapterDriven(unittest.TestCase):
@@ -356,12 +358,19 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
             )
 
     def test_analysis_registry_common_and_backend_analyzers(self):
-        """Common and backend-specific analyzers are all registered after adapter init."""
-        for analyzer_id in ("loop_schedules", "procedure_checks", "amd_buffer_ops"):
-            self.assertIsNotNone(
-                AnalysisRegistry.get_analyzer(analyzer_id),
-                f"Analyzer '{analyzer_id}' should be registered",
-            )
+        """Common and backend-specific analyzers are registered in per-adapter registries."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        amd = self.registry.resolve(adapter_name="hip_triton")
+
+        # Common analyzers present in both
+        for adapter in (nvidia, amd):
+            analyzers = adapter.get_analysis_passes()
+            self.assertIn("loop_schedules", analyzers)
+            self.assertIn("procedure_checks", analyzers)
+
+        # Only AMD adapter has amd_buffer_ops
+        self.assertIn("amd_buffer_ops", amd.get_analysis_passes())
+        self.assertNotIn("amd_buffer_ops", nvidia.get_analysis_passes())
 
     def test_analysis_adapter_passes_differ_by_backend(self):
         """NVIDIA only has common passes; AMD additionally has amd_buffer_ops."""
@@ -382,9 +391,12 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         """Each analysis pass's required_stages should exist in the adapter."""
         amd_adapter = self.registry.resolve(adapter_name="hip_triton")
         for pass_name in amd_adapter.get_analysis_passes():
-            info = AnalysisRegistry.get_analyzer_info(pass_name)
-            self.assertIsNotNone(info, f"Analyzer '{pass_name}' should be registered")
-            for stage_name in info.required_stages:
+            required_stages = amd_adapter.get_analyzer_required_stages(pass_name)
+            self.assertIsNotNone(
+                required_stages, f"Analyzer '{pass_name}' should be registered"
+            )
+            assert required_stages is not None  # for type checker
+            for stage_name in required_stages:
                 self.assertIsNotNone(
                     amd_adapter.get_stage_by_name(stage_name),
                     f"Required stage '{stage_name}' should exist in AMD adapter",
@@ -430,39 +442,34 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         self.assertEqual(get_enabled_analyses(), {"amd_buffer_ops", "loop_schedules"})
 
     def test_get_enabled_derived_artifacts_env_parsing(self):
-        """Derived artifact env parsing should cover defaults, keywords, lists, compat, and unknown filtering."""
+        """Derived artifact env parsing should cover defaults, keywords, lists, and compat."""
         original_derived_artifacts_env = os.environ.get("TRITONPARSE_DERIVED_ARTIFACTS")
         original_dump_sass_env = os.environ.get("TRITONPARSE_DUMP_SASS")
 
         try:
             set_runtime_sass_dump_override(None)
 
-            with patch(
-                "tritonparse.backend.DerivedArtifactRegistry.list_target_stage_names",
-                return_value=["sass", "example"],
-            ):
-                os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
-                os.environ.pop("TRITONPARSE_DUMP_SASS", None)
-                self.assertEqual(get_enabled_derived_artifacts(), set())
+            os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
+            os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+            self.assertEqual(get_enabled_derived_artifacts(), set())
 
-                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "all"
-                self.assertIsNone(get_enabled_derived_artifacts())
+            os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "all"
+            self.assertIsNone(get_enabled_derived_artifacts())
 
-                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "none"
-                self.assertEqual(get_enabled_derived_artifacts(), set())
+            os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "none"
+            self.assertEqual(get_enabled_derived_artifacts(), set())
 
-                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = " example , sass "
-                self.assertEqual(get_enabled_derived_artifacts(), {"example", "sass"})
+            os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = " example , sass "
+            self.assertEqual(get_enabled_derived_artifacts(), {"example", "sass"})
 
-                os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
-                os.environ["TRITONPARSE_DUMP_SASS"] = "1"
-                self.assertEqual(get_enabled_derived_artifacts(), {"sass"})
+            os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)
+            os.environ["TRITONPARSE_DUMP_SASS"] = "1"
+            self.assertEqual(get_enabled_derived_artifacts(), {"sass"})
 
-                os.environ.pop("TRITONPARSE_DUMP_SASS", None)
-                os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "example,unknown"
-                with self.assertLogs("tritonparse", level="WARNING") as logs:
-                    self.assertEqual(get_enabled_derived_artifacts(), {"example"})
-                self.assertIn("unknown target stage names", "\n".join(logs.output))
+            # Unknown names are passed through (validated at adapter level)
+            os.environ.pop("TRITONPARSE_DUMP_SASS", None)
+            os.environ["TRITONPARSE_DERIVED_ARTIFACTS"] = "example,unknown"
+            self.assertEqual(get_enabled_derived_artifacts(), {"example", "unknown"})
         finally:
             if original_derived_artifacts_env is None:
                 os.environ.pop("TRITONPARSE_DERIVED_ARTIFACTS", None)

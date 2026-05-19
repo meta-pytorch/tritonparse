@@ -968,9 +968,7 @@ def _extract_file_content_adapter_driven(
 
     # Derived artifacts
     enabled = get_enabled_derived_artifacts()
-    for info in adapter.get_derived_artifacts():
-        if enabled is not None and info.target_stage_name not in enabled:
-            continue
+    for info in adapter.get_applicable_derived_artifacts(enabled):
         source_stage = adapter.get_stage_by_name(info.source_stage_name)
         if not source_stage:
             log.warning(
