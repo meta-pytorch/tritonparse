@@ -528,6 +528,38 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
         ]
 
 
+class AscendTritonAdapter(CompilationPipelineAdapter):
+    adapter_name: str = "cann_triton"
+    runtime_backend: str = "cann"
+    pytorch_module: str = "npu"
+
+    def __init__(self):
+        super().__init__()
+
+        # Pre-initialize stage descriptors (immutable objects, can be reused)
+        self._stages = [
+            IRStageDescriptor(
+                "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "ttadapter", ".ttadapter", "TTAdapter", 20, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "mlirbc", ".mlirbc", "MLIRBC", 30, False, False, "none", "plaintext"
+            ),
+            IRStageDescriptor(
+                "bcmlir", ".bcmlir", "BCMLIR", 40, True, True, "generic_loc", "mlir"
+            ),
+            IRStageDescriptor(
+                "npubin", ".npubin", "NPUBIN", 50, False, False, "none", "plaintext"
+            ),
+            IRStageDescriptor(
+                "json", ".json", "JSON", 100, True, False, "none", "json"
+            ),
+        ]
+
+
+
 # =============================================================================
 # ADAPTER REGISTRY (LAZY INITIALIZATION)
 # =============================================================================
@@ -624,6 +656,7 @@ class PipelineAdapterRegistry:
 _REGISTRY = PipelineAdapterRegistry()
 _REGISTRY.register(NvidiaTritonAdapter)
 _REGISTRY.register(AmdTritonAdapter)
+_REGISTRY.register(AscendTritonAdapter)
 
 
 def get_backend_registry() -> PipelineAdapterRegistry:
