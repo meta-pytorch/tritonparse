@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import CodeViewer from "./CodeViewer";
-import { IRFile } from "../utils/dataLoader";
+import { IRFile, IRStageDescriptor, getGroupingAnchor } from "../utils/dataLoader";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import CopyCodeButton from "./CopyCodeButton";
 import { ArrowLeftIcon } from "./icons";
@@ -14,6 +14,7 @@ interface SingleCodeViewerProps {
   title: string; // Title to display for the code view
   language?: string; // Language for syntax highlighting
   onBack: () => void; // Callback function when back button is clicked
+  irStages?: IRStageDescriptor[];
 }
 
 /**
@@ -26,13 +27,14 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
   title,
   language = "plaintext",
   onBack,
+  irStages,
 }) => {
   // Track highlighted lines for self-referential mapping
   const [highlightedLines, setHighlightedLines] = useState<number[]>([]);
 
   // Determine content to display (either from direct content or from IRFile)
   const codeContent = irContent || (irFile ? irFile.content : "");
-  const displayLanguage = getDisplayLanguage(title);
+  const displayLanguage = getDisplayLanguage(title, irStages);
 
   // Get source mapping if available
   const sourceMapping = irFile?.source_mapping;
@@ -42,27 +44,25 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
    * Can be used to highlight related lines within the same file
    */
   const handleLineClick = (lineNumber: number) => {
-    // Toggle highlight for the clicked line
     setHighlightedLines([lineNumber]);
 
-    // If there's source mapping available, we could highlight related lines
-    // For example lines that map to the same source code location
     if (sourceMapping) {
       const lineKey = lineNumber.toString();
-      const clickedMapping = sourceMapping[lineKey];
+      const clickedMapping = sourceMapping[lineKey] as Record<string, unknown> | undefined;
+      const anchorStage = getGroupingAnchor(irStages);
+      const anchorProperty = `${anchorStage}_line`;
 
-      if (clickedMapping && clickedMapping.ttgir_line) {
-        // Find all lines that map to the same TTGIR line
+      if (clickedMapping && clickedMapping[anchorProperty] != null) {
+        const anchorValue = clickedMapping[anchorProperty];
         const relatedLines = Object.entries(sourceMapping)
           .filter(
             ([key, mapping]) =>
-              mapping.ttgir_line === clickedMapping.ttgir_line &&
-              parseInt(lineKey, 10) !== parseInt(key, 10) // Skip the clicked line itself
+              (mapping as Record<string, unknown>)[anchorProperty] === anchorValue &&
+              parseInt(lineKey, 10) !== parseInt(key, 10)
           )
           .map(([line]) => parseInt(line, 10));
 
         if (relatedLines.length > 0) {
-          // Include the clicked line and any related lines
           setHighlightedLines([lineNumber, ...relatedLines]);
         }
       }

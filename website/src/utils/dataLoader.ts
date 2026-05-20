@@ -1,32 +1,35 @@
 import { ClpArchiveReader, isClpFile } from "clp-ffi-js/sfa";
 
 /**
- * Source mapping information that connects lines in IR code to source code
+ * Stage descriptor from the trace, describing one IR compilation stage.
+ * Used to eliminate hardcoded stage names in the frontend.
+ */
+export interface IRStageDescriptor {
+    name: string;
+    extension: string;
+    display_name: string;
+    display_order: number;
+    is_text: boolean;
+    supports_source_mapping: boolean;
+    syntax_id: string;
+}
+
+/**
+ * Source mapping information that connects lines in IR code to source code.
+ * Dynamic cross-reference fields follow the pattern:
+ *   {stage_name}_line (number) - self-reference
+ *   {stage_name}_lines (number[]) - cross-reference to other stages
  */
 export interface SourceMapping {
     line: number;
     file?: string;
     column?: number;
-    // The {ir_type}_line fields are the line numbers in the current IR file that corresponds to
-    // the current line in the source code. It should be same with the key in the source_mapping.
-    ttgir_line?: number;
-    ttir_line?: number;
-    ptx_line?: number;
-    amdgcn_line?: number;
-    llir_line?: number;
-    sass_line?: number;
-    ptx_lines?: number[]; // Array of corresponding PTX lines
-    ttir_lines?: number[]; // Array of corresponding TTIR lines
-    ttgir_lines?: number[]; // Array of corresponding TTGIR lines
-    llir_lines?: number[]; // Array of corresponding LLIR lines
-    amdgcn_lines?: number[]; // Array of corresponding AMDGCN lines
-    sass_lines?: number[]; // Array of corresponding SASS lines
-    // New fields for location alias support
-    type?: string; // Type of mapping entry, e.g., "loc_def" for loc definition lines
-    kind?: string; // Deprecated alias for type, kept for backward compatibility
-    loc_id?: string; // The #loc identifier (e.g., "13" for #loc13)
-    alias_name?: string; // Name of the alias (e.g., "x_ptr" in #loc13 = loc("x_ptr"(#loc)))
-    alias_of?: string; // The target #loc this alias points to
+    type?: string;
+    kind?: string;
+    loc_id?: string;
+    alias_name?: string;
+    alias_of?: string;
+    [key: string]: unknown;
 }
 
 /**
@@ -291,6 +294,7 @@ export interface LogEntry {
         file_content?: Record<string, string>; // Mapping from filename to content
         source_mappings?: Record<string, Record<string, SourceMapping>>; // Alternative field name for source_mapping
         python_source?: PythonSourceCodeInfo;
+        ir_stages?: IRStageDescriptor[];
     };
     // Fields for launch_diff event type
     hash?: string;
@@ -354,6 +358,7 @@ export interface ProcessedKernel {
     metadata?: KernelMetadata; // Compilation metadata
     launchDiff?: LogEntry; // Aggregated launch event differences
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    ir_stages?: IRStageDescriptor[]; // Stage descriptors from trace (for frontend generalization).
     autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
     winnerRunCount?: number; // Number of times this kernel was run as the autotuning winner
     // Fields for fake compilation events (inferred from launch events when no real compilation exists)
@@ -622,6 +627,7 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 sourceMappings,
                 pythonSourceInfo: entry.payload.python_source,
                 metadata: entry.payload.metadata,
+                ir_stages: entry.payload.ir_stages,
                 // Fake compilation fields
                 isFake: entry.is_fake,
                 fakeReason: entry.fake_reason,
@@ -718,4 +724,50 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
 
     const finalKernels = Array.from(kernelsByHash.values());
     return finalKernels;
+}
+
+// =============================================================================
+// IR Stages Utility Functions
+// =============================================================================
+
+/**
+ * Get viewable stages sorted by display_order.
+ * Viewable = is_text AND supports_source_mapping.
+ */
+function getViewableStages(stages?: IRStageDescriptor[]): IRStageDescriptor[] {
+    if (!stages || stages.length === 0) return [];
+    return stages
+        .filter(s => s.is_text && s.supports_source_mapping)
+        .sort((a, b) => a.display_order - b.display_order);
+}
+
+/**
+ * Get default left/right panel stage names from ir_stages.
+ * Rule: top 2 by display_order among viewable stages.
+ * Fallback: legacy hardcoded values for old traces without ir_stages.
+ */
+export function getDefaultPanels(stages?: IRStageDescriptor[]): { left: string; right: string } {
+    const viewable = getViewableStages(stages);
+    if (viewable.length >= 2) {
+        return { left: viewable[0].name, right: viewable[1].name };
+    }
+    if (viewable.length === 1) {
+        return { left: viewable[0].name, right: viewable[0].name };
+    }
+    return { left: "ttgir", right: "ptx" };
+}
+
+/**
+ * Get the grouping anchor stage name from ir_stages.
+ * Rule: index = Math.floor(length / 2) among viewable stages.
+ * NVIDIA: [ttir, ttgir, llir, ptx, sass] → llir
+ * AMD:    [ttir, ttgir, llir, amdgcn]    → llir
+ * Fallback: "ttgir" for old traces without ir_stages.
+ */
+export function getGroupingAnchor(stages?: IRStageDescriptor[]): string {
+    const viewable = getViewableStages(stages);
+    if (viewable.length > 0) {
+        return viewable[Math.floor(viewable.length / 2)].name;
+    }
+    return "ttgir";
 }

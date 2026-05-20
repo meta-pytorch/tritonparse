@@ -92,7 +92,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     return (m === "single" || m === "all") ? m : "single";
   });
   const [irType, setIrType] = useState<string>(() =>
-    initialParams.get(PARAM_IR) || "ttgir"
+    initialParams.get(PARAM_IR) || ""
   );
 
   // Diff options (lazy init from URL params)
@@ -231,7 +231,16 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     return Array.from(set);
   }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, leftLoadedFromLocal, leftKernelsFromLocal, leftLoadedUrlLocal, leftKernelsFromUrl]);
 
-  const effectiveIrType = irType || (unionIrTypes.length > 0 ? unionIrTypes[0] : "ttgir");
+  // Resolve left/right kernels early for default panel computation
+  const leftArrayResolved = (sess.left?.kernels?.length || 0) > 0
+    ? sess.left.kernels
+    : (leftLoadedFromLocal
+      ? leftKernelsFromLocal
+      : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft));
+  const leftKernel = leftArrayResolved[leftIdx];
+  const rightKernel = kernelsRight[rightIdx];
+
+  const effectiveIrType = irType || unionIrTypes[0];
 
   // Update URL on state changes (File Diff owns its params)
   const syncUrl = useCallback(() => {
@@ -274,15 +283,6 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     }, 200);
     return () => clearTimeout(id);
   }, [syncUrl]);
-
-  // UI builders
-  const leftArrayResolved = (sess.left?.kernels?.length || 0) > 0
-    ? sess.left.kernels
-    : (leftLoadedFromLocal
-      ? leftKernelsFromLocal
-      : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft));
-  const leftKernel = leftArrayResolved[leftIdx];
-  const rightKernel = kernelsRight[rightIdx];
 
   // When navigating away, temporarily hide diff editors to avoid Monaco dispose race
   const [hideDiff, setHideDiff] = useState<boolean>(false);
