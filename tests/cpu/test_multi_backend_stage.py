@@ -9,6 +9,7 @@ from tritonparse.backend import (
     PipelineAdapterRegistry,
 )
 from tritonparse.parse.ir_analysis import _generate_ir_analysis
+from tritonparse.backend import AnalyzerContext
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
@@ -274,6 +275,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
 
     def test_analysis_adapter_driven_path(self):
         """Adapter-driven path: returns dict with artifacts, empty dict without."""
+        ctx = AnalyzerContext()
         # With artifacts (both backends)
         for backend in ("hip", "cuda"):
             trace = {
@@ -288,7 +290,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 }
             }
             self.assertIsInstance(
-                _generate_ir_analysis(trace),
+                _generate_ir_analysis(trace, ctx),
                 dict,
                 f"{backend} backend should return dict",
             )
@@ -302,10 +304,11 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
-        self.assertEqual(_generate_ir_analysis(empty_trace), {})
+        self.assertEqual(_generate_ir_analysis(empty_trace, ctx), {})
 
     def test_analysis_legacy_path(self):
         """Fallback to legacy when adapter resolution fails."""
+        ctx = AnalyzerContext()
         # With artifacts
         fallback_trace = {
             "payload": {
@@ -318,7 +321,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
-        result = _generate_ir_analysis(fallback_trace)
+        result = _generate_ir_analysis(fallback_trace, ctx)
         self.assertIsInstance(result, dict)
         self.assertIn("io_counts", result)
 
@@ -332,13 +335,15 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                         "file_path": {},
                         "source_mappings": {},
                     }
-                }
+                },
+                ctx,
             ),
             {},
         )
 
     def test_analysis_env_var_disables_all(self):
         """TRITONPARSE_ANALYSIS='none' or '' disables all analyses."""
+        ctx = AnalyzerContext()
         trace = {
             "payload": {
                 "metadata": {"backend_name": "hip"},
@@ -354,7 +359,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         for val in ("none", ""):
             os.environ["TRITONPARSE_ANALYSIS"] = val
             self.assertEqual(
-                _generate_ir_analysis(trace), {}, f"env='{val}' should disable all"
+                _generate_ir_analysis(trace, ctx), {}, f"env='{val}' should disable all"
             )
 
     def test_analysis_registry_common_and_backend_analyzers(self):
@@ -413,14 +418,15 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
+        ctx = AnalyzerContext()
 
         # Empty artifacts → analyzer skips due to missing required_stages
         self.assertIsNone(
-            amd_adapter.run_analysis_pass("amd_buffer_ops", test_entry, None)
+            amd_adapter.run_analysis_pass("amd_buffer_ops", test_entry, ctx)
         )
 
         with self.assertRaises(ValueError):
-            amd_adapter.run_analysis_pass("nonexistent_analyzer", test_entry, None)
+            amd_adapter.run_analysis_pass("nonexistent_analyzer", test_entry, ctx)
 
     def test_get_enabled_analyses_helper_function(self):
         """Test get_enabled_analyses() with default, ALL/none keywords, and comma list."""

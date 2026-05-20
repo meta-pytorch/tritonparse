@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from tritonparse.backend import AnalyzerContext
 from tritonparse.shared_vars import get_enabled_analyses
 from tritonparse.tp_logger import get_logger
 
@@ -968,7 +969,7 @@ def _analyze_loop_schedules(
 
 
 def _generate_ir_analysis(
-    entry: dict[str, Any], procedure_checks: list[dict[str, Any]] | None = None
+    entry: dict[str, Any], ctx: AnalyzerContext
 ) -> dict[str, Any]:
     """
     Generate IR analysis results (adapter-driven with fallback).
@@ -981,11 +982,12 @@ def _generate_ir_analysis(
 
     Args:
         entry: Trace entry containing payload
-        procedure_checks: Optional procedure checks configuration
+        ctx: Per-call analyzer context
 
     Returns:
         Dictionary of analysis results
     """
+
     # Env check — shared by both paths
     enabled_analyses = get_enabled_analyses()
     if enabled_analyses is not None and len(enabled_analyses) == 0:
@@ -993,19 +995,17 @@ def _generate_ir_analysis(
         return {}
 
     try:
-        return _generate_ir_analysis_adapter_driven(
-            entry, procedure_checks, enabled_analyses
-        )
+        return _generate_ir_analysis_adapter_driven(entry, ctx, enabled_analyses)
     except ValueError as e:
         logger.warning(f"Adapter-driven analysis failed: {e}. Falling back to legacy.")
 
     # Fallback: hardcoded legacy logic when adapter resolution fails
-    return _generate_ir_analysis_legacy(entry, procedure_checks, enabled_analyses)
+    return _generate_ir_analysis_legacy(entry, ctx, enabled_analyses)
 
 
 def _generate_ir_analysis_adapter_driven(
     entry: dict[str, Any],
-    procedure_checks: list[dict[str, Any]] | None = None,
+    ctx: AnalyzerContext,
     enabled_analyses: set[str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -1013,7 +1013,7 @@ def _generate_ir_analysis_adapter_driven(
 
     Args:
         entry: Trace entry containing payload
-        procedure_checks: Optional procedure checks configuration
+        ctx: Per-call analyzer context
         enabled_analyses: User-enabled analysis names (from env var, resolved by caller)
 
     Returns:
@@ -1037,7 +1037,7 @@ def _generate_ir_analysis_adapter_driven(
     analysis_results = {}
     for analyzer_name in executable_analyzers:
         try:
-            result = adapter.run_analysis_pass(analyzer_name, entry, procedure_checks)
+            result = adapter.run_analysis_pass(analyzer_name, entry, ctx)
             if result:
                 analysis_results.update(result)
                 logger.debug(f"Analysis '{analyzer_name}' completed successfully")
@@ -1049,7 +1049,7 @@ def _generate_ir_analysis_adapter_driven(
 
 def _generate_ir_analysis_legacy(
     entry: dict[str, Any],
-    procedure_checks: list[dict[str, Any]] | None = None,
+    ctx: AnalyzerContext,
     enabled_analyses: set[str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -1060,7 +1060,7 @@ def _generate_ir_analysis_legacy(
 
     Args:
         entry: Trace entry containing payload
-        procedure_checks: Optional procedure checks configuration
+        ctx: Per-call analyzer context
         enabled_analyses: User-enabled analysis names (from env var, resolved by caller)
 
     Returns:
@@ -1100,12 +1100,12 @@ def _generate_ir_analysis_legacy(
             ir_analysis["loop_schedules"] = loop_schedule
 
     if (
-        procedure_checks
+        ctx.procedure_checks
         and ttgir_key
         and (enabled_analyses is None or "procedure_checks" in enabled_analyses)
     ):
         procedure_results = find_procedures_with_patterns(
-            procedure_checks,
+            ctx.procedure_checks,
             ttgir_key,
             file_content,
             file_path,
@@ -1161,17 +1161,14 @@ def _validate_required_stages(
 
 def _analyze_amd_buffer_ops(
     entry: dict[str, Any],
-    procedure_checks: list | None = None,
+    ctx: AnalyzerContext,
 ) -> dict[str, Any] | None:
     """
     AMD buffer ops analysis (standardized wrapper).
 
-    This is a standardized wrapper that adapts the existing
-    _analyze_buffer_ops function to the analyzer registry interface.
-
     Args:
         entry: Trace entry containing payload with file_content, file_path, etc.
-        procedure_checks: Optional procedure checks configuration (not used for this analysis)
+        ctx: Per-call analyzer context
 
     Returns:
         Analysis results dictionary or None if analysis cannot be performed
@@ -1201,17 +1198,14 @@ def _analyze_amd_buffer_ops(
 
 def _analyze_loop_schedules_generic(
     entry: dict[str, Any],
-    procedure_checks: list | None = None,
+    ctx: AnalyzerContext,
 ) -> dict[str, Any] | None:
     """
     Generic analyzer for loop schedules.
 
-    This is a standardized wrapper that adapts the existing
-    _analyze_loop_schedules function to the analyzer registry interface.
-
     Args:
         entry: Trace entry containing payload with file_content, file_path, etc.
-        procedure_checks: Optional procedure checks configuration (not used for this analysis)
+        ctx: Per-call analyzer context
 
     Returns:
         Analysis results dictionary or None if analysis cannot be performed
@@ -1244,22 +1238,19 @@ def _analyze_loop_schedules_generic(
 
 def _analyze_procedures_generic(
     entry: dict[str, Any],
-    procedure_checks: list | None = None,
+    ctx: AnalyzerContext,
 ) -> dict[str, Any] | None:
     """
     Generic analyzer for FileCheck-based procedure detection.
 
-    This is a standardized wrapper that adapts the existing
-    find_procedures_with_patterns function to the analyzer registry interface.
-
     Args:
         entry: Trace entry containing payload with file_content, file_path, etc.
-        procedure_checks: Procedure checks configuration (required for this analysis)
+        ctx: Per-call analyzer context (procedure_checks required for this analysis)
 
     Returns:
         Analysis results dictionary or None if analysis cannot be performed
     """
-    if not procedure_checks:
+    if not ctx.procedure_checks:
         return None
 
     payload = entry.get("payload", {})
@@ -1279,7 +1270,7 @@ def _analyze_procedures_generic(
 
     # Call existing function (logic unchanged)
     procedure_results = find_procedures_with_patterns(
-        procedure_checks,
+        ctx.procedure_checks,
         ttgir_key,
         file_content,
         file_path,

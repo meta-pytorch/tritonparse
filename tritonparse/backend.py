@@ -121,17 +121,24 @@ class ParserRegistry:
 
 
 @dataclass
+class AnalyzerContext:
+    """Per-call context passed to analyzers. Extensible without changing signatures."""
+
+    procedure_checks: list[dict[str, Any]] | None = None
+
+
+@dataclass
 class AnalyzerInfo:
     """Information about a registered analyzer.
 
     Attributes:
         name: Analyzer name (e.g., "amd_buffer_ops")
-        func: Analyzer function with signature (entry, procedure_checks) -> dict | None
+        func: Analyzer function with signature (entry, ctx) -> dict | None
         required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
     """
 
     name: str
-    func: Callable
+    func: Callable[[dict[str, Any], AnalyzerContext], dict[str, Any] | None]
     required_stages: tuple[str, ...]
 
 
@@ -266,7 +273,7 @@ class CompilationPipelineAdapter(ABC):
             ]
 
         return all_artifacts
-
+    
     def register_backend_derived_artifact(
         self,
         source_stage_name: str,
@@ -375,7 +382,7 @@ class CompilationPipelineAdapter(ABC):
         self,
         pass_name: str,
         entry: dict,
-        procedure_checks: list | None = None,
+        ctx: AnalyzerContext,
     ) -> dict[str, Any]:
         """
         Execute the specified analysis pass.
@@ -383,7 +390,7 @@ class CompilationPipelineAdapter(ABC):
         Args:
             pass_name: Analysis name (e.g., "amd_buffer_ops", "loop_schedules")
             entry: Trace entry (contains payload)
-            procedure_checks: Procedure checks configuration
+            ctx: Per-call analyzer context
 
         Returns:
             Analysis result dictionary
@@ -391,6 +398,7 @@ class CompilationPipelineAdapter(ABC):
         Raises:
             ValueError: If the pass_name is not found in the registry
         """
+
         analyzer = self._analysis_registry.get_analyzer(pass_name)
         if analyzer is None:
             available = self._analysis_registry.list_analyzers()
@@ -398,7 +406,7 @@ class CompilationPipelineAdapter(ABC):
                 f"Analyzer '{pass_name}' not found. Available analyzers: {available}"
             )
 
-        return analyzer(entry, procedure_checks)
+        return analyzer(entry, ctx)
 
     def register_backend_analyzer(
         self,
