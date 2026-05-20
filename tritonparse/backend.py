@@ -273,7 +273,7 @@ class CompilationPipelineAdapter(ABC):
             ]
 
         return all_artifacts
-    
+
     def register_backend_derived_artifact(
         self,
         source_stage_name: str,
@@ -420,12 +420,10 @@ class CompilationPipelineAdapter(ABC):
         Args:
             analyzer_id: The analyzer identifier (e.g., "amd_buffer_ops")
             analyzer_func: The analyzer function with signature
-                          (entry, procedure_checks) -> dict | None
+                          (entry, ctx) -> dict | None
             required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
         """
-        self._analysis_registry.register(
-            analyzer_id, analyzer_func, required_stages, self.adapter_name
-        )
+        self._analysis_registry.register(analyzer_id, analyzer_func, required_stages)
 
     def get_canonical_device_string(self) -> str:
         """Return the adapter's canonical accelerator device string."""

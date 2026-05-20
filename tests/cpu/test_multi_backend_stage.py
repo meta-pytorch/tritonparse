@@ -4,12 +4,12 @@ from unittest.mock import patch
 
 from tritonparse.backend import (
     AmdTritonAdapter,
+    AnalyzerContext,
     get_backend_registry,
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
 from tritonparse.parse.ir_analysis import _generate_ir_analysis
-from tritonparse.backend import AnalyzerContext
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
@@ -490,6 +490,67 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 os.environ["TRITONPARSE_DUMP_SASS"] = original_dump_sass_env
 
             set_runtime_sass_dump_override(None)
+
+    def test_register_backend_analyzer_isolation(self):
+        """register_backend_analyzer: custom analyzer visible only on target adapter."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        amd = self.registry.resolve(adapter_name="hip_triton")
+
+        sentinel_result = {"custom_analysis": {"key": "value"}}
+
+        def custom_analyzer(entry, ctx):
+            return sentinel_result
+
+        # Register custom analyzer on NVIDIA adapter
+        nvidia.register_backend_analyzer(
+            "custom_test", custom_analyzer, required_stages=("ttir",)
+        )
+
+        # Visible on NVIDIA
+        self.assertIn("custom_test", nvidia.get_analysis_passes())
+        self.assertEqual(
+            nvidia.run_analysis_pass(
+                "custom_test",
+                {
+                    "payload": {
+                        "file_content": {},
+                        "file_path": {},
+                        "source_mappings": {},
+                    }
+                },
+                AnalyzerContext(),
+            ),
+            sentinel_result,
+        )
+
+        # NOT visible on AMD (isolation)
+        self.assertNotIn("custom_test", amd.get_analysis_passes())
+
+    def test_register_backend_derived_artifact_isolation(self):
+        """register_backend_derived_artifact: custom artifact visible only on target adapter."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        amd = self.registry.resolve(adapter_name="hip_triton")
+
+        def sentinel_derive(path):
+            return "derived content"
+
+        # Register custom derived artifact on NVIDIA adapter
+        nvidia.register_backend_derived_artifact(
+            source_stage_name="cubin",
+            target_stage_name="custom_stage",
+            tool_name="test_tool",
+            derive_func=sentinel_derive,
+        )
+
+        # Visible on NVIDIA
+        nvidia_artifacts = nvidia.get_applicable_derived_artifacts()
+        target_names = [info.target_stage_name for info in nvidia_artifacts]
+        self.assertIn("custom_stage", target_names)
+
+        # NOT visible on AMD (isolation)
+        amd_artifacts = amd.get_applicable_derived_artifacts()
+        amd_target_names = [info.target_stage_name for info in amd_artifacts]
+        self.assertNotIn("custom_stage", amd_target_names)
 
 
 class TestDeviceStringHelpers(unittest.TestCase):
