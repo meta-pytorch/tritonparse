@@ -492,27 +492,91 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
             set_runtime_sass_dump_override(None)
 
     def test_register_backend_analyzer_isolation(self):
-        """Backend-specific analyzer (amd_buffer_ops) visible only on AMD, not on NVIDIA."""
+        """register_backend_analyzer: registered analyzer isolated to target adapter."""
         nvidia = self.registry.resolve(adapter_name="cuda_triton")
         amd = self.registry.resolve(adapter_name="hip_triton")
 
-        # amd_buffer_ops is registered only on AMD adapter
-        self.assertIn("amd_buffer_ops", amd.get_analysis_passes())
-        self.assertNotIn("amd_buffer_ops", nvidia.get_analysis_passes())
+        sentinel_result = {"custom_analysis": {"key": "value"}}
+
+        def custom_analyzer(entry, ctx):
+            return sentinel_result
+
+        # Save original loop_schedules on NVIDIA
+        original_analyzer = nvidia.get_analyzer("loop_schedules")
+        original_stages = nvidia.get_analyzer_required_stages("loop_schedules")
+
+        try:
+            # Overwrite loop_schedules on NVIDIA with custom analyzer
+            nvidia.register_backend_analyzer(
+                "loop_schedules", custom_analyzer, required_stages=("ttir",)
+            )
+
+            # Custom analyzer works on NVIDIA
+            self.assertEqual(
+                nvidia.run_analysis_pass(
+                    "loop_schedules",
+                    {
+                        "payload": {
+                            "file_content": {},
+                            "file_path": {},
+                            "source_mappings": {},
+                        }
+                    },
+                    AnalyzerContext(),
+                ),
+                sentinel_result,
+            )
+
+            # AMD's loop_schedules is unaffected (isolation)
+            amd_stages = amd.get_analyzer_required_stages("loop_schedules")
+            self.assertEqual(amd_stages, original_stages)
+        finally:
+            nvidia.register_backend_analyzer(
+                "loop_schedules", original_analyzer, original_stages
+            )
 
     def test_register_backend_derived_artifact_isolation(self):
-        """Backend-specific derived artifact (sass) visible only on NVIDIA, not on AMD."""
+        """register_backend_derived_artifact: registered artifact isolated to target adapter."""
         nvidia = self.registry.resolve(adapter_name="cuda_triton")
         amd = self.registry.resolve(adapter_name="hip_triton")
 
-        # sass (cubin -> nvdisasm) is registered only on NVIDIA adapter
-        nvidia_artifacts = nvidia.get_applicable_derived_artifacts()
-        nvidia_target_names = [info.target_stage_name for info in nvidia_artifacts]
-        self.assertIn("sass", nvidia_target_names)
+        def sentinel_derive(path):
+            return "derived content"
 
-        amd_artifacts = amd.get_applicable_derived_artifacts()
-        amd_target_names = [info.target_stage_name for info in amd_artifacts]
-        self.assertNotIn("sass", amd_target_names)
+        # Save original sass derived artifact on NVIDIA
+        original_artifacts = [
+            info
+            for info in nvidia.get_applicable_derived_artifacts()
+            if info.target_stage_name == "sass"
+        ]
+        original_sass = original_artifacts[0] if original_artifacts else None
+
+        try:
+            # Overwrite sass on NVIDIA with custom derived artifact
+            nvidia.register_backend_derived_artifact(
+                source_stage_name="cubin",
+                target_stage_name="sass",
+                tool_name="test_tool",
+                derive_func=sentinel_derive,
+            )
+
+            # Custom artifact visible on NVIDIA
+            nvidia_artifacts = nvidia.get_applicable_derived_artifacts()
+            target_names = [info.target_stage_name for info in nvidia_artifacts]
+            self.assertIn("sass", target_names)
+
+            # AMD is unaffected (isolation) — AMD has no sass
+            amd_artifacts = amd.get_applicable_derived_artifacts()
+            amd_target_names = [info.target_stage_name for info in amd_artifacts]
+            self.assertNotIn("sass", amd_target_names)
+        finally:
+            if original_sass:
+                nvidia.register_backend_derived_artifact(
+                    source_stage_name=original_sass.source_stage_name,
+                    target_stage_name=original_sass.target_stage_name,
+                    tool_name=original_sass.tool_name,
+                    derive_func=original_sass.derive_func,
+                )
 
 
 class TestDeviceStringHelpers(unittest.TestCase):

@@ -304,6 +304,10 @@ class CompilationPipelineAdapter(ABC):
         """
         return self._analysis_registry.list_analyzers()
 
+    def get_analyzer(self, analyzer_id: str) -> Callable | None:
+        """Get analyzer function by analyzer_id from the adapter's registry."""
+        return self._analysis_registry.get_analyzer(analyzer_id)
+
     def get_analyzer_required_stages(
         self, analyzer_name: str
     ) -> tuple[str, ...] | None:
@@ -382,7 +386,7 @@ class CompilationPipelineAdapter(ABC):
         self,
         pass_name: str,
         entry: dict,
-        ctx: AnalyzerContext = AnalyzerContext(),
+        ctx: AnalyzerContext | None = None,
     ) -> dict[str, Any] | None:
         """
         Execute the specified analysis pass.
@@ -390,7 +394,7 @@ class CompilationPipelineAdapter(ABC):
         Args:
             pass_name: Analysis name (e.g., "amd_buffer_ops", "loop_schedules")
             entry: Trace entry (contains payload)
-            ctx: Per-call analyzer context
+            ctx: Per-call analyzer context; defaults to empty AnalyzerContext()
 
         Returns:
             Analysis result dictionary, or None if analysis cannot be performed
@@ -398,6 +402,8 @@ class CompilationPipelineAdapter(ABC):
         Raises:
             ValueError: If the pass_name is not found in the registry
         """
+        if ctx is None:
+            ctx = AnalyzerContext()
         analyzer = self._analysis_registry.get_analyzer(pass_name)
         if analyzer is None:
             available = self._analysis_registry.list_analyzers()
