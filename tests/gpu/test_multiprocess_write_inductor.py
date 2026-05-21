@@ -1,19 +1,19 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Reproduce + regression test for multiprocess trace write file-sharing
-through inductor's real compile_worker pool.
+Regression test for the PID-suffix trace filename on the main-process
+path that goes through torch.compile / inductor's Triton compilation.
 
-This is the production-realistic counterpart to
-tests/cpu/test_multiprocess_write.py — instead of synthetic subprocess
-workers, it triggers real Triton kernel compilation through torch.compile
-with TORCHINDUCTOR_COMPILE_THREADS > 1 so that inductor spawns its actual
-compile_worker subprocess pool. Each worker independently initializes
-tritonparse and writes trace events.
+The multi-worker file-sharing scenario (multiple processes writing to
+distinct pid-tagged files) is exhaustively covered by
+tests/cpu/test_multiprocess_write.py with explicit spawn workers. This
+test complements that one by exercising the inductor entry path; it
+runs inductor inline in the main process (TORCHINDUCTOR_COMPILE_THREADS=1)
+to validate that tritonparse's PID-suffix writer fix is wired through
+torch.compile without depending on inductor's compile-worker pool.
 
-Bug manifestation matches the synthetic test:
-  Before fix: all worker subprocesses share one
-              `dedicated_log_triton_trace_{user}_.ndjson` file.
-  After fix:  each worker writes its own `..._pid_{PID}_.ndjson`.
+Bug manifestation (main process):
+  Before fix: `dedicated_log_triton_trace_{user}_.ndjson`
+  After fix:  `dedicated_log_triton_trace_{user}_pid_{PID}_.ndjson`
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import shutil
 import tempfile
 
 import torch
+import torch._inductor.config as inductor_config
 import tritonparse.structured_logging
 from tests.test_utils import GPUTestBase  # noqa: F401  (used via inheritance)
 
@@ -33,9 +34,15 @@ from tests.test_utils import GPUTestBase  # noqa: F401  (used via inheritance)
 _PID_REGEX = re.compile(r"pid_(\d+)_")
 _LOG_PREFIX = "dedicated_log_triton_trace_"
 
-# Number of inductor compile worker subprocesses. > 1 forces inductor to use
-# its subprocess pool rather than compiling inline in the main process.
-COMPILE_THREADS = 4
+# Compile inline in the main process. Setting >1 would route compilation
+# through inductor's compile-worker pool, whose default path forks workers
+# after a pre_fork_setup() that initializes CUDA. That collides with
+# upstream NVIDIA Triton 3.7.0+ on cu130 (cuInit returns
+# CUDA_ERROR_NOT_INITIALIZED in the forked child, producing
+# `RuntimeError: 0 active drivers ([])`) whenever ~/.triton/cache is cold.
+# The multi-worker scenario is covered by tests/cpu/test_multiprocess_write.py;
+# here we only need the main-process path through inductor.
+COMPILE_THREADS = 1
 
 
 def _kernel_a(x):
@@ -70,27 +77,32 @@ class MultiprocessWriteInductorTest(GPUTestBase):
                 "TRITON_TRACE",
                 "TRITON_TRACE_COMPRESSION",
                 "TORCHINDUCTOR_COMPILE_THREADS",
-                "TORCHINDUCTOR_WORKER_START_METHOD",
                 "TRITON_ALWAYS_COMPILE",
             )
         }
 
-        # Set BEFORE inductor spawns workers — workers inherit this env
-        # and must see it during their own tritonparse import.
         os.environ["TRITON_TRACE"] = self.trace_dir
         os.environ["TRITON_TRACE_COMPRESSION"] = "none"
         os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = str(COMPILE_THREADS)
-        # Force subprocess pool (not fork), matching the production scenario
-        # in which the bug was originally observed.
-        os.environ["TORCHINDUCTOR_WORKER_START_METHOD"] = "subprocess"
-        # Skip Triton cache to guarantee actual compilation work for workers.
+        # Skip Triton cache to guarantee actual compilation work.
         os.environ["TRITON_ALWAYS_COMPILE"] = "1"
 
-        # Initialize tritonparse in the main process. The workers will do
-        # their own init when they import tritonparse via inductor.
+        # TORCHINDUCTOR_COMPILE_THREADS is read only once, on the first
+        # call into inductor, by decide_compile_threads() via the lazy
+        # get_compile_threads() path (torch/_inductor/async_compile.py).
+        # If any earlier test in the same process has already triggered
+        # inductor compilation, config.compile_threads is cached to the
+        # CPU-count default and the env var becomes a no-op. Override
+        # the config attribute directly so this test always runs inline,
+        # regardless of test ordering.
+        self._saved_compile_threads = inductor_config.compile_threads
+        inductor_config.compile_threads = COMPILE_THREADS
+
+        # Initialize tritonparse in the main process.
         tritonparse.structured_logging.init(self.trace_dir)
 
     def tearDown(self):
+        inductor_config.compile_threads = self._saved_compile_threads
         for k, v in self._saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -103,10 +115,9 @@ class MultiprocessWriteInductorTest(GPUTestBase):
         return sorted(glob.glob(os.path.join(self.trace_dir, f"{_LOG_PREFIX}*")))
 
     def _trigger_inductor_compilation(self):
-        """Run several distinct torch.compile units to populate the worker pool.
-
-        Use larger tensors and more ops per function to ensure inductor generates
-        Triton kernels (small ops may be inlined or use ATen).
+        """Run several distinct torch.compile units so inductor generates and
+        compiles Triton kernels inline in the main process. Larger tensors and
+        more ops per function keep ATen fallback from suppressing codegen.
         """
         x = torch.randn(2048, 2048, device=self.cuda_device)
         for fn in (_kernel_a, _kernel_b, _kernel_c, _kernel_d):
@@ -122,13 +133,11 @@ class MultiprocessWriteInductorTest(GPUTestBase):
                     `dedicated_log_triton_trace_user_.ndjson`).
         AFTER fix:  every trace file has a `pid_{PID}_` infix.
 
-        Note on test scope: in the buck-test RE environment, inductor's compile
-        worker subprocesses do not import tritonparse and so do not write trace
-        events of their own — only the main process traces. This test therefore
-        only validates that the main process's trace file carries the PID
-        suffix when reached via inductor's torch.compile flow. The multi-worker
-        cross-process file-sharing scenario is exhaustively covered by
-        tests/cpu/test_multiprocess_write.py with explicit spawn workers.
+        Scope: only validates the main process's trace file — inductor runs
+        inline (TORCHINDUCTOR_COMPILE_THREADS=1) so there are no worker
+        subprocesses to trace. The multi-worker cross-process file-sharing
+        scenario is exhaustively covered by tests/cpu/test_multiprocess_write.py
+        with explicit spawn workers.
         """
         self._trigger_inductor_compilation()
 
@@ -161,10 +170,8 @@ class MultiprocessWriteInductorTest(GPUTestBase):
             len(pid_tagged_files),
             1,
             f"Expected >=1 PID-tagged trace file from the main process "
-            f"(inductor compile_worker subprocesses don't import tritonparse "
-            f"in the RE test env, so they don't trace; multi-worker scenario "
-            f"is covered by tests/cpu/test_multiprocess_write.py):"
-            f"{diagnostic}",
+            f"(multi-worker scenario is covered by "
+            f"tests/cpu/test_multiprocess_write.py):{diagnostic}",
         )
 
         # Secondary check: each produced file must be cleanly parseable.
