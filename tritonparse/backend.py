@@ -382,8 +382,8 @@ class CompilationPipelineAdapter(ABC):
         self,
         pass_name: str,
         entry: dict,
-        ctx: AnalyzerContext,
-    ) -> dict[str, Any]:
+        ctx: AnalyzerContext = AnalyzerContext(),
+    ) -> dict[str, Any] | None:
         """
         Execute the specified analysis pass.
 
@@ -393,12 +393,11 @@ class CompilationPipelineAdapter(ABC):
             ctx: Per-call analyzer context
 
         Returns:
-            Analysis result dictionary
+            Analysis result dictionary, or None if analysis cannot be performed
 
         Raises:
             ValueError: If the pass_name is not found in the registry
         """
-
         analyzer = self._analysis_registry.get_analyzer(pass_name)
         if analyzer is None:
             available = self._analysis_registry.list_analyzers()
