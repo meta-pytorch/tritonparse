@@ -21,9 +21,13 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import torch
 import zstandard as zstd  # @manual=fbsource//third-party/pypi/zstandard:zstandard
-from torch.utils._traceback import CapturedTraceback
+
+# torch is a required runtime dependency, but is imported lazily inside the
+# functions that use it. This module is loaded during `import triton` (via
+# triton/fb/config_backend), and torch in turn imports triton at startup;
+# a top-level `import torch` here would create a circular import. See D100891381
+# for the original incident and D105172002 for the torch-side workaround.
 from triton.knobs import JITHook, LaunchHook
 from tritonparse._json_compat import dumps, loads
 
@@ -296,6 +300,8 @@ class TensorBlobManager:
             # Serialize tensor using torch.save
             import io
 
+            import torch
+
             buffer = io.BytesIO()
             torch.save(tensor.cpu(), buffer)
 
@@ -506,6 +512,7 @@ def convert(obj):
     Returns:
         A serializable version of the input object where dataclasses are converted to dictionaries
     """
+    import torch
     from triton.language.core import dtype
 
     # 1. primitives that JSON already supports  -------------------------------
@@ -694,6 +701,8 @@ def get_stack_trace(skip=1):
         List[Dict]: List of frame information dictionaries containing line numbers,
                    function names, filenames, and code snippets
     """
+    from torch.utils._traceback import CapturedTraceback
+
     frames = []
     for frame in CapturedTraceback.extract(skip=skip).summary():
         frames.append(
@@ -1150,6 +1159,7 @@ class TritonTraceHandler(logging.StreamHandler):
             return self.root_dir
         TRACE_LOG_DIR = "/logs"
         should_set_root_dir = True
+        import torch
         import torch.version as torch_version
 
         if (
@@ -1465,6 +1475,8 @@ def maybe_trace_triton(
     Returns:
         Dict[str, Any]: Dictionary containing all collected trace data, even if tracing is disabled
     """
+    import torch
+
     # Check kernel allowlist early to avoid unnecessary work
     if _KERNEL_ALLOWLIST_PATTERNS is not None:
         kernel_name = extract_kernel_name(src)
@@ -1525,6 +1537,8 @@ def extract_arg_info(arg_dict):
     Returns:
         Dictionary with extracted argument information including tensor properties
     """
+    import torch
+
     extracted_args = {}
 
     for arg_name, arg_value in arg_dict.items():
@@ -1606,6 +1620,8 @@ def extract_arg_info(arg_dict):
 
 def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
     global _save_blobs_for_current_launch
+
+    import torch
 
     # Check if we're in CUDA graph capture mode - if so, skip detailed argument extraction
     # to avoid CUDA errors (cudaErrorStreamCaptureUnsupported)
