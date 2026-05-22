@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from tritonparse.backend import (
     AmdTritonAdapter,
+    AnalyzerContext,
     get_backend_registry,
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
@@ -274,6 +275,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
 
     def test_analysis_adapter_driven_path(self):
         """Adapter-driven path: returns dict with artifacts, empty dict without."""
+        ctx = AnalyzerContext()
         # With artifacts (both backends)
         for backend in ("hip", "cuda"):
             trace = {
@@ -288,7 +290,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 }
             }
             self.assertIsInstance(
-                _generate_ir_analysis(trace),
+                _generate_ir_analysis(trace, ctx),
                 dict,
                 f"{backend} backend should return dict",
             )
@@ -302,10 +304,11 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
-        self.assertEqual(_generate_ir_analysis(empty_trace), {})
+        self.assertEqual(_generate_ir_analysis(empty_trace, ctx), {})
 
     def test_analysis_legacy_path(self):
         """Fallback to legacy when adapter resolution fails."""
+        ctx = AnalyzerContext()
         # With artifacts
         fallback_trace = {
             "payload": {
@@ -318,7 +321,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
-        result = _generate_ir_analysis(fallback_trace)
+        result = _generate_ir_analysis(fallback_trace, ctx)
         self.assertIsInstance(result, dict)
         self.assertIn("io_counts", result)
 
@@ -332,13 +335,15 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                         "file_path": {},
                         "source_mappings": {},
                     }
-                }
+                },
+                ctx,
             ),
             {},
         )
 
     def test_analysis_env_var_disables_all(self):
         """TRITONPARSE_ANALYSIS='none' or '' disables all analyses."""
+        ctx = AnalyzerContext()
         trace = {
             "payload": {
                 "metadata": {"backend_name": "hip"},
@@ -354,7 +359,7 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
         for val in ("none", ""):
             os.environ["TRITONPARSE_ANALYSIS"] = val
             self.assertEqual(
-                _generate_ir_analysis(trace), {}, f"env='{val}' should disable all"
+                _generate_ir_analysis(trace, ctx), {}, f"env='{val}' should disable all"
             )
 
     def test_analysis_registry_common_and_backend_analyzers(self):
@@ -413,14 +418,15 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 "source_mappings": {},
             }
         }
+        ctx = AnalyzerContext()
 
         # Empty artifacts → analyzer skips due to missing required_stages
         self.assertIsNone(
-            amd_adapter.run_analysis_pass("amd_buffer_ops", test_entry, None)
+            amd_adapter.run_analysis_pass("amd_buffer_ops", test_entry, ctx)
         )
 
         with self.assertRaises(ValueError):
-            amd_adapter.run_analysis_pass("nonexistent_analyzer", test_entry, None)
+            amd_adapter.run_analysis_pass("nonexistent_analyzer", test_entry, ctx)
 
     def test_get_enabled_analyses_helper_function(self):
         """Test get_enabled_analyses() with default, ALL/none keywords, and comma list."""
@@ -484,6 +490,93 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
                 os.environ["TRITONPARSE_DUMP_SASS"] = original_dump_sass_env
 
             set_runtime_sass_dump_override(None)
+
+    def test_register_backend_analyzer_isolation(self):
+        """register_backend_analyzer: registered analyzer isolated to target adapter."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        amd = self.registry.resolve(adapter_name="hip_triton")
+
+        sentinel_result = {"custom_analysis": {"key": "value"}}
+
+        def custom_analyzer(entry, ctx):
+            return sentinel_result
+
+        # Save original loop_schedules on NVIDIA
+        original_analyzer = nvidia.get_analyzer("loop_schedules")
+        original_stages = nvidia.get_analyzer_required_stages("loop_schedules")
+
+        try:
+            # Overwrite loop_schedules on NVIDIA with custom analyzer
+            nvidia.register_backend_analyzer(
+                "loop_schedules", custom_analyzer, required_stages=("ttir",)
+            )
+
+            # Custom analyzer works on NVIDIA
+            self.assertEqual(
+                nvidia.run_analysis_pass(
+                    "loop_schedules",
+                    {
+                        "payload": {
+                            "file_content": {},
+                            "file_path": {},
+                            "source_mappings": {},
+                        }
+                    },
+                    AnalyzerContext(),
+                ),
+                sentinel_result,
+            )
+
+            # AMD's loop_schedules is unaffected (isolation)
+            amd_stages = amd.get_analyzer_required_stages("loop_schedules")
+            self.assertEqual(amd_stages, original_stages)
+        finally:
+            nvidia.register_backend_analyzer(
+                "loop_schedules", original_analyzer, original_stages
+            )
+
+    def test_register_backend_derived_artifact_isolation(self):
+        """register_backend_derived_artifact: registered artifact isolated to target adapter."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        amd = self.registry.resolve(adapter_name="hip_triton")
+
+        def sentinel_derive(path):
+            return "derived content"
+
+        # Save original sass derived artifact on NVIDIA
+        original_artifacts = [
+            info
+            for info in nvidia.get_applicable_derived_artifacts()
+            if info.target_stage_name == "sass"
+        ]
+        original_sass = original_artifacts[0] if original_artifacts else None
+
+        try:
+            # Overwrite sass on NVIDIA with custom derived artifact
+            nvidia.register_backend_derived_artifact(
+                source_stage_name="cubin",
+                target_stage_name="sass",
+                tool_name="test_tool",
+                derive_func=sentinel_derive,
+            )
+
+            # Custom artifact visible on NVIDIA
+            nvidia_artifacts = nvidia.get_applicable_derived_artifacts()
+            target_names = [info.target_stage_name for info in nvidia_artifacts]
+            self.assertIn("sass", target_names)
+
+            # AMD is unaffected (isolation) — AMD has no sass
+            amd_artifacts = amd.get_applicable_derived_artifacts()
+            amd_target_names = [info.target_stage_name for info in amd_artifacts]
+            self.assertNotIn("sass", amd_target_names)
+        finally:
+            if original_sass:
+                nvidia.register_backend_derived_artifact(
+                    source_stage_name=original_sass.source_stage_name,
+                    target_stage_name=original_sass.target_stage_name,
+                    tool_name=original_sass.tool_name,
+                    derive_func=original_sass.derive_func,
+                )
 
 
 class TestDeviceStringHelpers(unittest.TestCase):

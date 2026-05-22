@@ -121,17 +121,24 @@ class ParserRegistry:
 
 
 @dataclass
+class AnalyzerContext:
+    """Per-call context passed to analyzers. Extensible without changing signatures."""
+
+    procedure_checks: list[dict[str, Any]] | None = None
+
+
+@dataclass
 class AnalyzerInfo:
     """Information about a registered analyzer.
 
     Attributes:
         name: Analyzer name (e.g., "amd_buffer_ops")
-        func: Analyzer function with signature (entry, procedure_checks) -> dict | None
+        func: Analyzer function with signature (entry, ctx) -> dict | None
         required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
     """
 
     name: str
-    func: Callable
+    func: Callable[[dict[str, Any], AnalyzerContext], dict[str, Any] | None]
     required_stages: tuple[str, ...]
 
 
@@ -297,6 +304,10 @@ class CompilationPipelineAdapter(ABC):
         """
         return self._analysis_registry.list_analyzers()
 
+    def get_analyzer(self, analyzer_id: str) -> Callable | None:
+        """Get analyzer function by analyzer_id from the adapter's registry."""
+        return self._analysis_registry.get_analyzer(analyzer_id)
+
     def get_analyzer_required_stages(
         self, analyzer_name: str
     ) -> tuple[str, ...] | None:
@@ -375,22 +386,24 @@ class CompilationPipelineAdapter(ABC):
         self,
         pass_name: str,
         entry: dict,
-        procedure_checks: list | None = None,
-    ) -> dict[str, Any]:
+        ctx: AnalyzerContext | None = None,
+    ) -> dict[str, Any] | None:
         """
         Execute the specified analysis pass.
 
         Args:
             pass_name: Analysis name (e.g., "amd_buffer_ops", "loop_schedules")
             entry: Trace entry (contains payload)
-            procedure_checks: Procedure checks configuration
+            ctx: Per-call analyzer context; defaults to empty AnalyzerContext()
 
         Returns:
-            Analysis result dictionary
+            Analysis result dictionary, or None if analysis cannot be performed
 
         Raises:
             ValueError: If the pass_name is not found in the registry
         """
+        if ctx is None:
+            ctx = AnalyzerContext()
         analyzer = self._analysis_registry.get_analyzer(pass_name)
         if analyzer is None:
             available = self._analysis_registry.list_analyzers()
@@ -398,7 +411,7 @@ class CompilationPipelineAdapter(ABC):
                 f"Analyzer '{pass_name}' not found. Available analyzers: {available}"
             )
 
-        return analyzer(entry, procedure_checks)
+        return analyzer(entry, ctx)
 
     def register_backend_analyzer(
         self,
@@ -412,12 +425,10 @@ class CompilationPipelineAdapter(ABC):
         Args:
             analyzer_id: The analyzer identifier (e.g., "amd_buffer_ops")
             analyzer_func: The analyzer function with signature
-                          (entry, procedure_checks) -> dict | None
+                          (entry, ctx) -> dict | None
             required_stages: Required stage names (e.g., ("ttgir", "amdgcn"))
         """
-        self._analysis_registry.register(
-            analyzer_id, analyzer_func, required_stages, self.adapter_name
-        )
+        self._analysis_registry.register(analyzer_id, analyzer_func, required_stages)
 
     def get_canonical_device_string(self) -> str:
         """Return the adapter's canonical accelerator device string."""

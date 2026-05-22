@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
+from tritonparse.backend import AnalyzerContext
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -961,6 +962,7 @@ def parse_single_rank(
     # =====================================================
     # Pass 3: Organize and write output (unchanged from original)
     # =====================================================
+    ctx = AnalyzerContext(procedure_checks=procedure_checks)
     all_output_lines = defaultdict(list)
     for _kernel_hash, data in kernels_by_hash.items():
         compilation_data = data["compilation"]
@@ -989,9 +991,7 @@ def parse_single_rank(
             all_output_lines[output_file].append(dumps(launch_event) + "\n")
 
         if compilation_event:
-            ir_analysis = _generate_ir_analysis(
-                compilation_event, procedure_checks=procedure_checks
-            )
+            ir_analysis = _generate_ir_analysis(compilation_event, ctx)
             if ir_analysis:
                 ir_analysis_event = {
                     "event_type": "ir_analysis",
