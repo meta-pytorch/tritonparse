@@ -542,7 +542,14 @@ class AscendTritonAdapter(CompilationPipelineAdapter):
                 "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
             ),
             IRStageDescriptor(
-                "ttadapter", ".ttadapter", "TTAdapter", 20, True, True, "generic_loc", "mlir"
+                "ttadapter",
+                ".ttadapter",
+                "TTAdapter",
+                20,
+                True,
+                True,
+                "generic_loc",
+                "mlir",
             ),
             IRStageDescriptor(
                 "mlirbc", ".mlirbc", "MLIRBC", 30, False, False, "none", "plaintext"
@@ -557,7 +564,6 @@ class AscendTritonAdapter(CompilationPipelineAdapter):
                 "json", ".json", "JSON", 100, True, False, "none", "json"
             ),
         ]
-
 
 
 # =============================================================================
