@@ -73,13 +73,24 @@ class DerivedArtifactRegistry:
     def __init__(self) -> None:
         self._registry: dict[str, DerivedArtifactInfo] = {}
 
-    def register(self, info: DerivedArtifactInfo) -> None:
-        key = info.target_stage_name
-        if key in self._registry:
-            logger.debug(
-                f"Overwriting existing derived artifact registration for '{key}'"
+    def register(
+        self,
+        target_stage_name: str,
+        source_stage_name: str,
+        tool_name: str,
+        derive_func: Callable[[str], str | None],
+    ) -> None:
+        if target_stage_name in self._registry:
+            logger.warning(
+                f"Overwriting existing derived artifact registration for '{target_stage_name}'."
             )
-        self._registry[key] = info
+        self._registry[target_stage_name] = DerivedArtifactInfo(
+            source_stage_name=source_stage_name,
+            target_stage_name=target_stage_name,
+            tool_name=tool_name,
+            derive_func=derive_func,
+        )
+        logger.debug(f"Registered derived artifact: {target_stage_name}")
 
     def get_by_target(self, target_stage_name: str) -> DerivedArtifactInfo | None:
         return self._registry.get(target_stage_name)
@@ -156,7 +167,7 @@ class AnalysisRegistry:
     ) -> None:
         """Register an analyzer with its metadata."""
         if analyzer_id in self._analyzer_infos:
-            logger.debug(
+            logger.warning(
                 f"Analyzer '{analyzer_id}' is already registered. Overwriting."
             )
         info = AnalyzerInfo(
@@ -170,18 +181,13 @@ class AnalysisRegistry:
         """Get analyzer info by name."""
         return self._analyzer_infos.get(analyzer_id)
 
-    def get_analyzer(self, analyzer_id: str) -> Callable | None:
-        """Get the analyzer function by name."""
-        info = self._analyzer_infos.get(analyzer_id)
-        return info.func if info else None
-
     def list_analyzers(self) -> list[str]:
         """List all registered analyzer IDs."""
         return list(self._analyzer_infos.keys())
 
-    def list_analyzer_infos(self) -> list[tuple[str, AnalyzerInfo]]:
-        """List all registered (analyzer_id, AnalyzerInfo) pairs."""
-        return list(self._analyzer_infos.items())
+    def list_analyzer_infos(self) -> list[AnalyzerInfo]:
+        """List all registered analyzer info objects."""
+        return list(self._analyzer_infos.values())
 
 
 # =============================================================================
@@ -283,12 +289,10 @@ class CompilationPipelineAdapter(ABC):
     ) -> None:
         """Register a backend-specific derived artifact to the adapter's registry."""
         self._derived_artifact_registry.register(
-            DerivedArtifactInfo(
-                source_stage_name=source_stage_name,
-                target_stage_name=target_stage_name,
-                tool_name=tool_name,
-                derive_func=derive_func,
-            )
+            target_stage_name=target_stage_name,
+            source_stage_name=source_stage_name,
+            tool_name=tool_name,
+            derive_func=derive_func,
         )
 
     def list_parsers(self) -> list[str]:
@@ -309,10 +313,10 @@ class CompilationPipelineAdapter(ABC):
         return self._analysis_registry.get_analyzer(analyzer_id)
 
     def get_analyzer_required_stages(
-        self, analyzer_name: str
+        self, analyzer_id: str
     ) -> tuple[str, ...] | None:
         """Return required stages for the given analyzer, or None if not registered."""
-        info = self._analysis_registry.get_analyzer_info(analyzer_name)
+        info = self._analysis_registry.get_analyzer_info(analyzer_id)
         return info.required_stages if info else None
 
     def get_executable_analyzers(
@@ -341,7 +345,10 @@ class CompilationPipelineAdapter(ABC):
             else None
         )
         if enabled_normalized is not None:
-            known = {name.lower() for name in self._analysis_registry.list_analyzers()}
+            known = {
+                info.name.lower()
+                for info in self._analysis_registry.list_analyzer_infos()
+            }
             unknown = enabled_normalized - known
             if unknown:
                 logger.warning(
@@ -349,22 +356,17 @@ class CompilationPipelineAdapter(ABC):
                     f"Available for {self.adapter_name}: {sorted(known)}"
                 )
 
-        declared_analyzers = self.get_analysis_passes()
         executable = []
 
-        for analyzer_name in declared_analyzers:
+        for info in self._analysis_registry.list_analyzer_infos():
             # Check 1: Is it enabled by user?
             if (
                 enabled_normalized is not None
-                and analyzer_name.lower() not in enabled_normalized
+                and info.name.lower() not in enabled_normalized
             ):
                 continue
 
             # Check 2: Are required stages available?
-            info = self._analysis_registry.get_analyzer_info(analyzer_name)
-            if not info:
-                continue
-
             stages_available = True
             for stage_name in info.required_stages:
                 stage = self.get_stage_by_name(stage_name)
@@ -378,13 +380,13 @@ class CompilationPipelineAdapter(ABC):
                     break
 
             if stages_available:
-                executable.append(analyzer_name)
+                executable.append(info.name)
 
         return executable
 
     def run_analysis_pass(
         self,
-        pass_name: str,
+        analyzer_id: str,
         entry: dict,
         ctx: AnalyzerContext | None = None,
     ) -> dict[str, Any] | None:
@@ -392,7 +394,7 @@ class CompilationPipelineAdapter(ABC):
         Execute the specified analysis pass.
 
         Args:
-            pass_name: Analysis name (e.g., "amd_buffer_ops", "loop_schedules")
+            analyzer_id: Analysis name (e.g., "amd_buffer_ops", "loop_schedules")
             entry: Trace entry (contains payload)
             ctx: Per-call analyzer context; defaults to empty AnalyzerContext()
 
@@ -400,18 +402,18 @@ class CompilationPipelineAdapter(ABC):
             Analysis result dictionary, or None if analysis cannot be performed
 
         Raises:
-            ValueError: If the pass_name is not found in the registry
+            ValueError: If the analyzer_id is not found in the registry
         """
         if ctx is None:
             ctx = AnalyzerContext()
-        analyzer = self._analysis_registry.get_analyzer(pass_name)
-        if analyzer is None:
+        info = self._analysis_registry.get_analyzer_info(analyzer_id)
+        if info is None:
             available = self._analysis_registry.list_analyzers()
             raise ValueError(
-                f"Analyzer '{pass_name}' not found. Available analyzers: {available}"
+                f"Analyzer '{analyzer_id}' not found. Available analyzers: {available}"
             )
 
-        return analyzer(entry, ctx)
+        return info.func(entry, ctx)
 
     def register_backend_analyzer(
         self,
