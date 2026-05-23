@@ -295,7 +295,7 @@ def _resolve_source_mappable_stage_keys(
         from tritonparse.backend import get_backend_registry
 
         adapter = get_backend_registry().resolve_from_trace(metadata)
-        for stage in adapter.get_ir_stages():
+        for stage in adapter.list_ir_stages():
             if not stage.supports_source_mapping:
                 continue
             artifact_name = next(
@@ -525,7 +525,7 @@ def parse_single_trace_content(trace_content: str) -> str:
                     "supports_source_mapping": stage.supports_source_mapping,
                     "syntax_id": stage.syntax_id,
                 }
-                for stage in adapter.get_ir_stages()
+                for stage in adapter.list_ir_stages()
             ]
         except ValueError:
             logger.warning("Could not resolve adapter for ir_stages; skipping")

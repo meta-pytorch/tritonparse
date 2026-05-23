@@ -1029,7 +1029,7 @@ def _generate_ir_analysis_adapter_driven(
     adapter = get_backend_registry().resolve_from_trace(metadata)
 
     # Get executable analyzers (adapter handles all the logic)
-    executable_analyzers = adapter.get_executable_analyzers(
+    executable_analyzers = adapter.list_executable_analyzers(
         file_content, enabled_analyses
     )
 

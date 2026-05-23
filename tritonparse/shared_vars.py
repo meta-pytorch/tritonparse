@@ -73,7 +73,7 @@ def get_enabled_analyses() -> set[str] | None:
         )
         return set()
 
-    # Validation happens at adapter level (get_executable_analyzers)
+    # Validation happens at adapter level (list_executable_analyzers)
     # where the adapter's instance registry is available.
     return set(raw_names)
 

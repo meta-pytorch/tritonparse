@@ -92,14 +92,16 @@ class DerivedArtifactRegistry:
         )
         logger.debug(f"Registered derived artifact: {target_stage_name}")
 
-    def get_by_target(self, target_stage_name: str) -> DerivedArtifactInfo | None:
+    def get_derived_artifact_info(
+        self, target_stage_name: str
+    ) -> DerivedArtifactInfo | None:
         return self._registry.get(target_stage_name)
 
-    def list_all(self) -> list[DerivedArtifactInfo]:
-        return list(self._registry.values())
-
-    def list_target_stage_names(self) -> list[str]:
+    def list_derived_artifact_keys(self) -> list[str]:
         return list(self._registry.keys())
+
+    def list_derived_artifact_infos(self) -> list[DerivedArtifactInfo]:
+        return list(self._registry.values())
 
 
 class ParserRegistry:
@@ -126,7 +128,7 @@ class ParserRegistry:
         """Get a parser function by parser_id."""
         return self._parsers.get(parser_id)
 
-    def list_parsers(self) -> list[str]:
+    def list_parser_keys(self) -> list[str]:
         """List all registered parser IDs."""
         return list(self._parsers.keys())
 
@@ -181,7 +183,7 @@ class AnalysisRegistry:
         """Get analyzer info by name."""
         return self._analyzer_infos.get(analyzer_id)
 
-    def list_analyzers(self) -> list[str]:
+    def list_analyzer_keys(self) -> list[str]:
         """List all registered analyzer IDs."""
         return list(self._analyzer_infos.keys())
 
@@ -217,8 +219,8 @@ class CompilationPipelineAdapter(ABC):
         # Register common parsers (shared across all backends)
         from tritonparse.parse.ir_parser import _parse_generic_loc, _parse_none
 
-        self._parser_registry.register("generic_loc", _parse_generic_loc)
-        self._parser_registry.register("none", _parse_none)
+        self.register_backend_parser("generic_loc", _parse_generic_loc)
+        self.register_backend_parser("none", _parse_none)
 
         # Register common analyzers (shared across all backends)
         from tritonparse.parse.ir_analysis import (
@@ -226,27 +228,27 @@ class CompilationPipelineAdapter(ABC):
             _analyze_procedures_generic,
         )
 
-        self._analysis_registry.register(
+        self.register_backend_analyzer(
             "loop_schedules",
             _analyze_loop_schedules_generic,
             required_stages=("ttir", "ttgir"),
         )
-        self._analysis_registry.register(
+        self.register_backend_analyzer(
             "procedure_checks",
             _analyze_procedures_generic,
             required_stages=("ttgir",),
         )
 
-    def get_ir_stages(self) -> list[IRStageDescriptor]:
-        return self._stages
+    def list_ir_stages(self) -> list[IRStageDescriptor]:
+        return list(self._stages)
 
     def get_stage_by_name(self, stage_name: str) -> IRStageDescriptor | None:
-        for stage in self.get_ir_stages():
+        for stage in self.list_ir_stages():
             if stage.name == stage_name:
                 return stage
         return None
 
-    def get_applicable_derived_artifacts(
+    def list_applicable_derived_artifacts(
         self,
         enabled_derived_artifacts: set[str] | None = None,
     ) -> list[DerivedArtifactInfo]:
@@ -261,7 +263,7 @@ class CompilationPipelineAdapter(ABC):
         Returns:
             List of applicable DerivedArtifactInfo
         """
-        all_artifacts = self._derived_artifact_registry.list_all()
+        all_artifacts = self._derived_artifact_registry.list_derived_artifact_infos()
 
         if enabled_derived_artifacts is not None:
             enabled_normalized = {n.lower() for n in enabled_derived_artifacts}
@@ -282,8 +284,8 @@ class CompilationPipelineAdapter(ABC):
 
     def register_backend_derived_artifact(
         self,
-        source_stage_name: str,
         target_stage_name: str,
+        source_stage_name: str,
         tool_name: str,
         derive_func: Callable[[str], str | None],
     ) -> None:
@@ -295,31 +297,20 @@ class CompilationPipelineAdapter(ABC):
             derive_func=derive_func,
         )
 
-    def list_parsers(self) -> list[str]:
+    def list_parser_keys(self) -> list[str]:
         """List all registered parser IDs (common + backend-specific)."""
-        return self._parser_registry.list_parsers()
+        return self._parser_registry.list_parser_keys()
 
-    def get_analysis_passes(self) -> list[str]:
+    def list_analyzer_keys(self) -> list[str]:
         """
         Return list of analysis pass names for this adapter.
 
         All analyzers in the adapter's instance registry are included
         (common + backend-specific).
         """
-        return self._analysis_registry.list_analyzers()
+        return self._analysis_registry.list_analyzer_keys()
 
-    def get_analyzer(self, analyzer_id: str) -> Callable | None:
-        """Get analyzer function by analyzer_id from the adapter's registry."""
-        return self._analysis_registry.get_analyzer(analyzer_id)
-
-    def get_analyzer_required_stages(
-        self, analyzer_id: str
-    ) -> tuple[str, ...] | None:
-        """Return required stages for the given analyzer, or None if not registered."""
-        info = self._analysis_registry.get_analyzer_info(analyzer_id)
-        return info.required_stages if info else None
-
-    def get_executable_analyzers(
+    def list_executable_analyzers(
         self,
         file_content: dict[str, str],
         enabled_analyses: set[str] | None = None,
@@ -408,7 +399,7 @@ class CompilationPipelineAdapter(ABC):
             ctx = AnalyzerContext()
         info = self._analysis_registry.get_analyzer_info(analyzer_id)
         if info is None:
-            available = self._analysis_registry.list_analyzers()
+            available = self._analysis_registry.list_analyzer_keys()
             raise ValueError(
                 f"Analyzer '{analyzer_id}' not found. Available analyzers: {available}"
             )
@@ -432,10 +423,6 @@ class CompilationPipelineAdapter(ABC):
         """
         self._analysis_registry.register(analyzer_id, analyzer_func, required_stages)
 
-    def get_canonical_device_string(self) -> str:
-        """Return the adapter's canonical accelerator device string."""
-        return normalize_accelerator_device_string(self.pytorch_module)
-
     def get_parser(self, parser_id: str):
         """
         Get parser function by parser_id from the adapter's parser registry.
@@ -451,7 +438,7 @@ class CompilationPipelineAdapter(ABC):
         """
         parser = self._parser_registry.get_parser(parser_id)
         if parser is None:
-            available_parsers = self._parser_registry.list_parsers()
+            available_parsers = self._parser_registry.list_parser_keys()
             raise ValueError(
                 f"Parser '{parser_id}' not found. "
                 f"Available parsers: {available_parsers}"
@@ -468,6 +455,10 @@ class CompilationPipelineAdapter(ABC):
         """
         self._parser_registry.register(parser_id, parser_func)
 
+    def list_derived_artifact_keys(self) -> list[str]:
+        """List all registered derived artifact target stage names."""
+        return self._derived_artifact_registry.list_derived_artifact_keys()
+
 
 class NvidiaTritonAdapter(CompilationPipelineAdapter):
     adapter_name: str = "cuda_triton"
@@ -480,19 +471,17 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
         # Register NVIDIA-specific parsers
         from tritonparse.parse.ir_parser import _parse_ptx_loc, _parse_sass_loc
 
-        self._parser_registry.register("ptx_loc", _parse_ptx_loc)
-        self._parser_registry.register("sass_loc", _parse_sass_loc)
+        self.register_backend_parser("ptx_loc", _parse_ptx_loc)
+        self.register_backend_parser("sass_loc", _parse_sass_loc)
 
         # Register NVIDIA-specific derived artifacts
         from tritonparse.tools.disasm import extract as derive_sass
 
-        self._derived_artifact_registry.register(
-            DerivedArtifactInfo(
-                source_stage_name="cubin",
-                target_stage_name="sass",
-                tool_name="nvdisasm",
-                derive_func=derive_sass,
-            )
+        self.register_backend_derived_artifact(
+            target_stage_name="sass",
+            source_stage_name="cubin",
+            tool_name="nvdisasm",
+            derive_func=derive_sass,
         )
 
         # Pre-initialize stage descriptors (immutable objects, can be reused)
@@ -530,12 +519,12 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
         # Register AMD-specific parsers
         from tritonparse.parse.ir_parser import _parse_amdgcn_loc
 
-        self._parser_registry.register("amdgcn_loc", _parse_amdgcn_loc)
+        self.register_backend_parser("amdgcn_loc", _parse_amdgcn_loc)
 
         # Register AMD-specific analyzers
         from tritonparse.parse.ir_analysis import _analyze_amd_buffer_ops
 
-        self._analysis_registry.register(
+        self.register_backend_analyzer(
             "amd_buffer_ops",
             _analyze_amd_buffer_ops,
             required_stages=("ttgir", "amdgcn"),
