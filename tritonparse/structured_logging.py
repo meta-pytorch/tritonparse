@@ -954,7 +954,7 @@ def _extract_file_content_adapter_driven(
 
     # Text-file detection via adapter stages
     text_extensions = {
-        stage.extension for stage in adapter.get_ir_stages() if stage.is_text
+        stage.extension for stage in adapter.list_ir_stages() if stage.is_text
     }
 
     for ir_filename, file_path in metadata_group.items():
@@ -977,7 +977,7 @@ def _extract_file_content_adapter_driven(
 
     # Derived artifacts
     enabled = get_enabled_derived_artifacts()
-    for info in adapter.get_applicable_derived_artifacts(enabled):
+    for info in adapter.list_applicable_derived_artifacts(enabled):
         source_stage = adapter.get_stage_by_name(info.source_stage_name)
         if not source_stage:
             log.warning(
