@@ -25,6 +25,7 @@
 - **[Contributing](04.-Developer-Guide.md#-contributing-guidelines)** - Development setup and guidelines
 - **[Code Formatting](05.-Code-Formatting.md)** - Formatting standards and tools
 - **[Testing](04.-Developer-Guide.md#-testing)** - Test structure and running tests
+- **[Adding a New Backend](10.-Adding-a-New-Backend.md)** - Support your hardware backend
 
 ### 🎓 Advanced Topics
 - **[IR Code View](03.-Web-Interface-Guide.md#-ir-code-view-tab)** - Side-by-side IR viewing with mapping

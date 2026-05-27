@@ -10,3 +10,4 @@
 - [Environment Variables](07.-Environment-Variables-Reference)
 - [Python API Reference](08.-Python-API-Reference)
 - [Reproducer Guide](09.-Reproducer-Guide)
+- [Adding a New Backend](10.-Adding-a-New-Backend)
