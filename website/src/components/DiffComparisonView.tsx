@@ -3,8 +3,8 @@ import { DiffEditor } from "@monaco-editor/react";
 
 interface DiffOptions {
   ignoreWhitespace?: boolean;
-  wordLevel?: boolean;
-  context?: number;
+  wordLevel?: boolean; // kept for future, Monaco uses its own algorithm
+  context?: number; // lines of context when hiding unchanged regions
   wordWrap?: "off" | "on";
   onlyChanged?: boolean;
 }

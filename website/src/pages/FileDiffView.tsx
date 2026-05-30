@@ -157,7 +157,7 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
         sess.setLeftFromUrl(url, processed);
         // default to first kernel when loading new source
         setLeftIdx(0);
-          try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
+        try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
         const leftHash = window.__TRITONPARSE_leftHash;
         if (leftHash) {
           const li = findKernelIndexByHash(leftHash, processed);
@@ -320,390 +320,379 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             {missingRight && <span>Right: Not available</span>}
           </div>
         </div>
-        <div className="flex items-center gap-4 mb-2">
-          <input
-            type="text"
-            placeholder="Left label..."
-            className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
-            value={leftLabel}
-            onChange={(e) => setLeftLabel(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder="Right label..."
-            className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
-            value={rightLabel}
-            onChange={(e) => setRightLabel(e.target.value)}
-          />
-        </div>
-        {!hideDiff && (
-          <DiffComparisonView
-            key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
-            leftContent={leftContent}
-            rightContent={rightContent}
-            leftLabel={leftLabel}
-            rightLabel={rightLabel}
-            height="calc(100vh - 14rem)"
-            language={effectiveIrType === "python" ? "python" : "plaintext"}
-            options={{
-              ignoreWhitespace: ignoreWs,
-              wordLevel,
-              context: contextLines,
-              wordWrap,
-              onlyChanged,
-            }}
-          />
-        )}
+        <input type="text" placeholder="Left label..." aria-label="Left diff label" className="..." value={leftLabel} onChange={...} />
+        <input type="text" placeholder="Right label..." aria-label="Right diff label" className="..." value={rightLabel} onChange={...} />
       </div>
+        {
+      !hideDiff && (
+        <DiffComparisonView
+          key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
+          leftContent={leftContent}
+          rightContent={rightContent}
+          leftLabel={leftLabel}
+          rightLabel={rightLabel}
+          height="calc(100vh - 14rem)"
+          language={effectiveIrType === "python" ? "python" : "plaintext"}
+          options={{
+            ignoreWhitespace: ignoreWs,
+            wordLevel,
+            context: contextLines,
+            wordWrap,
+            onlyChanged,
+          }}
+        />
+      )
+    }
+      </div >
     );
   };
 
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const toggle = (t: string) => setExpanded(prev => ({ ...prev, [t]: !prev[t] }));
+const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+const toggle = (t: string) => setExpanded(prev => ({ ...prev, [t]: !prev[t] }));
 
-  const renderAll = () => {
-    return (
-      <div className="space-y-4">
-        {unionIrTypes.map((t) => {
-          const leftContent = getContentByIRType(leftKernel, t);
-          const rightContent = getContentByIRType(rightKernel, t);
-          const missingLeft = !leftContent;
-          const missingRight = !rightContent;
-          const isOpen = !!expanded[t];
-          return (
-            <div key={t} className="border border-gray-200 rounded bg-white">
-              <button
-                className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50"
-                onClick={() => toggle(t)}
-              >
-                <div className="font-medium text-gray-800">{t}</div>
-                <div className="text-sm text-gray-500">
-                  {missingLeft && <span className="mr-2">Left: N/A</span>}
-                  {missingRight && <span>Right: N/A</span>}
-                </div>
-              </button>
-              {isOpen && (
-                <div className="px-2 pb-2">
-                  <div className="flex items-center gap-4 mb-2">
-                    <input
-                      type="text"
-                      placeholder="Left label..."
-                      className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
-                      value={leftLabel}
-                      onChange={(e) => setLeftLabel(e.target.value)}
-                    />
-                    <input
-                      type="text"
-                      placeholder="Right label..."
-                      className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
-                      value={rightLabel}
-                      onChange={(e) => setRightLabel(e.target.value)}
-                    />
-                  </div>
-                  {!hideDiff && (
-                    <DiffComparisonView
-                      key={`all-${t}-${leftIdx}-${rightIdx}`}
-                      leftContent={leftContent}
-                      rightContent={rightContent}
-                      leftLabel={leftLabel}
-                      rightLabel={rightLabel}
-                      height="calc(100vh - 14rem)"
-                      language={t === "python" ? "python" : "plaintext"}
-                      options={{
-                        ignoreWhitespace: ignoreWs,
-                        wordLevel,
-                        context: contextLines,
-                        wordWrap,
-                        onlyChanged,
-                      }}
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  // Left and Right source loaders
-  const [pendingUrl, setPendingUrl] = useState<string>("");
-  const handleLoadRight = async () => {
-    if (!pendingUrl) return;
-    setRightLoadedFromLocal(false);
-    setRightLoadedUrl(normalizeDataUrl(pendingUrl));
-  };
-
-  const handleLoadRightLocal = async (file: File | null) => {
-    if (!file) return;
-    try {
-      setLoadingRight(true);
-      setErrorRight(null);
-      const entries = await loadLogDataFromFile(file);
-      const processed = processKernelData(entries);
-      setKernelsRight(processed);
-      setRightLoadedFromLocal(true);
-      setRightLoadedUrl(null); // do not persist json_b_url when loaded from local file
-      sess.setRightFromLocal(processed);
-      // select the first kernel or restore by hash if available
-      const rightHash = window.__TRITONPARSE_rightHash;
-      if (rightHash) {
-        const ri = findKernelIndexByHash(rightHash, processed);
-        setRightIdx(ri >= 0 ? ri : 0);
-      } else {
-        setRightIdx(0);
-      }
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      setErrorRight(errorMessage);
-    } finally {
-      setLoadingRight(false);
-    }
-  };
-  const [leftPendingUrlLocal, setLeftPendingUrlLocal] = useState<string>("");
-  const handleLoadLeft = async () => {
-    if (!leftPendingUrlLocal) return;
-    setLeftLoadedFromLocal(false);
-    setLeftLoadedUrlLocal(normalizeDataUrl(leftPendingUrlLocal));
-  };
-  const handleLoadLeftLocal = async (file: File | null) => {
-    if (!file) return;
-    try {
-      setLoadingLeft(true);
-      setErrorLeft(null);
-      const entries = await loadLogDataFromFile(file);
-      const processed = processKernelData(entries);
-      setLeftKernelsFromLocal(processed);
-      setLeftLoadedFromLocal(true);
-      setLeftLoadedUrlLocal(null);
-      sess.setLeftFromLocal(processed);
-      // select first by default
-      setLeftIdx(0);
-      try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
-      const leftHash = window.__TRITONPARSE_leftHash;
-      if (leftHash) {
-        const li = findKernelIndexByHash(leftHash, processed);
-        setLeftIdx(li >= 0 ? li : 0);
-        try { if (li >= 0) sess.setLeftIdx(li); } catch { /* Session may not be ready */ }
-      } else {
-        setLeftIdx(0);
-      }
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      setErrorLeft(errorMessage);
-    } finally {
-      setLoadingLeft(false);
-    }
-  };
-
+const renderAll = () => {
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-semibold text-gray-800 mb-2">File Diff</h1>
-
-      <div className="bg-white rounded-lg p-3 mb-3 border border-gray-200">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <div>
-            <div className="text-sm text-gray-500 mb-1">Left Source (json_url)</div>
-            <div className="flex items-center gap-2 mb-1">
-              <input
-                type="url"
-                placeholder="https://.../trace.ndjson.gz"
-                className="flex-1 border border-gray-300 rounded px-3 py-2"
-                value={leftPendingUrlLocal}
-                onChange={(e) => setLeftPendingUrlLocal(e.target.value)}
-              />
-              <button
-                className="px-3 py-2 bg-blue-600 text-white rounded"
-                onClick={handleLoadLeft}
-                disabled={loadingLeft}
-              >
-                {loadingLeft ? "Loading..." : "Load"}
-              </button>
-            </div>
-            <div className="flex items-center gap-2 mb-1">
-              <input
-                type="file"
-                accept=".ndjson,.ndjson.gz,.gz,.jsonl,.clp"
-                className="block w-full text-sm text-gray-700"
-                onChange={(e) => handleLoadLeftLocal(e.target.files?.[0] || null)}
-                disabled={loadingLeft}
-              />
-            </div>
-            {(leftLoadedUrlLocal || leftLoadedUrl || (leftLoadedFromLocal || kernelsLeft.length > 0)) && (
-              <div className="text-gray-800 break-all mb-2">
-                {leftLoadedUrlLocal || leftLoadedUrl || "(from local file)"}
+    <div className="space-y-4">
+      {unionIrTypes.map((t) => {
+        const leftContent = getContentByIRType(leftKernel, t);
+        const rightContent = getContentByIRType(rightKernel, t);
+        const missingLeft = !leftContent;
+        const missingRight = !rightContent;
+        const isOpen = !!expanded[t];
+        return (
+          <div key={t} className="border border-gray-200 rounded bg-white">
+            <button
+              className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-gray-50"
+              onClick={() => toggle(t)}
+            >
+              <div className="font-medium text-gray-800">{t}</div>
+              <div className="text-sm text-gray-500">
+                {missingLeft && <span className="mr-2">Left: N/A</span>}
+                {missingRight && <span>Right: N/A</span>}
+              </div>
+            </button>
+            {isOpen && (
+              <div className="px-2 pb-2">
+                <div className="flex items-center gap-4 mb-2">
+                  <input
+                    type="text"
+                    placeholder="Left label..."
+                    className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+                    value={leftLabel}
+                    onChange={(e) => setLeftLabel(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Right label..."
+                    className="border border-gray-300 rounded px-2 py-1 text-sm flex-1"
+                    value={rightLabel}
+                    onChange={(e) => setRightLabel(e.target.value)}
+                  />
+                </div>
+                {!hideDiff && (
+                  <DiffComparisonView
+                    key={`all-${t}-${leftIdx}-${rightIdx}`}
+                    leftContent={leftContent}
+                    rightContent={rightContent}
+                    leftLabel={leftLabel}
+                    rightLabel={rightLabel}
+                    height="calc(100vh - 14rem)"
+                    language={t === "python" ? "python" : "plaintext"}
+                    options={{
+                      ignoreWhitespace: ignoreWs,
+                      wordLevel,
+                      context: contextLines,
+                      wordWrap,
+                      onlyChanged,
+                    }}
+                  />
+                )}
               </div>
             )}
-            {leftLoadedFromLocal && (
-              <div className="text-gray-600 text-sm mb-2">(loaded from local file)</div>
-            )}
-            {errorLeft && (
-              <div className="text-red-600 text-sm mb-2">{errorLeft}</div>
-            )}
-            <div className="flex gap-2 mt-1">
-              <button
-                className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
-                disabled={leftArrayResolved.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoOverview('left'), 0); }}
-              >
-                Left → Kernel Overview
-              </button>
-              <button
-                className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
-                disabled={leftArrayResolved.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoIRCode('left'), 0); }}
-              >
-                Left → IR Code
-              </button>
-            </div>
           </div>
-          <div>
-            <div className="text-sm text-gray-500 mb-1">Right Source (json_b_url)</div>
-            <div className="flex items-center gap-2 mb-1">
-              <input
-                type="url"
-                placeholder="https://.../trace.ndjson.gz"
-                className="flex-1 border border-gray-300 rounded px-3 py-2"
-                value={pendingUrl}
-                onChange={(e) => setPendingUrl(e.target.value)}
-              />
-              <button
-                className="px-3 py-2 bg-blue-600 text-white rounded"
-                onClick={handleLoadRight}
-                disabled={loadingRight}
-              >
-                {loadingRight ? "Loading..." : "Load"}
-              </button>
-            </div>
-            <div className="flex items-center gap-2 mb-1">
-              <input
-                type="file"
-                accept=".ndjson,.ndjson.gz,.gz,.jsonl,.clp"
-                className="block w-full text-sm text-gray-700"
-                onChange={(e) => handleLoadRightLocal(e.target.files?.[0] || null)}
-                disabled={loadingRight}
-              />
-            </div>
-            {rightLoadedUrl && (
-              <div className="text-gray-800 break-all mb-2">{rightLoadedUrl}</div>
-            )}
-            {rightLoadedFromLocal && (
-              <div className="text-gray-600 text-sm mb-2">(loaded from local file)</div>
-            )}
-            {errorRight && (
-              <div className="text-red-600 text-sm mb-2">{errorRight}</div>
-            )}
-            {/* Right kernel select moved to aligned row below */}
-            <div className="flex gap-2 mt-1">
-              <button
-                className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
-                disabled={kernelsRight.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoOverview('right'), 0); }}
-              >
-                Right → Kernel Overview
-              </button>
-              <button
-                className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
-                disabled={kernelsRight.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoIRCode('right'), 0); }}
-              >
-                Right → IR Code
-              </button>
-            </div>
-          </div>
-        </div>
+        );
+      })}
+    </div>
+  );
+};
 
-        {/* Aligned kernel selectors row */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Left Kernel</label>
-            <select
-              className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
-              value={leftIdx}
-              onChange={(e) => { const v = parseInt(e.target.value); setLeftIdx(v); try { sess.setLeftIdx(v); } catch { /* Ignore */ } }}
-              disabled={leftArrayResolved.length === 0}
-            >
-              {leftArrayResolved.map((k, i) => (
-                <option key={`l-${i}`} value={i}>
-                  [{i}] {k.name} {(k.metadata?.hash || "").slice(0, 8)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Right Kernel</label>
-            <select
-              className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
-              value={rightIdx}
-              onChange={(e) => { const v = parseInt(e.target.value); setRightIdx(v); try { sess.setRightIdx(v); } catch { /* Ignore */ } }}
-              disabled={kernelsRight.length === 0}
-            >
-              {kernelsRight.map((k, i) => (
-                <option key={`r-${i}`} value={i}>
-                  [{i}] {k.name} {(k.metadata?.hash || "").slice(0, 8)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+// Left and Right source loaders
+const [pendingUrl, setPendingUrl] = useState<string>("");
+const handleLoadRight = async () => {
+  if (!pendingUrl) return;
+  setRightLoadedFromLocal(false);
+  setRightLoadedUrl(normalizeDataUrl(pendingUrl));
+};
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
-            <div className="flex items-center gap-2">
-              <button className={`px-3 py-1 rounded ${mode === "single" ? "bg-blue-600 text-white" : "bg-gray-100"}`} onClick={() => setMode("single")}>Single IR</button>
-              <button className={`px-3 py-1 rounded ${mode === "all" ? "bg-blue-600 text-white" : "bg-gray-100"}`} onClick={() => setMode("all")}>All IRs</button>
-            </div>
+const handleLoadRightLocal = async (file: File | null) => {
+  if (!file) return;
+  try {
+    setLoadingRight(true);
+    setErrorRight(null);
+    const entries = await loadLogDataFromFile(file);
+    const processed = processKernelData(entries);
+    setKernelsRight(processed);
+    setRightLoadedFromLocal(true);
+    setRightLoadedUrl(null); // do not persist json_b_url when loaded from local file
+    sess.setRightFromLocal(processed);
+    // select the first kernel or restore by hash if available
+    const rightHash = window.__TRITONPARSE_rightHash;
+    if (rightHash) {
+      const ri = findKernelIndexByHash(rightHash, processed);
+      setRightIdx(ri >= 0 ? ri : 0);
+    } else {
+      setRightIdx(0);
+    }
+  } catch (e: unknown) {
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    setErrorRight(errorMessage);
+  } finally {
+    setLoadingRight(false);
+  }
+};
+const [leftPendingUrlLocal, setLeftPendingUrlLocal] = useState<string>("");
+const handleLoadLeft = async () => {
+  if (!leftPendingUrlLocal) return;
+  setLeftLoadedFromLocal(false);
+  setLeftLoadedUrlLocal(normalizeDataUrl(leftPendingUrlLocal));
+};
+const handleLoadLeftLocal = async (file: File | null) => {
+  if (!file) return;
+  try {
+    setLoadingLeft(true);
+    setErrorLeft(null);
+    const entries = await loadLogDataFromFile(file);
+    const processed = processKernelData(entries);
+    setLeftKernelsFromLocal(processed);
+    setLeftLoadedFromLocal(true);
+    setLeftLoadedUrlLocal(null);
+    sess.setLeftFromLocal(processed);
+    // select first by default
+    setLeftIdx(0);
+    try { sess.setLeftIdx(0); } catch { /* Session may not be ready */ }
+    const leftHash = window.__TRITONPARSE_leftHash;
+    if (leftHash) {
+      const li = findKernelIndexByHash(leftHash, processed);
+      setLeftIdx(li >= 0 ? li : 0);
+      try { if (li >= 0) sess.setLeftIdx(li); } catch { /* Session may not be ready */ }
+    } else {
+      setLeftIdx(0);
+    }
+  } catch (e: unknown) {
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    setErrorLeft(errorMessage);
+  } finally {
+    setLoadingLeft(false);
+  }
+};
+
+return (
+  <div className="p-4">
+    <h1 className="text-xl font-semibold text-gray-800 mb-2">File Diff</h1>
+
+    <div className="bg-white rounded-lg p-3 mb-3 border border-gray-200">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div>
+          <div className="text-sm text-gray-500 mb-1">Left Source (json_url)</div>
+          <div className="flex items-center gap-2 mb-1">
+            <input
+              type="url"
+              placeholder="https://.../trace.ndjson.gz"
+              className="flex-1 border border-gray-300 rounded px-3 py-2"
+              value={leftPendingUrlLocal}
+              onChange={(e) => setLeftPendingUrlLocal(e.target.value)}
+            />
+            <button
+              className="px-3 py-2 bg-blue-600 text-white rounded"
+              onClick={handleLoadLeft}
+              disabled={loadingLeft}
+            >
+              {loadingLeft ? "Loading..." : "Load"}
+            </button>
           </div>
-          {mode === "single" && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">IR Type</label>
-              <select
-                className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
-                value={effectiveIrType}
-                onChange={(e) => setIrType(e.target.value)}
-              >
-                {unionIrTypes.map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
+          <div className="flex items-center gap-2 mb-1">
+            <input
+              type="file"
+              accept=".ndjson,.ndjson.gz,.gz,.jsonl,.clp"
+              className="block w-full text-sm text-gray-700"
+              onChange={(e) => handleLoadLeftLocal(e.target.files?.[0] || null)}
+              disabled={loadingLeft}
+            />
+          </div>
+          {(leftLoadedUrlLocal || leftLoadedUrl || (leftLoadedFromLocal || kernelsLeft.length > 0)) && (
+            <div className="text-gray-800 break-all mb-2">
+              {leftLoadedUrlLocal || leftLoadedUrl || "(from local file)"}
             </div>
           )}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Diff Options</label>
-            <div className="flex flex-wrap gap-2">
-              <label className="inline-flex items-center gap-1 text-sm">
-                <input type="checkbox" checked={ignoreWs} onChange={(e) => setIgnoreWs(e.target.checked)} />
-                Ignore whitespace
-              </label>
-              <label className="inline-flex items-center gap-1 text-sm">
-                <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
-                Only changes
-              </label>
-              <label className="inline-flex items-center gap-1 text-sm">
-                <input type="checkbox" checked={wordLevel} onChange={(e) => setWordLevel(e.target.checked)} />
-                Word-level
-              </label>
-              <label className="inline-flex items-center gap-1 text-sm">
-                <span>Context</span>
-                <input type="number" className="w-16 border border-gray-300 rounded px-2 py-1" value={contextLines} onChange={(e) => setContextLines(parseInt(e.target.value) || 0)} />
-              </label>
-              <label className="inline-flex items-center gap-1 text-sm">
-                <span>Wrap</span>
-                <select className="border border-gray-300 rounded px-2 py-1" value={wordWrap} onChange={(e) => setWordWrap(e.target.value as "off" | "on")}>
-                  <option value="off">off</option>
-                  <option value="on">on</option>
-                </select>
-              </label>
-            </div>
+          {leftLoadedFromLocal && (
+            <div className="text-gray-600 text-sm mb-2">(loaded from local file)</div>
+          )}
+          {errorLeft && (
+            <div className="text-red-600 text-sm mb-2">{errorLeft}</div>
+          )}
+          <div className="flex gap-2 mt-1">
+            <button
+              className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
+              disabled={leftArrayResolved.length === 0}
+              onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoOverview('left'), 0); }}
+            >
+              Left → Kernel Overview
+            </button>
+            <button
+              className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
+              disabled={leftArrayResolved.length === 0}
+              onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoIRCode('left'), 0); }}
+            >
+              Left → IR Code
+            </button>
+          </div>
+        </div>
+        <div>
+          <div className="text-sm text-gray-500 mb-1">Right Source (json_b_url)</div>
+          <div className="flex items-center gap-2 mb-1">
+            <input
+              type="url"
+              placeholder="https://.../trace.ndjson.gz"
+              className="flex-1 border border-gray-300 rounded px-3 py-2"
+              value={pendingUrl}
+              onChange={(e) => setPendingUrl(e.target.value)}
+            />
+            <button
+              className="px-3 py-2 bg-blue-600 text-white rounded"
+              onClick={handleLoadRight}
+              disabled={loadingRight}
+            >
+              {loadingRight ? "Loading..." : "Load"}
+            </button>
+          </div>
+          <div className="flex items-center gap-2 mb-1">
+            <input
+              type="file"
+              accept=".ndjson,.ndjson.gz,.gz,.jsonl,.clp"
+              className="block w-full text-sm text-gray-700"
+              onChange={(e) => handleLoadRightLocal(e.target.files?.[0] || null)}
+              disabled={loadingRight}
+            />
+          </div>
+          {rightLoadedUrl && (
+            <div className="text-gray-800 break-all mb-2">{rightLoadedUrl}</div>
+          )}
+          {rightLoadedFromLocal && (
+            <div className="text-gray-600 text-sm mb-2">(loaded from local file)</div>
+          )}
+          {errorRight && (
+            <div className="text-red-600 text-sm mb-2">{errorRight}</div>
+          )}
+          {/* Right kernel select moved to aligned row below */}
+          <div className="flex gap-2 mt-1">
+            <button
+              className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
+              disabled={kernelsRight.length === 0}
+              onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoOverview('right'), 0); }}
+            >
+              Right → Kernel Overview
+            </button>
+            <button
+              className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
+              disabled={kernelsRight.length === 0}
+              onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoIRCode('right'), 0); }}
+            >
+              Right → IR Code
+            </button>
           </div>
         </div>
       </div>
 
-      {mode === "single" ? renderSingle() : renderAll()}
+      {/* Aligned kernel selectors row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Left Kernel</label>
+          <select
+            className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
+            value={leftIdx}
+            onChange={(e) => { const v = parseInt(e.target.value); setLeftIdx(v); try { sess.setLeftIdx(v); } catch { /* Ignore */ } }}
+            disabled={leftArrayResolved.length === 0}
+          >
+            {leftArrayResolved.map((k, i) => (
+              <option key={`l-${i}`} value={i}>
+                [{i}] {k.name} {(k.metadata?.hash || "").slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Right Kernel</label>
+          <select
+            className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
+            value={rightIdx}
+            onChange={(e) => { const v = parseInt(e.target.value); setRightIdx(v); try { sess.setRightIdx(v); } catch { /* Ignore */ } }}
+            disabled={kernelsRight.length === 0}
+          >
+            {kernelsRight.map((k, i) => (
+              <option key={`r-${i}`} value={i}>
+                [{i}] {k.name} {(k.metadata?.hash || "").slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
+          <div className="flex items-center gap-2">
+            <button className={`px-3 py-1 rounded ${mode === "single" ? "bg-blue-600 text-white" : "bg-gray-100"}`} onClick={() => setMode("single")}>Single IR</button>
+            <button className={`px-3 py-1 rounded ${mode === "all" ? "bg-blue-600 text-white" : "bg-gray-100"}`} onClick={() => setMode("all")}>All IRs</button>
+          </div>
+        </div>
+        {mode === "single" && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">IR Type</label>
+            <select
+              className="border border-gray-300 rounded px-3 py-2 bg-white w-full"
+              value={effectiveIrType}
+              onChange={(e) => setIrType(e.target.value)}
+            >
+              {unionIrTypes.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Diff Options</label>
+          <div className="flex flex-wrap gap-2">
+            <label className="inline-flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={ignoreWs} onChange={(e) => setIgnoreWs(e.target.checked)} />
+              Ignore whitespace
+            </label>
+            <label className="inline-flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
+              Only changes
+            </label>
+            <label className="inline-flex items-center gap-1 text-sm">
+              <input type="checkbox" checked={wordLevel} onChange={(e) => setWordLevel(e.target.checked)} />
+              Word-level
+            </label>
+            <label className="inline-flex items-center gap-1 text-sm">
+              <span>Context</span>
+              <input type="number" className="w-16 border border-gray-300 rounded px-2 py-1" value={contextLines} onChange={(e) => setContextLines(parseInt(e.target.value) || 0)} />
+            </label>
+            <label className="inline-flex items-center gap-1 text-sm">
+              <span>Wrap</span>
+              <select className="border border-gray-300 rounded px-2 py-1" value={wordWrap} onChange={(e) => setWordWrap(e.target.value as "off" | "on")}>
+                <option value="off">off</option>
+                <option value="on">on</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
     </div>
-  );
+
+    {mode === "single" ? renderSingle() : renderAll()}
+  </div>
+);
 };
 
 export default FileDiffView;
