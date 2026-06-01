@@ -1308,8 +1308,6 @@ class TritonTraceHandler(logging.StreamHandler):
                     try:
                         self.flush()
                     finally:
-                        if TRITON_TRACE_COMPRESSION == "clp":
-                            self.stream._compress()
                         self.stream.close()
                         self.stream = None
             finally:
@@ -2012,6 +2010,19 @@ def init_with_env():
         init(triton_trace_folder, enable_trace_launch=TRITON_TRACE_LAUNCH)
 
 
+def clean_up_log_handler():
+    """
+    This function closes the currently active logging handler, flushing and
+    finalizing the trace stream.
+    """
+    global TRITON_TRACE_HANDLER
+    if TRITON_TRACE_HANDLER is not None:
+        if TRITON_TRACE_HANDLER in triton_trace_log.handlers:
+            triton_trace_log.removeHandler(TRITON_TRACE_HANDLER)
+        TRITON_TRACE_HANDLER._ensure_stream_closed()
+        TRITON_TRACE_HANDLER = None
+
+
 def clear_logging_config():
     """
     Clear all configurations made by init() and init_basic().
@@ -2023,16 +2034,12 @@ def clear_logging_config():
     WARNING: This function is not supposed to be called unless you are sure
     you want to clear the logging config.
     """
-    global TRITON_TRACE_HANDLER, triton_trace_folder, _KERNEL_ALLOWLIST_PATTERNS
+    global triton_trace_folder, _KERNEL_ALLOWLIST_PATTERNS
     global _trace_launch_enabled
     global TENSOR_BLOB_MANAGER
     global _kernel_run_counts_per_hash, _save_blobs_for_current_launch
     # 1. Clean up the log handler
-    if TRITON_TRACE_HANDLER is not None:
-        if TRITON_TRACE_HANDLER in triton_trace_log.handlers:
-            triton_trace_log.removeHandler(TRITON_TRACE_HANDLER)
-        TRITON_TRACE_HANDLER.close()
-        TRITON_TRACE_HANDLER = None
+    clean_up_log_handler()
 
     # 2. Reset global state variables
     triton_trace_folder = None

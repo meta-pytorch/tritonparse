@@ -445,7 +445,7 @@ def compress_single_file(
     Compress a single file and delete the original file.
     Args:
         file_path: Path to the file to compress
-        compression: Compression algorithm to use ("gzip" or "zstd")
+        compression: Compression algorithm to use ("gzip", "zstd", or "clp")
         verbose: Whether to print verbose information
     Returns:
         Path to the compressed file
@@ -454,20 +454,28 @@ def compress_single_file(
         compressed_path = file_path + ".gz"
     elif compression == "zstd":
         compressed_path = file_path + ".zst"
+    elif compression == "clp":
+        compressed_path = file_path + ".clp"
     else:
         raise ValueError(f"Unsupported compression: {compression}")
 
     if verbose:
         logger.info(f"Compressing {file_path} with {compression}")
 
-    with open(file_path, "rb") as f_in:
-        if compression == "gzip":
-            with gzip.open(compressed_path, "wb") as f_out:
-                shutil.copyfileobj(f_in, f_out)
-        else:
-            cctx = zstd.ZstdCompressor()
-            with open(compressed_path, "wb") as f_out:
-                cctx.copy_stream(f_in, f_out)
+    if compression == "clp":
+        from tritonparse.clp import clp_open
+
+        with clp_open(compressed_path, "w") as archive:
+            archive.add(file_path)
+    else:
+        with open(file_path, "rb") as f_in:
+            if compression == "gzip":
+                with gzip.open(compressed_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            else:
+                cctx = zstd.ZstdCompressor()
+                with open(compressed_path, "wb") as f_out:
+                    cctx.copy_stream(f_in, f_out)
 
     # Delete the original file after successful compression
     if os.path.exists(file_path):
@@ -495,7 +503,7 @@ def copy_local_to_tmpdir(local_path: str, verbose: bool = False) -> str:
     if not os.path.exists(local_path):
         raise RuntimeError(f"Path does not exist: {local_path}")
 
-    temp_dir = tempfile.mkdtemp()
+    temp_dir = tempfile.mkdtemp(prefix="staging_logs_")
 
     # Handle single file case
     if os.path.isfile(local_path):
@@ -522,13 +530,6 @@ def copy_local_to_tmpdir(local_path: str, verbose: bool = False) -> str:
             if verbose:
                 logger.info(f"Copying {item_path} to {temp_dir}")
             shutil.copy2(item_path, temp_dir)
-        if os.path.isdir(item_path) and os.path.basename(item_path).startswith(
-            LOG_PREFIX
-        ):
-            dir_name = os.path.basename(item_path)
-            if verbose:
-                logger.info(f"Copying {item_path} to {temp_dir}/{dir_name}")
-            shutil.copytree(item_path, f"{temp_dir}/{dir_name}")
 
     # Check if any files were copied - fail fast with clear error message
     if not os.listdir(temp_dir):
@@ -634,7 +635,7 @@ def parse_logs(
     """
 
     raw_log_dir = logs_to_parse
-    parsed_log_dir = tempfile.mkdtemp()
+    parsed_log_dir = tempfile.mkdtemp(prefix="staging_parsed_output_")
 
     buckets = _collect_and_bucket_files(
         raw_log_dir, rank_config, enable_pre_init_attribution
