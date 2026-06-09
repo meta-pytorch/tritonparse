@@ -4,13 +4,13 @@
 """
 Build structured LLM context for AI-powered compatibility fixing.
 
-Converts build errors, LLVM API changes, and reference fixes into structured
-text suitable for LLM consumption. The context is organized in priority order:
+Converts LLVM API changes, build error log references, and reference fixes into
+structured text suitable for LLM consumption. The context is organized by
+causality:
 
-1. Build Error (highest — what's broken)
-2. LLVM API Change (what changed in LLVM headers)
-3. Reference Fix from llvm_bump (how it was eventually fixed)
-4. Current Triton Source (files that failed to compile)
+1. LLVM API Change (the cause — what changed in LLVM headers)
+2. Build Error Log (the symptom — pointer to log file for AI to read)
+3. Reference Fix from llvm_bump (guidance — how it was eventually fixed)
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from tritonparse.bisect.executor import ShellExecutor
 
 
 def build_fix_context(
-    build_error: str,
+    build_error_log: Path | None,
     incompatible_llvm: str,
     llvm_bump_commit: str,
     triton_dir: Path,
@@ -33,11 +33,13 @@ def build_fix_context(
 ) -> str:
     """Build structured context for the AI fixer.
 
-    Organized by priority (most important first), following CUTracer's
-    build_llm_context() pattern.
+    Organized by causality — LLVM diff first (cause), build error log
+    path second (symptom), reference fix third (guidance).
+    The build error is NOT embedded — the AI reads the full log file
+    directly, preserving note/candidate lines and ordering.
 
     Args:
-        build_error: Triton build error output.
+        build_error_log: Path to the raw build error log file, or None.
         incompatible_llvm: First incompatible LLVM commit hash.
         llvm_bump_commit: The LLVM bump commit in Triton repo.
         triton_dir: Path to Triton repository (compat worktree).
@@ -51,40 +53,47 @@ def build_fix_context(
     sections: list[str] = []
     budget = max_total_chars
 
-    # Section 1: Build Error (highest priority)
-    section1 = _build_error_section(build_error, budget // 4)
+    # Section 1: LLVM API Change (PRIMARY — the cause)
+    section1 = _llvm_change_section(incompatible_llvm, llvm_dir, executor, budget // 3)
     sections.append(section1)
     budget -= len(section1)
 
-    # Section 2: LLVM API Change
-    section2 = _llvm_change_section(incompatible_llvm, llvm_dir, executor, budget // 3)
+    # Section 2: Build Error Log (pointer, not content)
+    section2 = _build_error_log_section(build_error_log)
     sections.append(section2)
-    budget -= len(section2)
 
     # Section 3: Reference Fix from llvm_bump
+    error_text = _read_error_log(build_error_log)
     section3 = _reference_fix_section(
-        build_error, llvm_bump_commit, triton_dir, executor, budget // 2
+        error_text, llvm_bump_commit, triton_dir, executor, budget // 2
     )
     sections.append(section3)
-    budget -= len(section3)
-
-    # Section 4: Current Triton Source (failing files)
-    section4 = _failing_source_section(build_error, triton_dir, executor, budget)
-    if section4:
-        sections.append(section4)
 
     return "\n\n".join(sections)
 
 
-def _build_error_section(build_error: str, max_chars: int) -> str:
-    """Section 1: Build error output."""
-    truncated = truncate_context(build_error, max_chars, strategy="tail")
+def _build_error_log_section(error_log: Path | None) -> str:
+    """Section 2: Point the AI to the full build error log file."""
+    if error_log is None:
+        return "## Section 2: Build Error Log\n\nNo build error log available."
     return (
-        "## Section 1: Build Error\n\n"
-        "The following Triton build error occurred when compiling against "
-        "the incompatible LLVM commit:\n\n"
-        f"```\n{truncated}\n```"
+        "## Section 2: Build Error Log\n\n"
+        f"Read the build error log at: `{error_log}`\n\n"
+        "This file contains the complete, untruncated compiler output — "
+        "including `note:` and `candidate:` lines that show the new API "
+        "signatures. Read it to confirm which APIs break the build, then "
+        "use grep to find additional call sites the error may not cover."
     )
+
+
+def _read_error_log(error_log: Path | None) -> str:
+    """Read error log file contents, returning empty string if unavailable."""
+    if error_log is None or not error_log.exists():
+        return ""
+    try:
+        return error_log.read_text()
+    except OSError:
+        return ""
 
 
 def _llvm_change_section(
@@ -93,7 +102,7 @@ def _llvm_change_section(
     executor: ShellExecutor,
     max_chars: int,
 ) -> str:
-    """Section 2: LLVM API change diff (headers only)."""
+    """Section 1: LLVM API change diff (headers only)."""
     result = executor.run_command(
         [
             "git",
@@ -111,7 +120,7 @@ def _llvm_change_section(
     truncated = truncate_context(diff_text, max_chars, strategy="head")
 
     return (
-        "## Section 2: LLVM API Change\n\n"
+        "## Section 1: LLVM API Change\n\n"
         f"Diff of LLVM headers at commit `{incompatible_llvm[:12]}`:\n\n"
         f"```diff\n{truncated}\n```"
     )
@@ -152,41 +161,16 @@ def _reference_fix_section(
     truncated = truncate_context(combined, max_chars, strategy="head")
 
     return (
-        "## Section 3: Reference Fix from llvm_bump Commit\n\n"
-        f"The llvm_bump commit `{llvm_bump_commit[:12]}` contains these fixes "
-        "for the same files. Use as reference (may need adaptation):\n\n"
+        "## Section 3: Reference Fix (guidance only)\n\n"
+        "A later commit eventually fixed these same files. These changes are "
+        "**NOT applied to your working directory** — the files on disk still "
+        "have the old broken code. Apply the relevant subset of changes to "
+        "the files in your working directory.\n\n"
+        "Note: This diff may include fixes for multiple unrelated breakpoints. "
+        "Only apply changes that fix the build errors you see in the error "
+        "log — ignore changes that address errors you don't see.\n\n"
         f"```diff\n{truncated}\n```"
     )
-
-
-def _failing_source_section(
-    build_error: str,
-    triton_dir: Path,
-    executor: ShellExecutor,
-    max_chars: int,
-) -> str:
-    """Section 4: Current source of failing files."""
-    failing_files = extract_failing_files(build_error)
-
-    if not failing_files:
-        return ""
-
-    sources: list[str] = []
-    for f in failing_files[:3]:
-        result = executor.run_command(
-            ["cat", f],
-            cwd=str(triton_dir),
-        )
-        if result.success:
-            sources.append(f"### {f}\n\n```cpp\n{result.stdout}\n```")
-
-    if not sources:
-        return ""
-
-    combined = "\n\n".join(sources)
-    truncated = truncate_context(combined, max_chars, strategy="head")
-
-    return f"## Section 4: Current Triton Source\n\n{truncated}"
 
 
 def extract_failing_files(build_error: str) -> list[str]:
@@ -207,7 +191,7 @@ def extract_failing_files(build_error: str) -> list[str]:
     seen: set[str] = set()
     files: list[str] = []
     for path, _ in matches:
-        if path not in seen:
+        if path not in seen and "/llvm-project/" not in path:
             seen.add(path)
             files.append(path)
     return files

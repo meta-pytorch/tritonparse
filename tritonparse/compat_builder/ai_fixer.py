@@ -36,7 +36,7 @@ class AICompatFixer:
 
         fixer = AICompatFixer(triton_dir="/path/to/worktree", ...)
         fix_commit = fixer.attempt_fix(
-            build_error="...",
+            build_error_log=Path("build_error.log"),
             incompatible_llvm="abc123",
             llvm_bump_commit="def456",
         )
@@ -79,7 +79,7 @@ class AICompatFixer:
 
     def attempt_fix(
         self,
-        build_error: str | None,
+        build_error_log: Path | None,
         incompatible_llvm: str,
         llvm_bump_commit: str,
     ) -> str | None:
@@ -89,7 +89,7 @@ class AICompatFixer:
         Phase 2: Send context to Claude for code modification.
 
         Args:
-            build_error: Triton build error output (may be None).
+            build_error_log: Path to the raw build error log file, or None.
             incompatible_llvm: First incompatible LLVM commit hash.
             llvm_bump_commit: The LLVM bump commit in Triton repo.
 
@@ -100,11 +100,11 @@ class AICompatFixer:
             f"AI Fix: attempting fix for LLVM {incompatible_llvm[:12]}"
         )
 
-        error_text = build_error or "(no build error captured)"
+        head_before = self._get_head_commit()
 
         # Phase 1: Build structured context (deterministic)
         context = build_fix_context(
-            build_error=error_text,
+            build_error_log=build_error_log,
             incompatible_llvm=incompatible_llvm,
             llvm_bump_commit=llvm_bump_commit,
             triton_dir=self.triton_dir,
@@ -124,12 +124,17 @@ class AICompatFixer:
             self.bisect_logger.info(
                 f"AI response received ({len(response.content)} chars)"
             )
+            self.bisect_logger.debug(f"AI response content:\n{response.content}")
+            if response.raw:
+                self.bisect_logger.debug(
+                    f"AI response raw JSON keys: {list(response.raw.keys())}"
+                )
         except RuntimeError as e:
             self.bisect_logger.warning(f"AI client error: {e}")
             return None
 
-        # Check if Claude created a commit
-        fix_commit = self._check_for_commit()
+        # Check if Claude created a NEW commit (not a stale one from a prior round)
+        fix_commit = self._check_for_commit(head_before)
         if fix_commit is not None:
             self.bisect_logger.info(f"AI fix committed: {fix_commit[:12]}")
             return fix_commit
@@ -144,22 +149,46 @@ class AICompatFixer:
     ) -> str:
         """Build user prompt for AI fixer."""
         return (
-            f"Fix Triton to compile with LLVM commit `{incompatible_llvm[:12]}`.\n\n"
-            "The build is currently failing. Below is the structured analysis context "
-            "with the build error, LLVM API change, and reference fix.\n\n"
-            "Please:\n"
-            "1. Read the build error to understand what's broken\n"
-            "2. Read the LLVM API change to understand what changed\n"
-            "3. Use the reference fix as guidance (adapt, don't copy blindly)\n"
-            "4. Edit the failing Triton source files to fix the incompatibility\n"
-            "5. After fixing, commit with message: "
-            "'compat fix: <brief description>'\n\n"
+            f"The files in your current working directory do NOT compile against "
+            f"LLVM commit `{incompatible_llvm[:12]}`. Edit them until they do.\n\n"
+            "Follow the two-stage process:\n\n"
+            "**Stage 1 — Analysis:**\n"
+            "1. Read Section 1 (LLVM diff) to identify every API that changed\n"
+            "2. Read the build error log file referenced in Section 2 — it "
+            "contains the complete compiler output including `note:` and "
+            "`candidate:` lines that show the correct new API signatures\n"
+            "3. For EACH changed API, use `grep -rn` to search for ALL call sites in "
+            "your current working directory\n"
+            "4. List every file:line in the working directory that needs editing\n\n"
+            "**Stage 2 — Fix (MANDATORY):**\n"
+            "After your analysis, you MUST edit the files and commit.\n"
+            "1. Edit every identified call site in the working directory\n"
+            "2. Verify each file after editing\n"
+            "3. Commit with: `compat fix: <description>`\n\n"
+            "IMPORTANT: The build error log has the full untruncated output. "
+            "Read it carefully for `note:` lines — they show the new function "
+            "signatures you need to match. Then use grep to find call sites "
+            "beyond what the error shows.\n\n"
             "---\n\n"
             f"{context}"
         )
 
-    def _check_for_commit(self) -> str | None:
-        """Check if a new commit with 'compat fix:' was created by Claude."""
+    def _get_head_commit(self) -> str | None:
+        """Return the current HEAD commit hash."""
+        result = self.executor.run_command(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(self.triton_dir),
+        )
+        if not result.success:
+            return None
+        return result.stdout.strip()
+
+    def _check_for_commit(self, head_before: str | None) -> str | None:
+        """Check if a NEW commit with 'compat fix:' was created by Claude.
+
+        Compares current HEAD against head_before to avoid returning a
+        stale fix commit from a previous iteration.
+        """
         result = self.executor.run_command(
             ["git", "log", "-1", "--format=%H %s"],
             cwd=str(self.triton_dir),
@@ -167,6 +196,12 @@ class AICompatFixer:
         if not result.success:
             return None
         line = result.stdout.strip()
-        if "compat fix:" in line:
-            return line.split()[0]
-        return None
+        if "compat fix:" not in line:
+            return None
+        commit_hash = line.split()[0]
+        if head_before is not None and commit_hash == head_before:
+            self.bisect_logger.warning(
+                "HEAD unchanged after AI fix — stale commit detected"
+            )
+            return None
+        return commit_hash

@@ -11,7 +11,7 @@ loaded to continue from where the workflow left off.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -66,7 +66,7 @@ class CompatBuildState:
         started_at: ISO timestamp when workflow started.
         updated_at: ISO timestamp of last state update.
         last_incompatible_llvm: Most recently found incompatible LLVM commit.
-        last_build_error: Build error output from last compat probe failure.
+        last_build_error_log: Path to the raw build error log file.
         ai_fix_attempted: Whether AI fix was already attempted for the current
             incompatibility. Reset to False after each apply_fix().
         error_message: Error message if workflow failed.
@@ -98,7 +98,7 @@ class CompatBuildState:
 
     # Fix assistance
     last_incompatible_llvm: str | None = None
-    last_build_error: str | None = None
+    last_build_error_log: str | None = None
     ai_fix_attempted: bool = False
     error_message: str | None = None
 
@@ -120,6 +120,8 @@ class CompatBuildState:
         data = data.copy()
         data["phase"] = CompatBuildPhase(data["phase"])
         data["pairs"] = [tuple(p) for p in data.get("pairs", [])]
+        valid_fields = {f.name for f in fields(cls)}
+        data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**data)
 
     def save(

@@ -19,6 +19,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Callable, TYPE_CHECKING
+from uuid import uuid4
 
 from tritonparse.bisect.executor import CommandResult, ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
@@ -32,7 +33,7 @@ _LLVM_HASH_FILE = "cmake/llvm-hash.txt"
 
 # Canonical LLVM source repo path within a Triton worktree.
 # Note: .llvm-project/ is the *build output* directory; the actual git clone
-# created by `make dev-install-llvm` lives at llvm-project/ (without dot).
+# created by scripts/build-llvm-project.sh lives at llvm-project/ (without dot).
 _LLVM_SUBDIR = "llvm-project"
 
 # Compat branch prefix
@@ -40,6 +41,8 @@ _COMPAT_BRANCH_PREFIX = "compat"
 
 # CSV schema version
 _CSV_SCHEMA_VERSION = "1"
+
+_CXX_FOR_CC: dict[str, str] = {"gcc": "g++", "clang": "clang++"}
 
 
 class WaitingForFixError(Exception):
@@ -56,11 +59,11 @@ class WaitingForFixError(Exception):
         self,
         state_path: Path,
         incompatible_llvm: str,
-        build_error: str | None = None,
+        build_error_log: str | None = None,
     ) -> None:
         self.state_path = state_path
         self.incompatible_llvm = incompatible_llvm
-        self.build_error = build_error
+        self.build_error_log = build_error_log
         short = incompatible_llvm[:12]
         super().__init__(
             f"Manual fix required for LLVM {short}. State saved to {state_path}"
@@ -108,6 +111,7 @@ class CompatBuilder:
         worktree_root: str | None = None,
         worktree_path: str | None = None,
         ai_fixer_factory: Callable[[str], AICompatFixer] | None = None,
+        compiler: str | None = None,
     ) -> None:
         self.triton_dir = triton_dir
         self.llvm_bump_commit = llvm_bump_commit
@@ -118,6 +122,9 @@ class CompatBuilder:
         self.worktree_root = worktree_root
         self._worktree_path = worktree_path
         self.ai_fixer_factory = ai_fixer_factory
+        cc = compiler or os.environ.get("TRITON_BISECT_COMPILER") or "clang"
+        self._cc = cc
+        self._cxx = _CXX_FOR_CC.get(cc, cc)
         self.executor = ShellExecutor(logger)
         self.state: CompatBuildState | None = None
 
@@ -181,7 +188,7 @@ class CompatBuilder:
         Uses git bisect on the llvm-project repo between
         current_llvm_good (good) and new_llvm (bad). The compat probe
         runs three steps for each tested LLVM commit:
-          1. build:  LLVM_COMMIT_HASH=<llvm> make dev-install-llvm
+          1. build:  scripts/build-llvm-project.sh + pip install -e .
           2. import: python -c "import triton"
           3. compile smoke: fixed kernel compilation
 
@@ -214,14 +221,13 @@ class CompatBuilder:
         if conda_prefix is None:
             raise RuntimeError("conda_prefix not resolved; call initialize() first")
 
-        # Pre-check: if the bad boundary is already compatible (e.g. after an
-        # AI fix), skip bisect entirely and mark the range as covered.
-        if self._probe_llvm_compatible(worktree, bad, conda_prefix):
-            self.logger.info(
-                f"LLVM {bad[:12]} is now compatible after fix; range covered."
-            )
-            state.current_llvm_good = bad
-            return None
+        # Clean untracked files that may conflict with LLVM checkouts
+        clean = self.executor.run_command(
+            ["git", "clean", "-fd"],
+            cwd=llvm_dir,
+        )
+        if not clean.success:
+            self.logger.warning(f"git clean failed in {llvm_dir}: {clean.stderr}")
 
         probe_script = self._write_compat_probe_script(worktree)
         result = self.executor.run_git_bisect_sequence(
@@ -245,12 +251,33 @@ class CompatBuilder:
 
         if incompatible is None:
             self.logger.info("All LLVM commits in range are compatible.")
+            state.current_llvm_good = bad
+            self.record_pair()
+            return None
+
+        # Verify the bisect result and capture a clean build error log.
+        # The bisect output (result.output) contains build errors from ALL
+        # tested LLVM commits — including commits after the first-bad that
+        # have unrelated API changes. Feeding that to the AI causes it to
+        # fix errors from future breakpoints. This single-commit probe both
+        # verifies the bisect result (catching false positives from AI fixes
+        # that made the bad boundary compatible) and captures only the errors
+        # relevant to this specific incompatibility.
+        probe_result = self._probe_llvm(worktree, incompatible, conda_prefix)
+        if probe_result.success:
+            self.logger.info(
+                f"LLVM {incompatible[:12]} is actually compatible "
+                f"(bisect false positive); advancing good boundary."
+            )
+            state.current_llvm_good = incompatible
+            self.record_pair()
             return None
 
         last_good = self._get_prev_commit(llvm_dir, incompatible)
         state.current_llvm_good = last_good
         state.last_incompatible_llvm = incompatible
-        state.last_build_error = self._extract_build_error(result.output)
+        log_path = self._save_build_error_log(probe_result.output)
+        state.last_build_error_log = str(log_path) if log_path else None
         self.logger.info(f"Found incompatible LLVM: {incompatible[:12]}")
         return incompatible
 
@@ -258,8 +285,8 @@ class CompatBuilder:
         """
         Record the current (triton_commit, llvm_last_compatible) pair.
 
-        Must be called after find_next_incompatible() returns a non-None result
-        and before fix_incompatibility().
+        Called after find_next_incompatible() returns (both None and non-None
+        paths), and before fix_incompatibility() when applicable.
         """
         state = self._require_state()
         triton = state.current_triton
@@ -273,36 +300,67 @@ class CompatBuilder:
             f"Recorded pair: triton={triton[:12]} llvm_last_good={llvm_good[:12]}"
         )
 
-    def fix_incompatibility(self, incompatible_llvm: str) -> str:
-        """
-        Attempt to fix the incompatibility — AI-first, manual fallback.
+    _MAX_FIX_ATTEMPTS: int = 5
 
-        Phase 1 (if ai_fixer available and not yet attempted):
-            Calls ai_fixer.attempt_fix() → verifies build → returns fix_commit.
-        Phase 2 (fallback):
-            Saves state (WAITING_FOR_FIX), prints instructions, raises
-            WaitingForFixError. The CLI catches this and exits gracefully.
+    def fix_incompatibility(self, incompatible_llvm: str) -> str:
+        """Attempt to fix the incompatibility with a verify-and-retry loop.
+
+        For each attempt:
+          1. AI reads the build error log + LLVM diff and produces a fix commit
+          2. Probe tests the fix against the incompatible LLVM commit
+          3. If probe passes, apply the fix and return the commit
+          4. If probe fails, save the new build output to a log file and pass
+             that path to the next AI attempt
+
+        Falls back to WaitingForFixError after max attempts or if AI fails.
 
         Args:
             incompatible_llvm: The first incompatible LLVM commit hash.
 
         Returns:
-            The fix commit hash (only if AI succeeds).
+            The fix commit hash (only if AI fix + verification succeeds).
 
         Raises:
             WaitingForFixError: When manual intervention is required.
         """
         state = self._require_state()
 
-        if self.ai_fixer_factory is not None and not state.ai_fix_attempted:
-            state.phase = CompatBuildPhase.AI_FIXING
-            self.logger.info("Attempting AI-assisted fix...")
-            state.ai_fix_attempted = True
-            fix_commit = self._try_ai_fix(incompatible_llvm, state)
-            if fix_commit is not None:
-                return fix_commit
-            self.logger.info("AI fix did not produce a valid commit; falling back.")
+        if self.ai_fixer_factory is None:
+            return self._raise_waiting_for_fix(state, incompatible_llvm)
 
+        state.phase = CompatBuildPhase.AI_FIXING
+        error_log: Path | None = (
+            Path(state.last_build_error_log) if state.last_build_error_log else None
+        )
+        pre_fix_head = state.current_triton
+
+        for attempt in range(self._MAX_FIX_ATTEMPTS):
+            self.logger.info(
+                f"AI fix attempt {attempt + 1}/{self._MAX_FIX_ATTEMPTS} "
+                f"for LLVM {incompatible_llvm[:12]}"
+            )
+
+            fix_commit = self._try_ai_fix(incompatible_llvm, state, error_log)
+            if fix_commit is None:
+                self.logger.info("AI did not produce a fix; falling back.")
+                break
+
+            self.logger.info(
+                f"Verifying fix {fix_commit[:12]} against LLVM {incompatible_llvm[:12]}"
+            )
+            success, new_error_log = self._verify_fix(fix_commit, incompatible_llvm)
+
+            if success:
+                self.logger.info(f"Fix verified successfully on attempt {attempt + 1}")
+                self._reattach_compat_branch(fix_commit)
+                self.apply_fix(fix_commit)
+                return fix_commit
+
+            self.logger.info(f"Fix incomplete — see {new_error_log} for new errors")
+            self._reattach_compat_branch(fix_commit)
+            error_log = new_error_log
+
+        self._reset_to_pre_fix(pre_fix_head, state)
         return self._raise_waiting_for_fix(state, incompatible_llvm)
 
     def apply_fix(self, fix_commit: str) -> None:
@@ -319,7 +377,7 @@ class CompatBuilder:
         state.current_triton = fix_commit
         state.ai_fix_attempted = False
         state.last_incompatible_llvm = None
-        state.last_build_error = None
+        state.last_build_error_log = None
         state.phase = CompatBuildPhase.FINDING_INCOMPATIBLE
         self.logger.info(f"Applied fix commit: {fix_commit[:12]}")
 
@@ -390,6 +448,24 @@ class CompatBuilder:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _resolve_compiler_path(self, name: str) -> str:
+        """Resolve a compiler name to its full path via conda/which/bare fallback."""
+        if os.path.isabs(name):
+            return name
+        conda_prefix = self.conda_prefix or ""
+        if conda_prefix:
+            conda_path = os.path.join(conda_prefix, "bin", name)
+            if os.path.isfile(conda_path):
+                return conda_path
+        result = self.executor.run_command(["which", name])
+        if result.success:
+            return result.stdout.strip()
+        return name
+
+    @property
+    def _using_clang(self) -> bool:
+        return "clang" in self._cc
 
     def _require_state(self) -> CompatBuildState:
         if self.state is None:
@@ -532,18 +608,17 @@ class CompatBuilder:
             raise RuntimeError(f"Cannot resolve {rev} in {repo_path}: {result.stderr}")
         return result.stdout.strip()
 
-    def _probe_llvm_compatible(
+    def _probe_llvm(
         self, worktree: str, llvm_commit: str, conda_prefix: str
-    ) -> bool:
-        """Test if a single LLVM commit is compatible with current Triton.
+    ) -> CommandResult:
+        """Run the compat probe against a single LLVM commit.
 
-        Checks out the given LLVM commit, runs the compat probe, then
-        restores the previous HEAD.  Used as a fast pre-check before
-        launching a full ``git bisect`` — e.g. after an AI fix to see
-        whether the bad boundary is now compatible.
+        Checks out the given LLVM commit, runs the probe, then restores
+        the previous HEAD.
 
         Returns:
-            True if the probe passes (compatible), False otherwise.
+            The CommandResult from the probe (check .success for pass/fail,
+            .output for the build log specific to this single LLVM commit).
         """
         llvm_dir = str(Path(worktree) / _LLVM_SUBDIR)
 
@@ -557,7 +632,13 @@ class CompatBuilder:
         )
         if not checkout.success:
             self.logger.warning(f"Cannot checkout LLVM {llvm_commit[:12]} for probe")
-            return False
+            return CommandResult(
+                command=f"git checkout {llvm_commit}",
+                exit_code=1,
+                stdout="",
+                stderr=checkout.stderr,
+                duration_seconds=0.0,
+            )
 
         self.logger.info(f"Probing LLVM {llvm_commit[:12]} for compatibility")
         probe = self._write_compat_probe_script(worktree)
@@ -570,24 +651,60 @@ class CompatBuilder:
         if prev:
             self.executor.run_command(["git", "checkout", prev], cwd=llvm_dir)
 
-        return result.success
+        return result
+
+    def _probe_llvm_compatible(
+        self, worktree: str, llvm_commit: str, conda_prefix: str
+    ) -> bool:
+        """Test if a single LLVM commit is compatible with current Triton."""
+        return self._probe_llvm(worktree, llvm_commit, conda_prefix).success
+
+    def _patch_build_script_compilers(self, worktree_path: str) -> None:
+        """Patch build-llvm-project.sh for non-clang compilers. No-op for clang."""
+        if self._using_clang:
+            return
+
+        build_script = Path(worktree_path) / "scripts" / "build-llvm-project.sh"
+        if not build_script.exists():
+            return
+
+        cc = self._resolve_compiler_path(self._cc)
+        cxx = self._resolve_compiler_path(self._cxx)
+
+        content = build_script.read_text()
+        content = content.replace(
+            "-DCMAKE_C_COMPILER=clang",
+            f"-DCMAKE_C_COMPILER={cc}",
+        )
+        content = content.replace(
+            "-DCMAKE_CXX_COMPILER=clang++",
+            f"-DCMAKE_CXX_COMPILER={cxx}",
+        )
+        content = content.replace("-DLLVM_ENABLE_LLD=ON", "")
+        build_script.write_text(content)
+        self.logger.info(f"Patched build-llvm-project.sh to use {cc}/{cxx}")
 
     def _ensure_llvm_repo(self, llvm_commit: str, worktree_path: str) -> None:
         """Ensure llvm-project exists in the worktree with full git history.
 
-        ``make dev-install-llvm`` often creates a shallow clone.  The bisect
-        step needs every commit between *old_llvm* and *new_llvm*, so we
-        unconditionally unshallow the repo after the initial build.
+        ``scripts/build-llvm-project.sh`` often creates a shallow clone.
+        The bisect step needs every commit between *old_llvm* and *new_llvm*,
+        so we unconditionally unshallow the repo after the initial build.
         """
         llvm_dir = Path(worktree_path) / _LLVM_SUBDIR
         if not llvm_dir.exists():
             self.logger.info(
                 f"Cloning/fetching LLVM repo into {llvm_dir} at {llvm_commit[:12]}"
             )
+            self._patch_build_script_compilers(worktree_path)
+            llvm_build_path = str(Path(worktree_path) / ".llvm-project" / "build")
             result = self.executor.run_command_streaming(
-                ["make", "dev-install-llvm"],
+                [str(Path(worktree_path) / "scripts" / "build-llvm-project.sh")],
                 cwd=worktree_path,
-                env={"LLVM_COMMIT_HASH": llvm_commit},
+                env={
+                    "LLVM_COMMIT_HASH": llvm_commit,
+                    "LLVM_BUILD_PATH": llvm_build_path,
+                },
             )
             if not result.success:
                 raise RuntimeError(
@@ -621,23 +738,66 @@ class CompatBuilder:
         Write a temporary compat probe shell script.
 
         The script is passed to `git bisect run`. For each LLVM commit that
-        git bisect checks out in llvm-project, it runs the three-step probe:
-          1. build (make dev-install-llvm)
-          2. import (python -c "import triton")
-          3. compile smoke
+        git bisect checks out in llvm-project, it runs the four-step probe:
+          1. build LLVM (scripts/build-llvm-project.sh)
+          2. build Triton (pip install -e .)
+          3. import (python -c "import triton")
+          4. compile smoke
 
         Exit code 0 = compatible (good), non-zero = incompatible (bad).
         """
+        cc = self._resolve_compiler_path(self._cc)
+        cxx = self._resolve_compiler_path(self._cxx)
+
+        # When using a non-clang compiler, patch the build script and
+        # override Triton's build env.  When using clang (default), the
+        # build script's own config is correct — no patching needed.
+        if self._using_clang:
+            patch_lines = ""
+            triton_build_env = ""
+        else:
+            patch_lines = (
+                "# Patch build script compilers (mirrors _patch_build_script_compilers)\n"
+                f'sed -i "s|-DCMAKE_C_COMPILER=clang|-DCMAKE_C_COMPILER={cc}|g" '
+                '"$TRITON_WORKTREE/scripts/build-llvm-project.sh"\n'
+                f'sed -i "s|-DCMAKE_CXX_COMPILER=clang++|-DCMAKE_CXX_COMPILER={cxx}|g" '
+                '"$TRITON_WORKTREE/scripts/build-llvm-project.sh"\n'
+                'sed -i "s|-DLLVM_ENABLE_LLD=ON||g" '
+                '"$TRITON_WORKTREE/scripts/build-llvm-project.sh"\n'
+            )
+            triton_build_env = (
+                "export TRITON_BUILD_WITH_CLANG_LLD=0\n"
+                f'export CC="{cc}"\n'
+                f'export CXX="{cxx}"\n'
+            )
+
         script_content = (
             "#!/usr/bin/env bash\n"
             "set -e\n"
             'LLVM_COMMIT=$(git -C "$TRITON_WORKTREE/llvm-project" rev-parse HEAD)\n'
             "export LLVM_COMMIT_HASH=$LLVM_COMMIT\n"
-            "# Step 1: build\n"
-            'make -C "$TRITON_WORKTREE" dev-install-llvm || exit 1\n'
-            "# Step 2: import\n"
+            'LLVM_BUILD_PATH="$TRITON_WORKTREE/.llvm-project/build"\n'
+            "# Clean LLVM build directory to avoid stale CMake cache\n"
+            'rm -rf "$LLVM_BUILD_PATH"\n'
+            "# Clean Triton build directory to avoid generator mismatch\n"
+            'rm -rf "$TRITON_WORKTREE/build"\n'
+            "unset CMAKE_ARGS\n"
+            f"{patch_lines}"
+            "# Step 1: build LLVM\n"
+            'LLVM_BUILD_PATH="$LLVM_BUILD_PATH" '
+            '"$TRITON_WORKTREE/scripts/build-llvm-project.sh" || exit 1\n'
+            "# Step 2: build Triton\n"
+            f"{triton_build_env}"
+            "export TRITON_BUILD_WITH_CCACHE=0\n"
+            'export LLVM_INCLUDE_DIRS="$LLVM_BUILD_PATH/include"\n'
+            'export LLVM_LIBRARY_DIR="$LLVM_BUILD_PATH/lib"\n'
+            'export LLVM_SYSPATH="$LLVM_BUILD_PATH"\n'
+            'cd "$TRITON_WORKTREE"\n'
+            '"$CONDA_PREFIX/bin/python" -m pip install -e . '
+            "--no-build-isolation -v || exit 1\n"
+            "# Step 3: import\n"
             '"$CONDA_PREFIX/bin/python" -c "import triton" || exit 1\n'
-            "# Step 3: compile smoke kernel (must be a .py file for @triton.jit)\n"
+            "# Step 4: compile smoke kernel (must be a .py file for @triton.jit)\n"
             "_SMOKE=/tmp/_compat_smoke_kernel.py\n"
             "cat > $_SMOKE << 'KERNEL_EOF'\n"
             "import triton\n"
@@ -691,24 +851,38 @@ class CompatBuilder:
             )
         return result.stdout.strip()
 
-    def _extract_build_error(self, output: str) -> str | None:
-        """Extract a truncated error snippet from command output."""
+    def _save_build_error_log(self, output: str | None) -> Path | None:
+        """Save raw build output to a log file for the AI agent to read.
+
+        Logs are written to the state log_dir (outside the worktree) so
+        that ``git add -A`` in the worktree won't commit them.
+
+        Returns the path to the log file, or None if output is empty.
+        """
         if not output:
             return None
-        lines = output.splitlines()
-        error_lines = [ln for ln in lines if "error:" in ln.lower()]
-        if error_lines:
-            return "\n".join(error_lines[:20])
-        return "\n".join(lines[-30:]) if len(lines) > 30 else output
+        state = self._require_state()
+
+        log_dir = Path(state.log_dir) / "build_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"build_error_{uuid4().hex[:12]}.log"
+        log_path.write_text(output)
+        self.logger.info(f"Build error log saved to {log_path}")
+        return log_path
 
     def _try_ai_fix(
-        self, incompatible_llvm: str, state: CompatBuildState
+        self,
+        incompatible_llvm: str,
+        state: CompatBuildState,
+        error_log: Path | None = None,
     ) -> str | None:
-        """
-        Create an AI fixer via the factory and attempt a fix.
+        """Create an AI fixer and attempt a fix with the given build error log.
 
-        The factory is called with the worktree path so the fixer operates
-        in the correct directory where llvm-project/ and the compat branch live.
+        Args:
+            incompatible_llvm: The incompatible LLVM commit hash.
+            state: Current compat build state.
+            error_log: Path to the build error log file for the AI to read.
+                If None, uses state.last_build_error_log.
 
         Returns the fix commit hash, or None if the AI did not produce one.
         """
@@ -717,10 +891,15 @@ class CompatBuilder:
         worktree = state.worktree_path
         if worktree is None:
             return None
+
+        log_path = error_log
+        if log_path is None and state.last_build_error_log:
+            log_path = Path(state.last_build_error_log)
+
         try:
             ai_fixer = self.ai_fixer_factory(worktree)
             fix_commit = ai_fixer.attempt_fix(
-                build_error=state.last_build_error,
+                build_error_log=log_path,
                 incompatible_llvm=incompatible_llvm,
                 llvm_bump_commit=state.llvm_bump_commit,
             )
@@ -730,7 +909,6 @@ class CompatBuilder:
 
         if fix_commit and isinstance(fix_commit, str):
             self.logger.info(f"AI produced fix commit: {fix_commit[:12]}")
-            self.apply_fix(fix_commit)
             return fix_commit
         return None
 
@@ -744,19 +922,50 @@ class CompatBuilder:
         raise WaitingForFixError(
             state_path=state_path,
             incompatible_llvm=incompatible_llvm,
-            build_error=state.last_build_error,
+            build_error_log=state.last_build_error_log,
         )
 
-    def _verify_fix(self, fix_commit: str, llvm_commit: str) -> bool:
-        """
-        Verify that the fix commit is compatible with the given LLVM commit.
+    def _reset_to_pre_fix(
+        self, pre_fix_head: str | None, state: CompatBuildState
+    ) -> None:
+        """Discard stacked broken commits from failed AI attempts."""
+        worktree = state.worktree_path
+        if not pre_fix_head or not worktree:
+            return
+        self.logger.info(f"Resetting worktree to pre-fix state {pre_fix_head[:12]}")
+        self.executor.run_command(
+            ["git", "reset", "--hard", pre_fix_head],
+            cwd=worktree,
+        )
+        self._reattach_compat_branch(pre_fix_head)
+
+    def _reattach_compat_branch(self, commit: str) -> None:
+        """Re-attach HEAD to the compat branch after a detaching checkout."""
+        state = self._require_state()
+        worktree = state.worktree_path
+        if worktree is None:
+            return
+        branch = f"{_COMPAT_BRANCH_PREFIX}/{state.llvm_bump_commit[:8]}"
+        self.executor.run_command(
+            ["git", "checkout", "-B", branch, commit],
+            cwd=worktree,
+        )
+
+    def _verify_fix(
+        self, fix_commit: str, llvm_commit: str
+    ) -> tuple[bool, Path | None]:
+        """Verify that the fix commit is compatible with the given LLVM commit.
 
         Checks out fix_commit in the worktree and runs the compat probe.
+
+        Returns:
+            Tuple of (success, error_log_path). error_log_path is the path to
+            the raw build output if the probe failed, None if it succeeded.
         """
         state = self._require_state()
         worktree = state.worktree_path
         if worktree is None:
-            return False
+            return False, None
 
         checkout = self.executor.run_command(
             ["git", "checkout", fix_commit],
@@ -764,7 +973,16 @@ class CompatBuilder:
         )
         if not checkout.success:
             self.logger.error(f"Cannot checkout fix commit {fix_commit[:12]}")
-            return False
+            return False, None
+
+        llvm_dir = str(Path(worktree) / _LLVM_SUBDIR)
+        llvm_checkout = self.executor.run_command(
+            ["git", "checkout", llvm_commit],
+            cwd=llvm_dir,
+        )
+        if not llvm_checkout.success:
+            self.logger.error(f"Cannot checkout LLVM {llvm_commit[:12]} for verify")
+            return False, None
 
         probe = self._write_compat_probe_script(worktree)
         result: CommandResult = self.executor.run_command(
@@ -772,4 +990,9 @@ class CompatBuilder:
             cwd=worktree,
             env={"TRITON_WORKTREE": worktree, "CONDA_PREFIX": self.conda_prefix or ""},
         )
-        return result.success
+
+        if result.success:
+            return True, None
+
+        error_log = self._save_build_error_log(result.output)
+        return False, error_log

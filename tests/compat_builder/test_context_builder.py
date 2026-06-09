@@ -79,56 +79,59 @@ class BuildFixContextTest(unittest.TestCase):
                 "git show": _FakeResult(
                     success=True, stdout="--- a/lib/Foo.cpp\n+++ b/lib/Foo.cpp"
                 ),
-                "cat": _FakeResult(success=True, stdout="int main() {}"),
             }
         )
-        build_error = "/src/lib/Foo.cpp:42:10: error: no member named 'getBar'"
+        import tempfile
 
-        # pyre-ignore[6]: _FakeExecutor is not ShellExecutor
-        context = build_fix_context(
-            build_error=build_error,
-            incompatible_llvm="abc123def456",
-            llvm_bump_commit="def456abc123",
-            triton_dir=Path("/fake/triton"),
-            llvm_dir=Path("/fake/triton/llvm-project"),
-            executor=executor,
-        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+            f.write("/src/lib/Foo.cpp:42:10: error: no member named 'getBar'")
+            error_log = Path(f.name)
 
-        self.assertIn("Section 1: Build Error", context)
-        self.assertIn("Section 2: LLVM API Change", context)
-        self.assertIn("Section 3: Reference Fix", context)
-        self.assertIn("Section 4: Current Triton Source", context)
+        try:
+            # pyre-ignore[6]: _FakeExecutor is not ShellExecutor
+            context = build_fix_context(
+                build_error_log=error_log,
+                incompatible_llvm="abc123def456",
+                llvm_bump_commit="def456abc123",
+                triton_dir=Path("/fake/triton"),
+                llvm_dir=Path("/fake/triton/llvm-project"),
+                executor=executor,
+            )
 
-    def test_respects_max_total_chars(self) -> None:
+            self.assertIn("Section 1: LLVM API Change", context)
+            self.assertIn("Section 2: Build Error Log", context)
+            self.assertIn("Section 3: Reference Fix", context)
+            self.assertIn(str(error_log), context)
+        finally:
+            error_log.unlink(missing_ok=True)
+
+    def test_llvm_diff_appears_before_error_log(self) -> None:
         executor = _FakeExecutor(
             {
-                "git diff": _FakeResult(success=True, stdout="x" * 10000),
-                "git show": _FakeResult(success=True, stdout="y" * 10000),
-                "cat": _FakeResult(success=True, stdout="z" * 10000),
+                "git diff": _FakeResult(success=True, stdout="diff content"),
             }
         )
-        build_error = "/a/b.cpp:1: error: foo\n" + "e" * 10000
 
         # pyre-ignore[6]: _FakeExecutor is not ShellExecutor
         context = build_fix_context(
-            build_error=build_error,
+            build_error_log=Path("/tmp/fake_error.log"),
             incompatible_llvm="abc123",
             llvm_bump_commit="def456",
             triton_dir=Path("/fake"),
             llvm_dir=Path("/fake/llvm-project"),
             executor=executor,
-            max_total_chars=5000,
         )
 
-        # Context should be truncated to roughly the budget
-        self.assertLess(len(context), 8000)
+        llvm_pos = context.find("Section 1: LLVM API Change")
+        error_pos = context.find("Section 2: Build Error Log")
+        self.assertLess(llvm_pos, error_pos)
 
-    def test_handles_failed_git_commands(self) -> None:
+    def test_handles_none_error_log(self) -> None:
         executor = _FakeExecutor()  # all commands fail
 
         # pyre-ignore[6]: _FakeExecutor is not ShellExecutor
         context = build_fix_context(
-            build_error="some error",
+            build_error_log=None,
             incompatible_llvm="abc123",
             llvm_bump_commit="def456",
             triton_dir=Path("/fake"),
@@ -136,5 +139,6 @@ class BuildFixContextTest(unittest.TestCase):
             executor=executor,
         )
 
-        self.assertIn("Section 1: Build Error", context)
+        self.assertIn("Section 1: LLVM API Change", context)
+        self.assertIn("No build error log available", context)
         self.assertIn("failed to get LLVM diff", context)

@@ -48,11 +48,11 @@ class WaitingForFixErrorTest(unittest.TestCase):
         err = WaitingForFixError(
             state_path=path,
             incompatible_llvm="abc123def456789abc",
-            build_error="error: undefined symbol",
+            build_error_log="/tmp/build_error.log",
         )
         self.assertEqual(err.state_path, path)
         self.assertEqual(err.incompatible_llvm, "abc123def456789abc")
-        self.assertEqual(err.build_error, "error: undefined symbol")
+        self.assertEqual(err.build_error_log, "/tmp/build_error.log")
 
     def test_message_contains_short_hash_and_path(self) -> None:
         path = Path("/tmp/state.json")
@@ -63,12 +63,12 @@ class WaitingForFixErrorTest(unittest.TestCase):
         self.assertIn("abc123def456", str(err))
         self.assertIn(str(path), str(err))
 
-    def test_build_error_defaults_to_none(self) -> None:
+    def test_build_error_log_defaults_to_none(self) -> None:
         err = WaitingForFixError(
             state_path=Path("/tmp/s.json"),
             incompatible_llvm="deadbeef1234abcd",
         )
-        self.assertIsNone(err.build_error)
+        self.assertIsNone(err.build_error_log)
 
     def test_is_exception(self) -> None:
         err = WaitingForFixError(
@@ -142,13 +142,13 @@ class CompatBuilderApplyFixTest(unittest.TestCase):
             builder = _make_builder(tmp)
             builder.state.ai_fix_attempted = True
             builder.state.last_incompatible_llvm = "bad_llvm"
-            builder.state.last_build_error = "some error"
+            builder.state.last_build_error_log = "/tmp/error.log"
 
             builder.apply_fix("fix_commit_abc123")
 
             self.assertFalse(builder.state.ai_fix_attempted)
             self.assertIsNone(builder.state.last_incompatible_llvm)
-            self.assertIsNone(builder.state.last_build_error)
+            self.assertIsNone(builder.state.last_build_error_log)
 
     def test_apply_fix_sets_phase_to_finding_incompatible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -282,22 +282,24 @@ class CompatBuilderFixIncompatibilityTest(unittest.TestCase):
             self.assertIsNotNone(cm.exception.state_path)
             self.assertTrue(cm.exception.state_path.exists())
 
-    def test_ai_fixer_success_returns_commit(self) -> None:
+    def test_ai_fix_and_verify_success_returns_commit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ai_fixer = MagicMock()
             ai_fixer.attempt_fix.return_value = "fix_commit_xyz"
             builder = _make_builder(tmp, ai_fixer_factory=lambda wt: ai_fixer)
+            builder._verify_fix = MagicMock(return_value=(True, None))
 
             result = builder.fix_incompatibility("bad_llvm_abc")
 
             self.assertEqual(result, "fix_commit_xyz")
             self.assertEqual(builder.state.current_triton, "fix_commit_xyz")
 
-    def test_ai_fixer_success_sets_phase_to_finding(self) -> None:
+    def test_ai_fix_and_verify_success_sets_phase_to_finding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ai_fixer = MagicMock()
             ai_fixer.attempt_fix.return_value = "fix_commit_xyz"
             builder = _make_builder(tmp, ai_fixer_factory=lambda wt: ai_fixer)
+            builder._verify_fix = MagicMock(return_value=(True, None))
             builder.fix_incompatibility("bad_llvm_abc")
             self.assertEqual(builder.state.phase, CompatBuildPhase.FINDING_INCOMPATIBLE)
 
@@ -317,28 +319,44 @@ class CompatBuilderFixIncompatibilityTest(unittest.TestCase):
             with self.assertRaises(WaitingForFixError):
                 builder.fix_incompatibility("bad_llvm_abc")
 
-    def test_ai_fixer_skipped_when_already_attempted(self) -> None:
+    def test_retries_on_verify_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ai_fixer = MagicMock()
-            ai_fixer.attempt_fix.return_value = "some_commit"
+            ai_fixer.attempt_fix.side_effect = [
+                "fix_attempt_1",
+                "fix_attempt_2",
+            ]
             builder = _make_builder(tmp, ai_fixer_factory=lambda wt: ai_fixer)
-            builder.state.ai_fix_attempted = True
+            error_log = Path(tmp) / "error.log"
+            error_log.write_text("new error")
+            builder._verify_fix = MagicMock(
+                side_effect=[
+                    (False, error_log),
+                    (True, None),
+                ]
+            )
+
+            result = builder.fix_incompatibility("bad_llvm_abc")
+
+            self.assertEqual(result, "fix_attempt_2")
+            self.assertEqual(ai_fixer.attempt_fix.call_count, 2)
+
+    def test_caps_at_max_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ai_fixer = MagicMock()
+            ai_fixer.attempt_fix.return_value = "fix_attempt"
+            builder = _make_builder(tmp, ai_fixer_factory=lambda wt: ai_fixer)
+            error_log = Path(tmp) / "error.log"
+            error_log.write_text("persistent error")
+            builder._verify_fix = MagicMock(return_value=(False, error_log))
 
             with self.assertRaises(WaitingForFixError):
                 builder.fix_incompatibility("bad_llvm_abc")
 
-            ai_fixer.attempt_fix.assert_not_called()
-
-    def test_ai_fixer_sets_attempted_flag(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            ai_fixer = MagicMock()
-            ai_fixer.attempt_fix.return_value = None
-            builder = _make_builder(tmp, ai_fixer_factory=lambda wt: ai_fixer)
-            try:
-                builder.fix_incompatibility("bad_llvm_abc")
-            except WaitingForFixError:
-                pass
-            self.assertTrue(builder.state.ai_fix_attempted)
+            self.assertEqual(
+                ai_fixer.attempt_fix.call_count,
+                builder._MAX_FIX_ATTEMPTS,
+            )
 
 
 class CompatBuilderParseFirstBadTest(unittest.TestCase):
@@ -382,49 +400,53 @@ class CompatBuilderParseFirstBadTest(unittest.TestCase):
         self.assertIsNone(result)
 
 
-class CompatBuilderExtractBuildErrorTest(unittest.TestCase):
-    def _make_builder_no_state(self) -> CompatBuilder:
-        return CompatBuilder(
-            triton_dir="/tmp/t",
-            llvm_bump_commit="abc",
-            output_csv="/tmp/o.csv",
-            logger=MagicMock(),
-        )
-
-    def test_extracts_error_lines(self) -> None:
-        builder = self._make_builder_no_state()
-        output = "Building...\nerror: undefined reference to 'foo'\nDone\n"
-        result = builder._extract_build_error(output)
-        self.assertIsNotNone(result)
-        self.assertIn("error:", result)
+class CompatBuilderSaveBuildErrorLogTest(unittest.TestCase):
+    def test_saves_full_output_to_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _make_builder(tmp)
+            output = "\n".join(
+                [
+                    "ir.cc:42: error: no matching function for call to 'ConstantIntOp::build'",
+                    "note: candidate function not viable: requires 3 arguments",
+                    "ir.cc:55: error: no matching function for call to 'ConstantIntOp::build'",
+                    "note: candidate function not viable: requires 3 arguments",
+                    "Utility.cpp:100: error: no matching function for call to 'ElectSyncOp::build'",
+                ]
+            )
+            log_path = builder._save_build_error_log(output)
+            self.assertIsNotNone(log_path)
+            assert log_path is not None
+            self.assertTrue(log_path.exists())
+            saved = log_path.read_text()
+            self.assertEqual(saved, output)
+            self.assertIn("note: candidate function not viable", saved)
+            self.assertEqual(saved.count("error:"), 3)
 
     def test_returns_none_for_empty_output(self) -> None:
-        builder = self._make_builder_no_state()
-        result = builder._extract_build_error("")
-        self.assertIsNone(result)
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _make_builder(tmp)
+            self.assertIsNone(builder._save_build_error_log(""))
+            self.assertIsNone(builder._save_build_error_log(None))
 
-    def test_falls_back_to_last_lines_when_no_error_keyword(self) -> None:
-        builder = self._make_builder_no_state()
-        lines = [f"line {i}" for i in range(50)]
-        output = "\n".join(lines)
-        result = builder._extract_build_error(output)
-        self.assertIsNotNone(result)
-        self.assertIn("line 49", result)
+    def test_unique_per_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _make_builder(tmp)
+            path1 = builder._save_build_error_log("error 1")
+            path2 = builder._save_build_error_log("error 2")
+            self.assertIsNotNone(path1)
+            self.assertIsNotNone(path2)
+            assert path1 is not None and path2 is not None
+            self.assertNotEqual(path1, path2)
+            self.assertEqual(path1.read_text(), "error 1")
+            self.assertEqual(path2.read_text(), "error 2")
 
-    def test_returns_full_output_when_short(self) -> None:
-        builder = self._make_builder_no_state()
-        output = "short output\nonly a few lines"
-        result = builder._extract_build_error(output)
-        self.assertEqual(result, output)
-
-    def test_limits_error_lines_to_twenty(self) -> None:
-        builder = self._make_builder_no_state()
-        lines = [f"error: issue {i}" for i in range(30)]
-        output = "\n".join(lines)
-        result = builder._extract_build_error(output)
-        self.assertIsNotNone(result)
-        assert result is not None
-        self.assertLessEqual(len(result.splitlines()), 20)
+    def test_writes_outside_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            builder = _make_builder(tmp)
+            log_path = builder._save_build_error_log("error output")
+            assert log_path is not None
+            worktree = builder.state.worktree_path or ""
+            self.assertFalse(str(log_path).startswith(worktree))
 
 
 class CompatBuilderResolveWorktreePathTest(unittest.TestCase):
@@ -628,6 +650,9 @@ class CompatBuilderFindNextIncompatibleErrorTest(unittest.TestCase):
             )
             executor.run_command.return_value = MagicMock(
                 success=True, stdout="prev_commit_hash\n"
+            )
+            builder._probe_llvm = MagicMock(
+                return_value=MagicMock(success=False, output="error: build failed")
             )
 
             result = builder.find_next_incompatible()

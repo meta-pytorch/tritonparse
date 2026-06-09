@@ -141,6 +141,14 @@ def _add_compat_build_args(parser: argparse.ArgumentParser) -> None:
         help="Path to CSV file to verify (for --verify)",
     )
 
+    # Compiler control (env: TRITON_BISECT_COMPILER)
+    parser.add_argument(
+        "--compiler",
+        type=str,
+        default=None,
+        help="Compiler toolchain for LLVM builds: clang (default) or gcc",
+    )
+
     # TUI control
     parser.add_argument(
         "--tui",
@@ -232,6 +240,7 @@ def _handle_build(args: argparse.Namespace) -> int:
         worktree_root=args.worktree_root,
         worktree_path=args.worktree_path,
         ai_fixer_factory=ai_fixer_factory,
+        compiler=args.compiler,
     )
 
     builder.initialize()
@@ -256,6 +265,7 @@ def _handle_resume(args: argparse.Namespace) -> int:
         worktree_root=state.worktree_root,
         worktree_path=state.worktree_path,
         ai_fixer_factory=ai_fixer_factory,
+        compiler=args.compiler,
     )
     builder.state = state
     builder.conda_prefix = builder._resolve_conda_prefix()

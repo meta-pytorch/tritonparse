@@ -25,8 +25,19 @@ class PromptsTest(unittest.TestCase):
     def test_prompt_forbids_llvm_hash_modification(self) -> None:
         self.assertIn("llvm-hash.txt", COMPAT_FIX_SYSTEM_PROMPT)
 
-    def test_prompt_requires_minimal_fix(self) -> None:
-        self.assertIn("minimal", COMPAT_FIX_SYSTEM_PROMPT.lower())
+    def test_prompt_contains_analysis_stage(self) -> None:
+        self.assertIn("Stage 1", COMPAT_FIX_SYSTEM_PROMPT)
+        self.assertIn("grep", COMPAT_FIX_SYSTEM_PROMPT.lower())
+
+    def test_prompt_contains_execution_stage(self) -> None:
+        self.assertIn("Stage 2", COMPAT_FIX_SYSTEM_PROMPT)
+        self.assertIn("commit", COMPAT_FIX_SYSTEM_PROMPT.lower())
+
+    def test_prompt_instructs_comprehensive_search(self) -> None:
+        prompt_lower = COMPAT_FIX_SYSTEM_PROMPT.lower()
+        self.assertTrue(
+            "all call sites" in prompt_lower or "every call site" in prompt_lower
+        )
 
     def test_prompt_specifies_commit_message_format(self) -> None:
         self.assertIn("compat fix:", COMPAT_FIX_SYSTEM_PROMPT)

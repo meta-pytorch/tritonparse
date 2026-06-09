@@ -69,6 +69,9 @@ class AICompatFixerTest(unittest.TestCase):
             {
                 "git diff": _FakeResult(success=True, stdout="diff content"),
                 "git show": _FakeResult(success=True, stdout="show content"),
+                "git rev-parse": _FakeResult(
+                    success=True, stdout="old_head_before_fix"
+                ),
                 "git log": _FakeResult(
                     success=True,
                     stdout="abc123 compat fix: renamed getFoo to getBar",
@@ -78,7 +81,7 @@ class AICompatFixerTest(unittest.TestCase):
         fixer = self._make_fixer(client, executor)
 
         result = fixer.attempt_fix(
-            build_error="/src/Foo.cpp:42: error: no member 'getBar'",
+            build_error_log=None,
             incompatible_llvm="llvm_abc123",
             llvm_bump_commit="bump_def456",
         )
@@ -91,7 +94,7 @@ class AICompatFixerTest(unittest.TestCase):
         # User prompt should contain the LLVM commit hash
         self.assertEqual(client.last_messages[1].role, "user")
         self.assertIn("llvm_abc123", client.last_messages[1].content)
-        # Should find the compat fix commit
+        # Should find the compat fix commit (HEAD changed)
         self.assertEqual(result, "abc123")
 
     def test_returns_none_when_no_commit_created(self) -> None:
@@ -110,7 +113,7 @@ class AICompatFixerTest(unittest.TestCase):
         fixer = self._make_fixer(client, executor)
 
         result = fixer.attempt_fix(
-            build_error="error",
+            build_error_log=None,
             incompatible_llvm="abc123",
             llvm_bump_commit="def456",
         )
@@ -125,7 +128,7 @@ class AICompatFixerTest(unittest.TestCase):
         fixer = self._make_fixer(client)
 
         result = fixer.attempt_fix(
-            build_error="error",
+            build_error_log=None,
             incompatible_llvm="abc123",
             llvm_bump_commit="def456",
         )
@@ -143,7 +146,7 @@ class AICompatFixerTest(unittest.TestCase):
         fixer = self._make_fixer(client, executor)
 
         result = fixer.attempt_fix(
-            build_error=None,
+            build_error_log=None,
             incompatible_llvm="abc123",
             llvm_bump_commit="def456",
         )
@@ -151,6 +154,31 @@ class AICompatFixerTest(unittest.TestCase):
         self.assertIsNone(result)
         # Should still call the client
         self.assertEqual(client.call_count, 1)
+
+    def test_returns_none_when_head_unchanged(self) -> None:
+        """Detect stale fix commit from a previous iteration."""
+        client = MockClient(responses=["Already fixed"])
+        executor = _FakeExecutor(
+            {
+                "git diff": _FakeResult(success=True, stdout=""),
+                "git show": _FakeResult(success=True, stdout=""),
+                # HEAD before and after AI is the same stale fix commit
+                "git rev-parse": _FakeResult(success=True, stdout="abc123"),
+                "git log": _FakeResult(
+                    success=True,
+                    stdout="abc123 compat fix: old fix from prior round",
+                ),
+            }
+        )
+        fixer = self._make_fixer(client, executor)
+
+        result = fixer.attempt_fix(
+            build_error_log=None,
+            incompatible_llvm="llvm_xyz",
+            llvm_bump_commit="bump_456",
+        )
+
+        self.assertIsNone(result)
 
     def test_user_prompt_contains_instructions(self) -> None:
         client = MockClient(responses=["done"])
@@ -163,7 +191,7 @@ class AICompatFixerTest(unittest.TestCase):
         fixer = self._make_fixer(client, executor)
 
         fixer.attempt_fix(
-            build_error="error",
+            build_error_log=None,
             incompatible_llvm="abc123def456",
             llvm_bump_commit="xyz789",
         )
