@@ -52,6 +52,9 @@ Optional Environment Variables (with defaults):
                    - 0: Pass through test exit code (0=good, 1=bad, 125=skip)
                         Use this to find regression within compatible range
   PER_COMMIT_LOG   Write per-commit log files (default: 1, set to 0 to disable)
+  TRITON_BISECT_CC   C compiler for LLVM builds (default: clang via command -v)
+  TRITON_BISECT_CXX  C++ compiler for LLVM builds (default: clang++ via command -v)
+                     Set to gcc/g++ if conda clang rejects older LLVM code
 
 Example:
   # Minimal usage
@@ -92,6 +95,8 @@ TEST_ARGS=${TEST_ARGS:-""}
 LOG_DIR=${LOG_DIR:-./bisect_logs}
 CONDA_DIR=${CONDA_DIR:-$HOME/miniconda3}
 PER_COMMIT_LOG=${PER_COMMIT_LOG:-1}  # Set to 0 to disable per-commit log files
+TRITON_BISECT_CC=${TRITON_BISECT_CC:-$(command -v clang)}
+TRITON_BISECT_CXX=${TRITON_BISECT_CXX:-$(command -v clang++)}
 
 # Validate we're in LLVM repository
 if [ ! -d .git ]; then
@@ -224,11 +229,34 @@ echo "" | log_output
 echo "=== Phase 1: Building LLVM $SHORT_LLVM ===" | log_output
 LLVM_BUILD_START=$(date +%s)
 
+# Build LLVM with configurable compilers. Defaults to clang/clang++ (matching
+# build-llvm-project.sh). If conda clang rejects older LLVM code with pedantic
+# warnings like -Werror,-Wc2y-extensions, override via TRITON_BISECT_CC/CXX
+# env vars (e.g. TRITON_BISECT_CC=gcc TRITON_BISECT_CXX=g++).
+# NOTE: These cmake args are forwarded to cmake via build-llvm-project.sh's
+# $@ passthrough, overriding its default clang config. If that script ever
+# stops forwarding positional args, this silently falls back to clang.
+echo "Using compilers: CC=$TRITON_BISECT_CC CXX=$TRITON_BISECT_CXX" | log_output
+LLVM_CMAKE_ARGS=(
+  -G Ninja
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  -DLLVM_CCACHE_BUILD=ON
+  -DLLVM_ENABLE_ASSERTIONS=ON
+  -DCMAKE_C_COMPILER="$TRITON_BISECT_CC"
+  -DCMAKE_CXX_COMPILER="$TRITON_BISECT_CXX"
+  -DLLVM_ENABLE_LLD=OFF
+  -DLLVM_OPTIMIZED_TABLEGEN=ON
+  -DLLVM_TARGETS_TO_BUILD="${LLVM_TARGETS:-Native;NVPTX;AMDGPU}"
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=1
+  -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
+  -DCMAKE_INSTALL_PREFIX="$TRITON_DIR/.llvm-project/install"
+)
+
 if [ -n "$LOG_FILE" ]; then
-  LLVM_BUILD_PATH="$LLVM_BUILD_DIR" scripts/build-llvm-project.sh 2>&1 | tee -a "$LOG_FILE"
+  LLVM_BUILD_PATH="$LLVM_BUILD_DIR" scripts/build-llvm-project.sh "${LLVM_CMAKE_ARGS[@]}" 2>&1 | tee -a "$LOG_FILE"
   LLVM_BUILD_CODE=${PIPESTATUS[0]}
 else
-  LLVM_BUILD_PATH="$LLVM_BUILD_DIR" scripts/build-llvm-project.sh 2>&1
+  LLVM_BUILD_PATH="$LLVM_BUILD_DIR" scripts/build-llvm-project.sh "${LLVM_CMAKE_ARGS[@]}" 2>&1
   LLVM_BUILD_CODE=$?
 fi
 

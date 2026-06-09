@@ -185,6 +185,7 @@ class PairTester:
 
                     # Skip header row (only once)
                     if triton_commit.lower() in ("triton", "triton_commit"):
+                        header_skipped = True
                         continue
 
                     # Skip detected header (first non-comment data row if has_header)

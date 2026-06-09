@@ -9,6 +9,7 @@ This module provides:
 - MockClient for testing without actual LLM calls
 """
 
+import logging
 import os
 import subprocess
 import tempfile
@@ -17,6 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, List, Optional, Tuple
 
 from tritonparse._json_compat import JSONDecodeError, loads
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -272,6 +275,8 @@ class ClaudeCodeClient(LLMClient):
             cmd += " --output-format json"
 
             # Execute with retries
+            logger.info(f"Claude CLI command: {cmd}")
+            logger.info(f"Claude CLI cwd: {self.cwd}")
             result = None
             for _attempt in range(self.retry_count):
                 result = subprocess.run(
@@ -282,6 +287,15 @@ class ClaudeCodeClient(LLMClient):
                     timeout=self.timeout,
                     cwd=self.cwd,
                 )
+
+                logger.info(
+                    f"Claude CLI attempt {_attempt + 1}: "
+                    f"returncode={result.returncode}, "
+                    f"stdout_len={len(result.stdout)}, "
+                    f"stderr_len={len(result.stderr)}"
+                )
+                if result.stderr:
+                    logger.info(f"Claude CLI stderr: {result.stderr[:1000]}")
 
                 if result.returncode == 0:
                     return self._parse_response(result.stdout)
