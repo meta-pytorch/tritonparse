@@ -228,6 +228,49 @@ module {
 
         print("✓ SASS PC-offset mapping tests passed")
 
+    def test_sass_inlined_call_stack_uses_innermost_frame(self):
+        """Inlined SASS instructions map to the innermost frame, not the call site.
+
+        nvdisasm emits one ``//## File`` comment per inlined frame, ordered
+        innermost-first. The instruction's true source is the innermost frame
+        (first comment), not the outer call site (last comment). Regression test
+        for instructions previously attributed to the outermost call site.
+        """
+        sass_content = (
+            "Function:_attn_bwd_ws\n"
+            # 4-level inline stack: innermost standard.py:170 ... outer kernel.py:593
+            '\t//## File "/p/standard.py", line 170 inlined at "/p/standard.py", line 194\n'
+            '\t//## File "/p/standard.py", line 194 inlined at "/p/kernel.py", line 227\n'
+            '\t//## File "/p/kernel.py", line 227 inlined at "/p/kernel.py", line 593\n'
+            '\t//## File "/p/kernel.py", line 593\n'
+            '\t//## File ".nv_debug_ptx_txt", line 99\n'
+            "        /*0bc0*/                   USHF.R.S32.HI UR4, URZ, 0x1f, UR5 ;\n"
+            # single-level inline: innermost kernel.py:2005, call site kernel.py:2452
+            '\t//## File "/p/kernel.py", line 2005 inlined at "/p/kernel.py", line 2452\n'
+            '\t//## File "/p/kernel.py", line 2452\n'
+            '\t//## File ".nv_debug_ptx_txt", line 841\n'
+            "        /*11b0*/                   LDS.128 R80, [R88+UR8+0x24440] ;\n"
+        )
+
+        pc_mappings = extract_sass_pc_mappings(sass_content)
+
+        # 4-level inline: attribute to innermost standard.py:170, not kernel.py:593
+        self.assertEqual(pc_mappings[0x0BC0]["file"], "/p/standard.py")
+        self.assertEqual(pc_mappings[0x0BC0]["line"], 170)
+
+        # 1-level inline (the user-reported case): innermost line 2005, not 2452
+        self.assertEqual(pc_mappings[0x11B0]["file"], "/p/kernel.py")
+        self.assertEqual(pc_mappings[0x11B0]["line"], 2005)
+
+        # Comment lines still map to their own literal location.
+        line_mappings = extract_sass_mappings(sass_content)
+        # SASS text line 2 is the innermost frame comment (standard.py:170).
+        self.assertEqual(line_mappings["2"]["line"], 170)
+        # SASS text line 5 is the outermost call-site comment (kernel.py:593).
+        self.assertEqual(line_mappings["5"]["line"], 593)
+
+        print("✓ SASS inlined call stack tests passed")
+
     def test_sass_fuzzy_matching(self):
         """Test that ignore_column parameter enables fuzzy matching."""
         # Simulate SASS (column=0) and PTX (column=24) mappings

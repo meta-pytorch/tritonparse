@@ -227,14 +227,36 @@ def _iter_sass_instructions(sass_content: str):
     Lines referencing ``.nv_debug_ptx_txt`` are skipped so they never become
     the active source location.
 
+    Inlined call stacks::
+
+        //## File "standard.py", line 170 inlined at "standard.py", line 194
+        //## File "standard.py", line 194 inlined at "kernel.py", line 227
+        //## File "kernel.py", line 227 inlined at "kernel.py", line 593
+        //## File "kernel.py", line 593
+                /*0bc0*/   INSTR ;
+
+    ``nvdisasm`` emits one ``//## File`` comment per inlined frame, ordered
+    innermost-first. The instruction's true source is the innermost frame
+    (the first comment, here ``standard.py:170``); the following comments are
+    the outer call sites. The instruction is therefore attributed to the
+    first comment of its block, not the last.
+
     Yields:
         Tuple of (line_num, pc_hex, source_info):
         - line_num: 1-based line number in the SASS text
         - pc_hex: hex offset string (e.g., "0180"), or None for //## File
           comment lines
-        - source_info: dict with {file, line, column}
+        - source_info: dict with {file, line, column}. For instruction lines
+          this is the innermost frame of the preceding ``//## File`` block;
+          for comment lines it is that comment's own literal location.
     """
-    current_source_info = None
+    # Source location attributed to the next instruction line: the innermost
+    # frame of the current //## File block.
+    instr_source_info = None
+    # True while the current block has not yet captured its innermost frame.
+    # Once set, later //## File comments in the same block (outer call sites)
+    # must not override the instruction's attribution.
+    awaiting_innermost = True
     lines = sass_content.split("\n")
 
     for line_num, line in enumerate(lines, 1):
@@ -244,17 +266,23 @@ def _iter_sass_instructions(sass_content: str):
         match = SASS_LOC_PATTERN.match(line.strip())
         if match:
             file_path, source_line = match.groups()
-            current_source_info = {
+            comment_source_info = {
                 "file": file_path,
                 "line": int(source_line),
                 "column": 0,
             }
-            yield line_num, None, current_source_info
+            if awaiting_innermost:
+                instr_source_info = comment_source_info
+                awaiting_innermost = False
+            # The comment line itself maps to its own literal location.
+            yield line_num, None, comment_source_info
 
-        elif current_source_info:
+        elif instr_source_info:
             pc_match = SASS_PC_PATTERN.match(line)
             if pc_match:
-                yield line_num, pc_match.group(1), current_source_info
+                yield line_num, pc_match.group(1), instr_source_info
+                # The next //## File comment begins a new inline stack.
+                awaiting_innermost = True
 
 
 def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
