@@ -13,7 +13,7 @@ from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
 from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
-from .ir_analysis import _generate_ir_analysis
+from .ir_analysis import _generate_ir_analysis, generate_roofline
 from .ir_parser import _parse_generic_loc, extract_ptx_amdgcn_mappings
 from .mapper import create_bidirectional_mapping, create_python_mapping
 from .sourcemap_utils import (
@@ -999,6 +999,21 @@ def parse_single_rank(
                     "ir_analysis": ir_analysis,
                 }
                 all_output_lines[output_file].append(dumps(ir_analysis_event) + "\n")
+
+        if compilation_event and launches_with_indices:
+            roofline = generate_roofline(compilation_event, launches_with_indices)
+            if roofline:
+                roofline_event = {
+                    "event_type": "roofline",
+                    "hash": _kernel_hash,
+                    "name": compilation_event.get("payload", {})
+                    .get("metadata", {})
+                    .get("name"),
+                    "roofline": roofline,
+                }
+                roofline_event["occurrence_id"] = next_occurrence_id
+                next_occurrence_id += 1
+                all_output_lines[output_file].append(dumps(roofline_event) + "\n")
 
         if compilation_event and launches_with_indices:
             sames, diffs, launch_index_map = _generate_launch_diff(

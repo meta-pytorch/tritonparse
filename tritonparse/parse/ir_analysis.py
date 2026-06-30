@@ -505,6 +505,302 @@ def _get_dtype_bits(dtype_str: str) -> int | None:
     return None
 
 
+# =============================================================================
+# ROOFLINE (PER-LAUNCH)
+# =============================================================================
+# Per-launch roofline for a compiled kernel. The per-CTA template (global-memory
+# bytes from tt.load/tt.store tensor shapes x dtype size, plus GEMM FLOPs
+# 2*M*N*K) is computed once from TTIR; generate_roofline() then scales it by each
+# launch's grid and tensor arg sizes to get the *total* bytes moved per launch
+# (one compiled kernel is launched many times with different inputs/grids).
+# Adapts Taylor Robie's prototype (D96241456): conservative contract — if any I/O
+# line is unparseable, per-CTA bytes is None rather than a wrong number, and
+# per-launch bytes is the min of the IR-times-grid and arg-size estimates.
+# Achieved GB/s needs per-launch durations (absent from the trace) and stays a
+# profiler/NCU concern.
+
+# I/O ops counted in TTIR. amdgpu.buffer_* / global_* are TTGIR/AMDGCN-stage ops
+# (covered by the amd_buffer_ops analyzer) and never appear in TTIR, so counting
+# only tt.load/tt.store here is both correct and avoids double counting.
+_ROOFLINE_IO_KEYS = ("tt.load", "tt.store")
+
+# Matches a pointer-tensor type printed for a tt.load/tt.store operand, e.g.
+# "tensor<1024x!tt.ptr<f32>>" or "tensor<16x16x!tt.ptr<bf16>>".
+# Group 1 = "x"-joined integer dims; group 2 = element dtype token.
+_ROOFLINE_PTR_TENSOR_RE = re.compile(
+    r"^tensor<([0-9]+(?:x[0-9]+)*)x!tt\.ptr<([A-Za-z0-9_]+)>>$"
+)
+
+# Cap on the number of advisory notes emitted per kernel (notes hygiene).
+_ROOFLINE_MAX_NOTES = 20
+
+
+def _dtype_token_to_bytes(token: str) -> int | None:
+    """Convert an element-type token (e.g. "f32", "bf16") to bytes, or None.
+
+    Wraps ``_get_dtype_bits`` and returns None for unknown dtypes or sub-byte
+    types (e.g. i1), so the caller treats them conservatively as unparseable.
+    """
+    bits = _get_dtype_bits(token)
+    if bits is None:
+        return None
+    if bits % 8 != 0:
+        # Sub-byte dtype (e.g. i1) — not representable as whole bytes.
+        return None
+    return bits // 8
+
+
+def _roofline_io_elem(type_str: str) -> tuple[int, int] | None:
+    """Parse "tensor<DIMSx!tt.ptr<DTYPE>>" into (numel, elem_bytes).
+
+    Returns None if the type does not match the pointer-tensor form or the
+    element dtype is unknown/sub-byte (conservative-null path).
+    """
+    match = _ROOFLINE_PTR_TENSOR_RE.match(type_str)
+    if not match:
+        return None
+    dims_str, dtype_token = match.groups()
+    elem_bytes = _dtype_token_to_bytes(dtype_token)
+    if elem_bytes is None:
+        return None
+    numel = 1
+    for dim in dims_str.split("x"):
+        numel *= int(dim)
+    return numel, elem_bytes
+
+
+def _roofline_count_bytes(
+    ttir: str,
+) -> tuple[int | None, dict[str, int] | None, list[str]]:
+    """Count global-memory bytes moved per CTA from tt.load/tt.store lines.
+
+    Returns ``(bytes_total, breakdown, notes)``. ``bytes_total`` is None (and
+    ``breakdown`` is None) if any I/O line is unparseable — the prototype's
+    conservative contract. Otherwise ``breakdown`` is ``{"load":.., "store":..}``.
+    """
+    load_bytes = 0
+    store_bytes = 0
+    bytes_ok = True
+    notes: list[str] = []
+
+    for line in ttir.splitlines():
+        if not any(key in line for key in _ROOFLINE_IO_KEYS):
+            continue
+        # The operand pointer-tensor type is printed after the last " : ",
+        # before any trailing " loc(...)" (mirrors the prototype).
+        type_str = line.split(" : ")[-1].split(" loc")[0].strip()
+        parsed = _roofline_io_elem(type_str)
+        if parsed is None:
+            bytes_ok = False
+            # Classify the failure for a useful note without trusting the count.
+            match = _ROOFLINE_PTR_TENSOR_RE.match(type_str)
+            if match:
+                notes.append(f"unknown or sub-byte dtype on io line: {match.group(2)}")
+            else:
+                notes.append(f"unparseable io line: {line.strip()[:160]}")
+            continue
+        numel, elem_bytes = parsed
+        size = numel * elem_bytes
+        if "tt.store" in line:
+            store_bytes += size
+        else:
+            load_bytes += size
+
+    if "tt.atomic" in ttir:
+        notes.append("atomics present but not counted in bytes_moved_per_cta")
+
+    if not any(key in ttir for key in _ROOFLINE_IO_KEYS):
+        notes.append("no tt.load/tt.store found")
+
+    if bytes_ok:
+        return (
+            load_bytes + store_bytes,
+            {"load": load_bytes, "store": store_bytes},
+            notes,
+        )
+    return None, None, notes
+
+
+def _roofline_flops(ttir: str) -> tuple[bool, int | None, list[str]]:
+    """Detect GEMM and estimate per-CTA FLOPs (2*M*N*K) from the first tt.dot.
+
+    Returns ``(is_gemm, flops_per_cta, notes)``. ``flops_per_cta`` is None for
+    non-GEMM kernels or when the dot shape cannot be extracted.
+    """
+    notes: list[str] = []
+    is_gemm = "tt.dot" in ttir
+    if not is_gemm:
+        return False, None, notes
+
+    info = _extract_dot_shape(ttir)
+    tile_m = info.get("tile_m")
+    tile_n = info.get("tile_n")
+    tile_k = info.get("tile_k")
+    if tile_m is None or tile_n is None or tile_k is None:
+        notes.append("tt.dot present but dot shape unextractable; flops_per_cta=null")
+        return True, None, notes
+
+    dot_count = ttir.count("tt.dot")
+    if dot_count > 1:
+        notes.append(f"{dot_count} tt.dot found; flops_per_cta counts first dot only")
+    return True, 2 * tile_m * tile_n * tile_k, notes
+
+
+def _bytes_from_launch_args(
+    extracted_args: dict[str, Any],
+) -> int | None:
+    """Total bytes from a launch's tensor arg sizes (Taylor D96241456 "approach 1").
+
+    Sums ``numel * element_size`` over tensor (pointer) args, counting in/out
+    pointers (name starts with ``in_out_ptr``) twice (read + write). Returns
+    None when the launch carries no tensor args (e.g. CUDA-graph capture, which
+    drops extracted_args) so the caller falls back to the IR-times-grid estimate.
+    """
+    if not extracted_args:
+        return None
+    total = 0
+    saw_tensor = False
+    for name, info in extracted_args.items():
+        if not isinstance(info, dict):
+            continue
+        numel = info.get("numel")
+        elem = info.get("element_size")
+        if not isinstance(numel, int) or not isinstance(elem, int):
+            continue  # scalar arg ({"type","value"}), not a tensor
+        saw_tensor = True
+        multiplier = 2 if name.startswith("in_out_ptr") else 1
+        total += multiplier * numel * elem
+    return total if saw_tensor else None
+
+
+def _grid_num_ctas(grid: Any) -> int | None:
+    """Number of CTAs (program instances) = product of the launch grid dims."""
+    if not isinstance(grid, (list, tuple)) or not grid:
+        return None
+    num_ctas = 1
+    for dim in grid:
+        if not isinstance(dim, int):
+            return None
+        num_ctas *= dim
+    return num_ctas
+
+
+def _roofline_for_launch(
+    launch_event: dict[str, Any],
+    launch_index: int,
+    per_cta_bytes: int | None,
+    is_gemm: bool,
+    flops_per_cta: int | None,
+) -> dict[str, Any]:
+    """Per-launch roofline entry: total bytes moved (and FLOPs / intensity).
+
+    Combines the compilation's per-CTA template with this launch's grid and
+    tensor arg sizes. ``bytes_moved`` is the smaller of the IR-times-grid and
+    arg-size estimates (the prototype's conservative min), or None when neither
+    can be computed.
+    """
+    grid = launch_event.get("grid")
+    num_ctas = _grid_num_ctas(grid)
+    bytes_from_args = _bytes_from_launch_args(launch_event.get("extracted_args") or {})
+    bytes_from_ir = (
+        per_cta_bytes * num_ctas
+        if per_cta_bytes is not None and num_ctas is not None
+        else None
+    )
+    candidates = [b for b in (bytes_from_ir, bytes_from_args) if b is not None]
+    bytes_moved = min(candidates) if candidates else None
+
+    # FLOPs scale with the grid; for looped kernels (e.g. the GEMM K-loop) this
+    # is a lower bound because flops_per_cta counts one loop iteration (see notes).
+    flops = (
+        flops_per_cta * num_ctas
+        if is_gemm and flops_per_cta is not None and num_ctas is not None
+        else None
+    )
+    arithmetic_intensity = (
+        flops / bytes_moved if flops is not None and bytes_moved else None
+    )
+
+    return {
+        "launch_index": launch_index,
+        "occurrence_id": launch_event.get("occurrence_id"),
+        "grid": list(grid) if isinstance(grid, (list, tuple)) else None,
+        "num_ctas": num_ctas,
+        "bytes_moved": bytes_moved,
+        "bytes_from_ir_x_grid": bytes_from_ir,
+        "bytes_from_args": bytes_from_args,
+        "flops": flops,
+        "arithmetic_intensity": arithmetic_intensity,
+    }
+
+
+def generate_roofline(
+    compilation_event: dict[str, Any] | None,
+    launches_with_indices: list[tuple[dict[str, Any], int]],
+) -> dict[str, Any] | None:
+    """Per-launch roofline for one compiled kernel (joins TTIR + its launches).
+
+    A compiled kernel is launched many times with different inputs/grids, so the
+    *total* bytes moved (and FLOPs) is a per-launch quantity — unlike the
+    launch-invariant per-CTA template. This computes the per-CTA template once
+    from TTIR, then a roofline entry per launch from its grid and tensor arg
+    sizes. Returns the ``roofline`` event payload, or None when disabled, when
+    there is no TTIR, or when there are no launches.
+
+    Honors ``TRITONPARSE_ANALYSIS`` (analysis name "roofline"). Achieved
+    bandwidth (GB/s) needs per-launch kernel durations, which the trace does not
+    capture, so it stays a profiler/NCU concern and is intentionally omitted.
+    """
+    enabled = get_enabled_analyses()
+    if enabled is not None and "roofline" not in {n.lower() for n in enabled}:
+        return None
+    if not compilation_event or not launches_with_indices:
+        return None
+
+    payload = compilation_event.get("payload", {})
+    file_content = payload.get("file_content", {})
+    file_path = payload.get("file_path", {})
+    ttir_key = next((k for k in file_content if k.endswith(".ttir")), None)
+    if not ttir_key:
+        return None
+    ttir = load_ir_contents(ttir_key, file_content, file_path)
+    if not ttir:
+        return None
+
+    per_cta_bytes, breakdown, byte_notes = _roofline_count_bytes(ttir)
+    is_gemm, flops_per_cta, flop_notes = _roofline_flops(ttir)
+
+    per_launch = [
+        _roofline_for_launch(
+            launch_event, launch_index, per_cta_bytes, is_gemm, flops_per_cta
+        )
+        for launch_event, launch_index in launches_with_indices
+    ]
+
+    notes = byte_notes + flop_notes
+    if is_gemm and flops_per_cta is not None:
+        notes.append(
+            "gemm flops/intensity omit the runtime reduction-loop trip count "
+            "(lower bound)"
+        )
+
+    result: dict[str, Any] = {
+        "is_gemm": is_gemm,
+        "estimation_method": "ttir_static_x_launch",
+        "bytes_moved_per_cta": per_cta_bytes,
+        "flops_per_cta": flops_per_cta,
+        "per_launch": per_launch,
+    }
+    if breakdown is not None:
+        result["bytes_breakdown_per_cta"] = breakdown
+    if notes:
+        if len(notes) > _ROOFLINE_MAX_NOTES:
+            notes = notes[:_ROOFLINE_MAX_NOTES] + ["... (truncated)"]
+        result["notes"] = notes
+
+    return result
+
+
 def find_procedures_with_patterns(
     procedure_configs: list[dict[str, Any]],
     ir_key: str,

@@ -24,7 +24,8 @@ class SchemaLoaderTest(unittest.TestCase):
         self.assertIn("launch", event_types)
         self.assertIn("launch_diff", event_types)
         self.assertIn("ir_analysis", event_types)
-        self.assertEqual(len(event_types), 4)
+        self.assertIn("roofline", event_types)
+        self.assertEqual(len(event_types), 5)
 
     def test_get_schema_compilation(self):
         schema = get_schema("compilation")
@@ -68,7 +69,7 @@ class SchemaLoaderTest(unittest.TestCase):
 
     def test_get_all_schemas(self):
         schemas = get_all_schemas()
-        self.assertEqual(len(schemas), 4)
+        self.assertEqual(len(schemas), 5)
         for event_type in get_supported_event_types():
             self.assertIn(event_type, schemas)
 

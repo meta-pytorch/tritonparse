@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "roofline.schema.json",
+  "title": "TritonParse Roofline Event",
+  "description": "Per-launch roofline estimate for one compiled kernel. The per-CTA template (global-memory bytes from tt.load/tt.store, plus GEMM FLOPs) is computed once from TTIR, then scaled by each launch's grid and tensor arg sizes to give the total bytes moved (and FLOPs / arithmetic intensity) per launch. Achieved GB/s is intentionally omitted (needs per-launch durations not present in the trace).",
+  "type": "object",
+  "required": ["event_type", "hash", "roofline"],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["roofline"],
+      "description": "Event type discriminator."
+    },
+    "hash": {
+      "type": "string",
+      "description": "Kernel hash identifying the compiled kernel."
+    },
+    "name": {
+      "type": ["string", "null"],
+      "description": "Kernel name (from compilation metadata)."
+    },
+    "roofline": { "$ref": "#/definitions/Roofline" },
+    "occurrence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Global ordering index across all events."
+    }
+  },
+  "definitions": {
+    "Roofline": {
+      "type": "object",
+      "description": "Roofline payload: launch-invariant per-CTA template plus a per-launch breakdown.",
+      "required": [
+        "is_gemm",
+        "estimation_method",
+        "bytes_moved_per_cta",
+        "flops_per_cta",
+        "per_launch"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "is_gemm": {
+          "type": "boolean",
+          "description": "True if the kernel contains a tt.dot (GEMM-like)."
+        },
+        "estimation_method": {
+          "type": "string",
+          "enum": ["ttir_static_x_launch"],
+          "description": "How the estimate was produced: static per-CTA TTIR template scaled per launch."
+        },
+        "bytes_moved_per_cta": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Per-CTA global-memory bytes from tt.load/tt.store, or null if any I/O line was unparseable (conservative)."
+        },
+        "flops_per_cta": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Per-CTA FLOPs (2*M*N*K from the first tt.dot) for GEMM kernels, else null."
+        },
+        "bytes_breakdown_per_cta": { "$ref": "#/definitions/BytesBreakdown" },
+        "per_launch": {
+          "type": "array",
+          "description": "One roofline entry per recorded launch of this kernel.",
+          "items": { "$ref": "#/definitions/PerLaunch" }
+        },
+        "notes": {
+          "type": "array",
+          "description": "Advisory notes (e.g. unknown dtype, GEMM loop caveat).",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "BytesBreakdown": {
+      "type": "object",
+      "description": "Per-CTA byte split between loads and stores.",
+      "required": ["load", "store"],
+      "additionalProperties": false,
+      "properties": {
+        "load": { "type": "integer", "minimum": 0 },
+        "store": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "PerLaunch": {
+      "type": "object",
+      "description": "Total bytes moved (and FLOPs / intensity) for a single launch.",
+      "required": ["launch_index", "grid", "num_ctas", "bytes_moved"],
+      "additionalProperties": false,
+      "properties": {
+        "launch_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Global launch index (order of this launch within the rank)."
+        },
+        "occurrence_id": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Global ordering index of the launch event, if present."
+        },
+        "grid": {
+          "type": ["array", "null"],
+          "items": { "type": "integer" },
+          "description": "Launch grid dimensions."
+        },
+        "num_ctas": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Number of CTAs (program instances) = product of grid."
+        },
+        "bytes_moved": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Total bytes moved by this launch: min of the IR-times-grid and arg-size estimates, or null."
+        },
+        "bytes_from_ir_x_grid": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "per-CTA bytes * num_ctas."
+        },
+        "bytes_from_args": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Sum of numel*element_size over tensor args (in/out pointers counted twice)."
+        },
+        "flops": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "flops_per_cta * num_ctas for GEMM (lower bound; omits runtime reduction-loop trips), else null."
+        },
+        "arithmetic_intensity": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "flops / bytes_moved when both are known, else null."
+        }
+      }
+    }
+  }
+}

@@ -7,6 +7,12 @@ from typing import Any, Callable
 
 from tritonparse.tp_logger import logger
 
+# Valid TRITONPARSE_ANALYSIS names that are NOT in the per-adapter analyzer
+# registry because they are handled outside the per-compilation ir_analysis
+# dispatch (e.g. the per-launch "roofline" event computed in trace_processor).
+# Listed here so analyzer-name validation does not warn about them.
+NON_ANALYZER_ANALYSES = frozenset({"roofline"})
+
 
 def normalize_accelerator_device_string(device: str) -> str:
     """Normalize accelerator device strings to index 0, preserving CPU."""
@@ -336,7 +342,7 @@ class CompilationPipelineAdapter(ABC):
             known = {
                 info.name.lower()
                 for info in self._analysis_registry.list_analyzer_infos()
-            }
+            } | NON_ANALYZER_ANALYSES
             unknown = enabled_normalized - known
             if unknown:
                 logger.warning(

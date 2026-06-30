@@ -19,6 +19,7 @@ _SCHEMA_FILES = {
     "launch": "launch.schema.json",
     "launch_diff": "launch_diff.schema.json",
     "ir_analysis": "ir_analysis.schema.json",
+    "roofline": "roofline.schema.json",
 }
 
 # Cache of loaded schemas.
