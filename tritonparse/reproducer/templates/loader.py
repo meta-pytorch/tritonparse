@@ -13,7 +13,7 @@ def _is_path_like(template_arg: str) -> bool:
 
 
 def _read_file_text(path: Path) -> str:
-    p = path.expanduser().resolve()
+    p = path.resolve()
     if not p.exists() or not p.is_file():
         raise FileNotFoundError(f"Template not found: {p}")
     return p.read_text(encoding="utf-8")
