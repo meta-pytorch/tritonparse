@@ -237,6 +237,37 @@ export interface IRAnalysisData {
 }
 
 /**
+ * Roofline estimate for a single launch of a compiled kernel: total bytes moved
+ * (and FLOPs / arithmetic intensity for GEMM) for that launch's grid and inputs.
+ */
+export interface RooflinePerLaunch {
+    launch_index: number;
+    occurrence_id?: number | null;
+    grid?: number[] | null;
+    num_ctas?: number | null;
+    bytes_moved?: number | null;
+    bytes_from_ir_x_grid?: number | null;
+    bytes_from_args?: number | null;
+    flops?: number | null;
+    arithmetic_intensity?: number | null;
+}
+
+/**
+ * Per-launch roofline payload (event_type === "roofline"). Combines a
+ * launch-invariant per-CTA template from TTIR with a per-launch breakdown — one
+ * compiled kernel is launched many times with different grids/inputs.
+ */
+export interface RooflineData {
+    is_gemm: boolean;
+    estimation_method: string;
+    bytes_moved_per_cta: number | null;
+    flops_per_cta: number | null;
+    bytes_breakdown_per_cta?: { load: number; store: number };
+    per_launch: RooflinePerLaunch[];
+    notes?: string[];
+}
+
+/**
  * Extracted argument information
  */
 export interface ExtractedArg {
@@ -304,6 +335,7 @@ export interface LogEntry {
     diffs?: LaunchDiffData;
     sames?: LaunchSamesData;
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    roofline?: RooflineData; // Per-launch roofline payload (event_type "roofline").
     autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
 }
 
@@ -358,6 +390,7 @@ export interface ProcessedKernel {
     metadata?: KernelMetadata; // Compilation metadata
     launchDiff?: LogEntry; // Aggregated launch event differences
     ir_analysis?: IRAnalysisData; // Stored IR Analysis information.
+    roofline?: RooflineData; // Per-launch roofline (bytes moved / FLOPs per launch).
     ir_stages?: IRStageDescriptor[]; // Stage descriptors from trace (for frontend generalization).
     autotuneSessions?: AutotuneAnalysisEvent[]; // Autotune analysis sessions associated with this kernel
     winnerRunCount?: number; // Number of times this kernel was run as the autotuning winner
@@ -654,6 +687,15 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 kernel.ir_analysis = entry.ir_analysis!; // Attach the ir_analysis
             } else {
                 console.warn(`Could not find matching kernel for ir_analysis hash: ${hash}`);
+            }
+        }
+        if (entry.event_type === "roofline") {
+            const hash = entry.hash;
+            if (hash && kernelsByHash.has(hash)) {
+                const kernel = kernelsByHash.get(hash)!;
+                kernel.roofline = entry.roofline!; // Attach the per-launch roofline
+            } else {
+                console.warn(`Could not find matching kernel for roofline hash: ${hash}`);
             }
         }
     }

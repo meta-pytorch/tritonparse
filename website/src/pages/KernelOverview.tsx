@@ -1,6 +1,7 @@
 import React, { useState, useRef, useLayoutEffect, useCallback } from "react";
 import ArgumentViewer from "../components/ArgumentViewer";
 import DiffViewer from "../components/DiffViewer";
+import { RooflineSummary, RooflineLaunchTable } from "../components/RooflineView";
 import { ProcessedKernel } from "../utils/dataLoader";
 import ToggleSwitch from "../components/ToggleSwitch";
 import { DocumentTextIcon, ChevronRightIcon } from "../components/icons";
@@ -536,6 +537,9 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
           </div>
         )}
 
+        {/* Roofline Summary (Tier 1: launch-invariant character + aggregate stats) */}
+        {kernel.roofline && <RooflineSummary roofline={kernel.roofline} />}
+
         {/* Autotune Analysis */}
         {kernel.autotuneSessions && kernel.autotuneSessions.length > 0 && (
           <div className="mb-6">
@@ -714,6 +718,9 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Per-launch Roofline (Tier 2: the "Launch Deep" breakdown) */}
+              {kernel.roofline && <RooflineLaunchTable roofline={kernel.roofline} />}
 
               {/* Unchanged Fields */}
               {kernel.launchDiff.sames && Object.keys(kernel.launchDiff.sames).length > 0 && (
