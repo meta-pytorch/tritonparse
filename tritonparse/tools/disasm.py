@@ -1,4 +1,5 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
+import os
 import re
 import subprocess
 
@@ -34,6 +35,10 @@ def extract(file_path):
     nvdisasm Documentation:
     https://docs.nvidia.com/cuda/cuda-binary-utilities/index.html
     """
+    if not isinstance(file_path, str):
+        raise TypeError("file_path must be a string")
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"file not found: {file_path}")
     nvdisasm = path_to_nvdisasm()
     args = [nvdisasm, "-c", "-gp", "-g", "-gi", file_path]
     sass_str = subprocess.check_output(args)
