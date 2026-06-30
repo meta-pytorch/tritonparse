@@ -3,8 +3,8 @@
 """
 Compression utilities for tritonparse trace files.
 
-Provides transparent handling of compressed trace files,
-supporting gzip (.bin.ndjson, .ndjson.gz, .gz) and zstd (.zst) formats.
+Provides transparent handling of compressed trace files, supporting gzip
+(.bin.ndjson, .ndjson.gz, .gz), zstd (.zst), and CLP (.clp) formats.
 
 This module uses magic number detection for reliability, which works
 regardless of file extension.
@@ -25,7 +25,9 @@ import gzip
 import io
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, TextIO, Union
+from typing import Any, Dict, Iterator, Optional, TextIO, Tuple, Union
+
+from tritonparse._json_compat import JSONDecodeError, loads
 
 import zstandard as zstd
 
@@ -47,7 +49,7 @@ def detect_compression(filepath: Union[str, Path]) -> str:
         filepath: Path to the file to check
 
     Returns:
-        Compression type: "gzip", "zstd", or "none"
+        Compression type: "gzip", "zstd", "clp", or "none"
 
     Raises:
         FileNotFoundError: If file does not exist
@@ -63,6 +65,14 @@ def detect_compression(filepath: Union[str, Path]) -> str:
             return "gzip"
         if magic == ZSTD_MAGIC:
             return "zstd"
+
+    try:
+        from yscope_clp_core import is_clp_json_single_file_archive
+
+        if is_clp_json_single_file_archive(filepath):
+            return "clp"
+    except ImportError:
+        pass
 
     return "none"
 
@@ -99,12 +109,29 @@ def is_zstd_file(filepath: Union[str, Path]) -> bool:
         return False
 
 
+def is_clp_file(filepath: Union[str, Path]) -> bool:
+    """
+    Check if a file is CLP compressed.
+
+    Args:
+        filepath: Path to the file to check
+
+    Returns:
+        True if file is CLP compressed, False otherwise
+    """
+    try:
+        return detect_compression(filepath) == "clp"
+    except FileNotFoundError:
+        return False
+
+
 @contextmanager
 def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
     """
     Open a file with automatic compression detection and handling.
 
-    This context manager transparently handles gzip, zstd, and plain text files.
+    This context manager transparently handles gzip, zstd, CLP, and plain text
+    files.
     Compression format is detected using magic numbers, not file extensions.
 
     Args:
@@ -138,6 +165,11 @@ def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
             with dctx.stream_reader(binary_file, read_across_frames=True) as reader:
                 with io.TextIOWrapper(reader, encoding="utf-8") as text_stream:
                     yield text_stream
+    elif compression == "clp":
+        from tritonparse.clp import clp_open, ClpTextStream
+
+        with clp_open(filepath, "r") as archive:
+            yield ClpTextStream(archive)
     else:
         # Plain text file
         with open(filepath, "r", encoding="utf-8") as f:
@@ -166,3 +198,52 @@ def iter_lines(filepath: Union[str, Path]) -> Iterator[str]:
     with open_compressed_file(filepath) as f:
         for line in f:
             yield line.rstrip("\n\r")
+
+
+def enumerate_json(
+    filepath: Union[str, Path],
+    start: int = 0,
+) -> Iterator[Tuple[int, Optional[Dict[str, Any]]]]:
+    """
+    Iterate over JSON lines in a file as parsed JSON objects.
+
+    Lines that cannot be parsed yield None for the parsed object so callers can
+    decide whether to log, skip, or fail.
+
+    Args:
+        filepath: Path to the file
+        start: Starting line number for enumeration
+
+    Yields:
+        Tuples of line number and parsed JSON object. The parsed object is None
+        when a non-empty line cannot be decoded as JSON.
+
+    Raises:
+        ClpCoreRuntimeError: If CLP archive does not exist or fails to read
+        FileNotFoundError: If file does not exist
+
+    Example:
+        >>> for line_num, parsed_json in enumerate_json(file_path, start=1):
+        ...     if parsed_json is None:
+        ...         logger.warning(f"Failed to parse JSON on line {line_num} in {file_path}")
+        ...         continue
+        ...     logger.debug(f"Processing line {line_num} in {file_path}")
+        ...     event_type = parsed_json.get("event_type")
+    """
+    if detect_compression(filepath) == "clp":
+        from tritonparse.clp import clp_open
+
+        with clp_open(filepath, "r") as archive:
+            for line_num, event in enumerate(archive, start=start):
+                yield line_num, event.get_kv_pairs()
+    else:
+        with open_compressed_file(filepath) as f:
+            for line_num, line in enumerate(f, start=start):
+                json_str = line.strip()
+                if not json_str:
+                    continue
+
+                try:
+                    yield line_num, loads(json_str)
+                except JSONDecodeError:
+                    yield line_num, None

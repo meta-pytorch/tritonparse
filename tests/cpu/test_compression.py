@@ -6,13 +6,18 @@ and the critical multi-frame zstd scenario (per-record frame concatenation).
 """
 
 import gzip
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import zstandard as zstd
+from tritonparse.clp import clp_open
 from tritonparse.tools.compression import (
     detect_compression,
+    enumerate_json,
+    is_clp_file,
     is_gzip_file,
     is_zstd_file,
     iter_lines,
@@ -44,6 +49,16 @@ class DetectCompressionTest(unittest.TestCase):
         finally:
             Path(path).unlink()
 
+    def test_detect_clp(self):
+        with tempfile.NamedTemporaryFile(suffix=".clp", delete=False) as f:
+            path = f.name
+        with clp_open(path, "w") as archive:
+            archive.add(io.StringIO('{"message": "hello"}\n'))
+        try:
+            self.assertEqual(detect_compression(path), "clp")
+        finally:
+            Path(path).unlink()
+
     def test_detect_plain_text(self):
         with tempfile.NamedTemporaryFile(suffix=".ndjson", delete=False, mode="w") as f:
             path = f.name
@@ -59,7 +74,7 @@ class DetectCompressionTest(unittest.TestCase):
 
 
 class IsCompressedFileTest(unittest.TestCase):
-    """Tests for is_gzip_file() and is_zstd_file() helpers."""
+    """Tests for is_*_file() compression detection helpers."""
 
     def test_is_gzip_file(self):
         with tempfile.NamedTemporaryFile(suffix=".gz", delete=False) as f:
@@ -69,6 +84,7 @@ class IsCompressedFileTest(unittest.TestCase):
         try:
             self.assertTrue(is_gzip_file(path))
             self.assertFalse(is_zstd_file(path))
+            self.assertFalse(is_clp_file(path))
         finally:
             Path(path).unlink()
 
@@ -80,12 +96,26 @@ class IsCompressedFileTest(unittest.TestCase):
         try:
             self.assertTrue(is_zstd_file(path))
             self.assertFalse(is_gzip_file(path))
+            self.assertFalse(is_clp_file(path))
+        finally:
+            Path(path).unlink()
+
+    def test_is_clp_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".clp", delete=False) as f:
+            path = f.name
+        with clp_open(path, "w") as archive:
+            archive.add(io.StringIO('{"message": "hello"}\n'))
+        try:
+            self.assertTrue(is_clp_file(path))
+            self.assertFalse(is_gzip_file(path))
+            self.assertFalse(is_zstd_file(path))
         finally:
             Path(path).unlink()
 
     def test_nonexistent_returns_false(self):
         self.assertFalse(is_gzip_file("/nonexistent"))
         self.assertFalse(is_zstd_file("/nonexistent"))
+        self.assertFalse(is_clp_file("/nonexistent"))
 
 
 class OpenCompressedFileTest(unittest.TestCase):
@@ -168,6 +198,39 @@ class OpenCompressedFileTest(unittest.TestCase):
         finally:
             Path(path).unlink()
 
+    def test_read_clp_single_file(self):
+        records = [f'{{"line": {i}}}\n' for i in range(10)]
+        with tempfile.NamedTemporaryFile(suffix=".clp", delete=False) as f:
+            path = f.name
+        with clp_open(path, "w") as archive:
+            archive.add(io.StringIO("".join(records)))
+        try:
+            with open_compressed_file(path) as fh:
+                lines = fh.readlines()
+            self.assertEqual(
+                [json.loads(line) for line in lines],
+                [{"line": i} for i in range(10)],
+            )
+        finally:
+            Path(path).unlink()
+
+    def test_read_clp_multi_files(self):
+        records = [f'{{"line": {i}}}\n' for i in range(10)]
+        with tempfile.NamedTemporaryFile(suffix=".clp", delete=False) as f:
+            path = f.name
+        with clp_open(path, "w") as archive:
+            for record in records:
+                archive.add(io.StringIO(record))
+        try:
+            with open_compressed_file(path) as fh:
+                lines = fh.readlines()
+            self.assertEqual(
+                [json.loads(line) for line in lines],
+                [{"line": i} for i in range(10)],
+            )
+        finally:
+            Path(path).unlink()
+
     def test_nonexistent_file_raises(self):
         with self.assertRaises(FileNotFoundError):
             with open_compressed_file("/nonexistent/file"):
@@ -199,6 +262,83 @@ class IterLinesTest(unittest.TestCase):
             self.assertEqual(len(lines), 5)
             self.assertEqual(lines[0], "record_0")
             self.assertEqual(lines[4], "record_4")
+        finally:
+            Path(path).unlink()
+
+
+class EnumerateJsonTest(unittest.TestCase):
+    """Tests for enumerate_json() parsed-record iteration."""
+
+    def _expected_records(self):
+        return [(i + 1, {"line": i}) for i in range(10)]
+
+    def test_enumerate_json_plain_text(self):
+        with tempfile.NamedTemporaryFile(suffix=".ndjson", delete=False, mode="w") as f:
+            path = f.name
+            f.write('{"event_type": "compilation"}\n')
+            f.write("\n")
+            f.write('{"event_type": "launch"}\n')
+        try:
+            records = list(enumerate_json(path, start=1))
+            self.assertEqual(
+                records,
+                [
+                    (1, {"event_type": "compilation"}),
+                    (3, {"event_type": "launch"}),
+                ],
+            )
+        finally:
+            Path(path).unlink()
+
+    def test_enumerate_json_gzip(self):
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            for i in range(10):
+                f.write(gzip.compress(f'{{"line": {i}}}\n'.encode("utf-8")))
+        try:
+            self.assertEqual(
+                list(enumerate_json(path, start=1)), self._expected_records()
+            )
+        finally:
+            Path(path).unlink()
+
+    def test_enumerate_json_zstd(self):
+        cctx = zstd.ZstdCompressor()
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            for i in range(10):
+                f.write(cctx.compress(f'{{"line": {i}}}\n'.encode("utf-8")))
+        try:
+            self.assertEqual(
+                list(enumerate_json(path, start=1)), self._expected_records()
+            )
+        finally:
+            Path(path).unlink()
+
+    def test_enumerate_json_clp(self):
+        records = [f'{{"line": {i}}}\n' for i in range(10)]
+        with tempfile.NamedTemporaryFile(suffix=".clp", delete=False) as f:
+            path = f.name
+        with clp_open(path, "w") as archive:
+            archive.add(io.StringIO("".join(records)))
+        try:
+            self.assertEqual(
+                list(enumerate_json(path, start=1)), self._expected_records()
+            )
+        finally:
+            Path(path).unlink()
+
+    def test_enumerate_json_malformed_line_yields_none(self):
+        with tempfile.NamedTemporaryFile(suffix=".ndjson", delete=False, mode="w") as f:
+            path = f.name
+            f.write('{"ok": true}\n')
+            f.write("{not json}\n")
+            f.write('{"ok": false}\n')
+        try:
+            records = list(enumerate_json(path, start=1))
+            self.assertEqual(records[0], (1, {"ok": True}))
+            self.assertEqual(records[1], (2, None))
+            self.assertEqual(records[2], (3, {"ok": False}))
         finally:
             Path(path).unlink()
 

@@ -196,7 +196,7 @@ class TestComplexKernels(GPUTestBase):
             return output
 
         # Set up test environment with separate directories for logs and parsed output
-        temp_dir = tempfile.mkdtemp()
+        temp_dir = tempfile.mkdtemp(prefix="test_complex_kernels_")
         temp_dir_logs = os.path.join(temp_dir, "logs")
         temp_dir_parsed = os.path.join(temp_dir, "parsed_output")
         os.makedirs(temp_dir_logs, exist_ok=True)
