@@ -5,7 +5,9 @@ from unittest.mock import patch
 from tritonparse.backend import (
     AmdTritonAdapter,
     AnalyzerContext,
+    COMPILE_LEVEL,
     get_backend_registry,
+    LAUNCH_LEVEL,
     NvidiaTritonAdapter,
     PipelineAdapterRegistry,
 )
@@ -525,6 +527,73 @@ class TestAnalysisAdapterDriven(unittest.TestCase):
             nvidia.register_backend_analyzer(
                 "loop_schedules", original_analyzer, original_stages
             )
+
+    def test_roofline_registered_as_launch_level_analyzer(self):
+        """roofline is a common launch-level analyzer on every adapter."""
+        for adapter_name in ("cuda_triton", "hip_triton", "cann_triton"):
+            adapter = self.registry.resolve(adapter_name=adapter_name)
+            self.assertIn("roofline", adapter.list_analyzer_keys())
+            info = adapter._analysis_registry.get_analyzer_info("roofline")
+            self.assertIsNotNone(info)
+            assert info is not None
+            self.assertEqual(info.level, LAUNCH_LEVEL)
+
+        # The common compile-level analyzers default to COMPILE_LEVEL.
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        loop_info = nvidia._analysis_registry.get_analyzer_info("loop_schedules")
+        self.assertIsNotNone(loop_info)
+        assert loop_info is not None
+        self.assertEqual(loop_info.level, COMPILE_LEVEL)
+
+    def test_list_executable_analyzers_filters_by_level(self):
+        """list_executable_analyzers returns only analyzers of the requested level."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        file_content = {"kernel.ttir": "t", "kernel.ttgir": "t"}
+
+        compile_execs = nvidia.list_executable_analyzers(file_content)
+        self.assertIn("loop_schedules", compile_execs)
+        self.assertNotIn("roofline", compile_execs)
+
+        launch_execs = nvidia.list_executable_analyzers(
+            file_content, level=LAUNCH_LEVEL
+        )
+        self.assertIn("roofline", launch_execs)
+        self.assertNotIn("loop_schedules", launch_execs)
+
+    def test_register_backend_launch_analyzer_isolation(self):
+        """register_backend_launch_analyzer: registered analyzer isolated to target adapter."""
+        nvidia = self.registry.resolve(adapter_name="cuda_triton")
+        amd = self.registry.resolve(adapter_name="hip_triton")
+
+        sentinel_result = {"custom_launch": {"key": "value"}}
+
+        def custom_launch_analyzer(entry, ctx):
+            return sentinel_result
+
+        try:
+            nvidia.register_backend_launch_analyzer(
+                "custom_launch", custom_launch_analyzer, required_stages=("ttir",)
+            )
+
+            info = nvidia._analysis_registry.get_analyzer_info("custom_launch")
+            self.assertIsNotNone(info)
+            assert info is not None
+            self.assertEqual(info.level, LAUNCH_LEVEL)
+
+            # Visible only at the launch level on NVIDIA.
+            file_content = {"kernel.ttir": "t"}
+            self.assertIn(
+                "custom_launch",
+                nvidia.list_executable_analyzers(file_content, level=LAUNCH_LEVEL),
+            )
+            self.assertNotIn(
+                "custom_launch", nvidia.list_executable_analyzers(file_content)
+            )
+
+            # AMD adapter is unaffected (isolation).
+            self.assertNotIn("custom_launch", amd.list_analyzer_keys())
+        finally:
+            nvidia._analysis_registry._analyzer_infos.pop("custom_launch", None)
 
     def test_register_backend_derived_artifact_isolation(self):
         """register_backend_derived_artifact: registered artifact isolated to target adapter."""

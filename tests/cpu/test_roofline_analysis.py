@@ -12,9 +12,10 @@ GPU, so `make test` always covers it.
 import os
 import unittest
 
-from tritonparse.backend import get_backend_registry
+from tritonparse.backend import AnalyzerContext, get_backend_registry, LAUNCH_LEVEL
 from tritonparse.parse.ir_analysis import (
     _bytes_from_launch_args,
+    _generate_launch_analysis,
     _grid_num_ctas,
     _roofline_count_bytes,
     _roofline_flops,
@@ -227,19 +228,24 @@ class TestGenerateRoofline(unittest.TestCase):
         self.assertEqual(pl["bytes_moved"], 128)
 
     def test_env_var_gating(self):
+        """TRITONPARSE_ANALYSIS gates roofline through the launch-level dispatch.
+
+        Gating now lives in the registry dispatch (_generate_launch_analysis),
+        not inline in generate_roofline, so the env var is exercised there.
+        """
         comp = _compilation(TTIR_ELEMENTWISE)
-        launches = [(_launch([1], 256, occ=10), 0)]
+        ctx = AnalyzerContext(launches_with_indices=[(_launch([1], 256, occ=10), 0)])
 
         os.environ["TRITONPARSE_ANALYSIS"] = "roofline"
-        self.assertIsNotNone(generate_roofline(comp, launches))
+        self.assertIn("roofline", _generate_launch_analysis(comp, ctx))
         os.environ["TRITONPARSE_ANALYSIS"] = "none"
-        self.assertIsNone(generate_roofline(comp, launches))
+        self.assertEqual(_generate_launch_analysis(comp, ctx), {})
         os.environ["TRITONPARSE_ANALYSIS"] = "loop_schedules"
-        self.assertIsNone(generate_roofline(comp, launches))
+        self.assertNotIn("roofline", _generate_launch_analysis(comp, ctx))
         os.environ["TRITONPARSE_ANALYSIS"] = "all"
-        self.assertIsNotNone(generate_roofline(comp, launches))
+        self.assertIn("roofline", _generate_launch_analysis(comp, ctx))
         os.environ.pop("TRITONPARSE_ANALYSIS", None)
-        self.assertIsNotNone(generate_roofline(comp, launches))
+        self.assertIn("roofline", _generate_launch_analysis(comp, ctx))
 
     def test_none_when_no_launches_or_no_ttir(self):
         self.assertIsNone(generate_roofline(_compilation(TTIR_ELEMENTWISE), []))
@@ -248,14 +254,32 @@ class TestGenerateRoofline(unittest.TestCase):
         self.assertIsNone(generate_roofline(None, [(_launch([1], 8, 1), 0)]))
 
 
-class TestRooflineNotAnAnalyzer(unittest.TestCase):
-    """Roofline moved out of the per-compilation ir_analysis analyzer registry."""
+class TestRooflineLaunchAnalyzer(unittest.TestCase):
+    """Roofline is a registered launch-level analyzer (not compile-level)."""
 
-    def test_roofline_not_registered_as_analyzer(self):
+    def test_roofline_registered_as_launch_level(self):
         registry = get_backend_registry()
         for adapter_name in ("cuda_triton", "hip_triton", "cann_triton"):
             adapter = registry.resolve(adapter_name=adapter_name)
-            self.assertNotIn("roofline", adapter.list_analyzer_keys())
+            self.assertIn("roofline", adapter.list_analyzer_keys())
+            info = adapter._analysis_registry.get_analyzer_info("roofline")
+            self.assertIsNotNone(info)
+            assert info is not None
+            self.assertEqual(info.level, LAUNCH_LEVEL)
+
+    def test_roofline_split_by_level(self):
+        """Roofline appears only in launch-level executables, not compile-level."""
+        registry = get_backend_registry()
+        file_content = {"kernel.ttir": "ttir content"}
+        for adapter_name in ("cuda_triton", "hip_triton", "cann_triton"):
+            adapter = registry.resolve(adapter_name=adapter_name)
+            self.assertNotIn(
+                "roofline", adapter.list_executable_analyzers(file_content)
+            )
+            self.assertIn(
+                "roofline",
+                adapter.list_executable_analyzers(file_content, level=LAUNCH_LEVEL),
+            )
 
 
 class TestRooflineSchema(unittest.TestCase):

@@ -13,7 +13,7 @@ from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
 from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
-from .ir_analysis import _generate_ir_analysis, generate_roofline
+from .ir_analysis import _generate_ir_analysis, _generate_launch_analysis
 from .ir_parser import _parse_generic_loc, extract_ptx_amdgcn_mappings
 from .mapper import create_bidirectional_mapping, create_python_mapping
 from .sourcemap_utils import (
@@ -1001,19 +1001,25 @@ def parse_single_rank(
                 all_output_lines[output_file].append(dumps(ir_analysis_event) + "\n")
 
         if compilation_event and launches_with_indices:
-            roofline = generate_roofline(compilation_event, launches_with_indices)
-            if roofline:
-                roofline_event = {
-                    "event_type": "roofline",
+            launch_ctx = AnalyzerContext(
+                launches_with_indices=launches_with_indices,
+            )
+            launch_analysis = _generate_launch_analysis(compilation_event, launch_ctx)
+            kernel_name = (
+                compilation_event.get("payload", {}).get("metadata", {}).get("name")
+            )
+            # Each launch-level analyzer is emitted as its own event keyed by the
+            # analyzer's result key (e.g. "roofline").
+            for analyzer_name, result in launch_analysis.items():
+                launch_event = {
+                    "event_type": analyzer_name,
                     "hash": _kernel_hash,
-                    "name": compilation_event.get("payload", {})
-                    .get("metadata", {})
-                    .get("name"),
-                    "roofline": roofline,
+                    "name": kernel_name,
+                    analyzer_name: result,
                 }
-                roofline_event["occurrence_id"] = next_occurrence_id
+                launch_event["occurrence_id"] = next_occurrence_id
                 next_occurrence_id += 1
-                all_output_lines[output_file].append(dumps(roofline_event) + "\n")
+                all_output_lines[output_file].append(dumps(launch_event) + "\n")
 
         if compilation_event and launches_with_indices:
             sames, diffs, launch_index_map = _generate_launch_diff(

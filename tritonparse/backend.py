@@ -7,11 +7,13 @@ from typing import Any, Callable
 
 from tritonparse.tp_logger import logger
 
-# Valid TRITONPARSE_ANALYSIS names that are NOT in the per-adapter analyzer
-# registry because they are handled outside the per-compilation ir_analysis
-# dispatch (e.g. the per-launch "roofline" event computed in trace_processor).
-# Listed here so analyzer-name validation does not warn about them.
-NON_ANALYZER_ANALYSES = frozenset({"roofline"})
+# Analyzers run at one of two levels in the compilation/launch pipeline:
+#   "compile" — results depend only on the compiled kernel (its IR artifacts).
+#               Emitted once per kernel hash in the ``ir_analysis`` event.
+#   "launch"  — results depend on each kernel launch's grid and input sizes
+#               (e.g. "roofline"). Emitted as a per-analyzer launch-level event.
+COMPILE_LEVEL = "compile"
+LAUNCH_LEVEL = "launch"
 
 
 def normalize_accelerator_device_string(device: str) -> str:
@@ -139,9 +141,15 @@ class ParserRegistry:
 
 @dataclass
 class AnalyzerContext:
-    """Per-call context passed to analyzers. Extensible without changing signatures."""
+    """Per-call context passed to analyzers. Extensible without changing signatures.
+
+    ``launches_with_indices`` carries this kernel's launch events (each paired
+    with its global launch index) for launch-level analyzers; it is None for
+    compile-level analysis where launches are irrelevant.
+    """
 
     procedure_checks: list[dict[str, Any]] | None = None
+    launches_with_indices: list[tuple[dict[str, Any], int]] | None = None
 
 
 @dataclass
@@ -152,11 +160,14 @@ class AnalyzerInfo:
         name: Analyzer name (e.g., "amd_buffer_ops")
         func: Analyzer function with signature (entry, ctx) -> dict | None
         required_stages: Tuple of stage names required (e.g., ("ttgir", "amdgcn"))
+        level: Analysis level — COMPILE_LEVEL (per compiled kernel) or
+            LAUNCH_LEVEL (per kernel launch, e.g. "roofline").
     """
 
     name: str
     func: Callable[[dict[str, Any], AnalyzerContext], dict[str, Any] | None]
     required_stages: tuple[str, ...]
+    level: str = COMPILE_LEVEL
 
 
 class AnalysisRegistry:
@@ -170,6 +181,7 @@ class AnalysisRegistry:
         analyzer_id: str,
         analyzer_func: Callable,
         required_stages: tuple[str, ...],
+        level: str = COMPILE_LEVEL,
     ) -> None:
         if analyzer_id in self._analyzer_infos:
             logger.warning(
@@ -179,6 +191,7 @@ class AnalysisRegistry:
             name=analyzer_id,
             func=analyzer_func,
             required_stages=required_stages,
+            level=level,
         )
         self._analyzer_infos[analyzer_id] = info
 
@@ -226,6 +239,7 @@ class CompilationPipelineAdapter(ABC):
         from tritonparse.parse.ir_analysis import (
             _analyze_loop_schedules_generic,
             _analyze_procedures_generic,
+            _analyze_roofline,
         )
 
         self.register_backend_analyzer(
@@ -237,6 +251,14 @@ class CompilationPipelineAdapter(ABC):
             "procedure_checks",
             _analyze_procedures_generic,
             required_stages=("ttgir",),
+        )
+        # Launch-level: bytes/FLOPs moved depend on each launch's grid and
+        # input sizes, so roofline is computed per launch (joining the per-CTA
+        # TTIR template with each launch's grid and tensor arg sizes).
+        self.register_backend_launch_analyzer(
+            "roofline",
+            _analyze_roofline,
+            required_stages=("ttir",),
         )
 
     # -- Stage methods --------------------------------------------------------
@@ -317,32 +339,43 @@ class CompilationPipelineAdapter(ABC):
         self,
         file_content: dict[str, str],
         enabled_analyses: set[str] | None = None,
+        level: str = COMPILE_LEVEL,
+        validate_names: bool = True,
     ) -> list[str]:
         """
         Get list of analyzers that can be executed based on:
-        1. User-enabled analyses (from environment variable)
-        2. Available intermediate products (file_content)
+        1. Analysis level (compile-level vs launch-level)
+        2. User-enabled analyses (from environment variable)
+        3. Available intermediate products (file_content)
 
         Also validates user-provided analyzer names and warns about unknowns.
+        Name validation considers analyzers of all levels so that, e.g., a
+        launch-level name like "roofline" is not reported as unknown when
+        listing compile-level analyzers.
 
         Args:
             file_content: Dictionary mapping file keys to file content
             enabled_analyses: User-enabled analysis names (None = all)
+            level: Analysis level to list (COMPILE_LEVEL or LAUNCH_LEVEL)
+            validate_names: Whether to warn about unknown analyzer names. Each
+                kernel lists analyzers once per level (compile and launch), so
+                the launch-level call passes False to avoid emitting duplicate
+                "Unknown analysis name(s)" warnings for the same misconfiguration.
 
         Returns:
-            List of executable analyzer names
+            List of executable analyzer names at the requested level
         """
-        # Validate user-provided names against known analyzers
+        # Validate user-provided names against known analyzers (all levels)
         enabled_normalized = (
             {n.lower() for n in enabled_analyses}
             if enabled_analyses is not None
             else None
         )
-        if enabled_normalized is not None:
+        if validate_names and enabled_normalized is not None:
             known = {
                 info.name.lower()
                 for info in self._analysis_registry.list_analyzer_infos()
-            } | NON_ANALYZER_ANALYSES
+            }
             unknown = enabled_normalized - known
             if unknown:
                 logger.warning(
@@ -353,14 +386,18 @@ class CompilationPipelineAdapter(ABC):
         executable = []
 
         for info in self._analysis_registry.list_analyzer_infos():
-            # Check 1: Is it enabled by user?
+            # Check 1: Does it match the requested analysis level?
+            if info.level != level:
+                continue
+
+            # Check 2: Is it enabled by user?
             if (
                 enabled_normalized is not None
                 and info.name.lower() not in enabled_normalized
             ):
                 continue
 
-            # Check 2: Are required stages available?
+            # Check 3: Are required stages available?
             stages_available = True
             for stage_name in info.required_stages:
                 stage = self.get_stage_by_name(stage_name)
@@ -383,8 +420,27 @@ class CompilationPipelineAdapter(ABC):
         analyzer_id: str,
         analyzer_func: Callable,
         required_stages: tuple[str, ...],
+        level: str = COMPILE_LEVEL,
     ) -> None:
-        self._analysis_registry.register(analyzer_id, analyzer_func, required_stages)
+        self._analysis_registry.register(
+            analyzer_id, analyzer_func, required_stages, level
+        )
+
+    def register_backend_launch_analyzer(
+        self,
+        analyzer_id: str,
+        analyzer_func: Callable,
+        required_stages: tuple[str, ...],
+    ) -> None:
+        """Register a launch-level analyzer (results depend on each launch).
+
+        Convenience wrapper over ``register_backend_analyzer`` with
+        ``level=LAUNCH_LEVEL``. The analyzer receives the kernel's launches via
+        ``AnalyzerContext.launches_with_indices``.
+        """
+        self.register_backend_analyzer(
+            analyzer_id, analyzer_func, required_stages, level=LAUNCH_LEVEL
+        )
 
     def list_analyzer_keys(self) -> list[str]:
         return self._analysis_registry.list_analyzer_keys()

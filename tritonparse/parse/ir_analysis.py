@@ -744,16 +744,15 @@ def generate_roofline(
     *total* bytes moved (and FLOPs) is a per-launch quantity — unlike the
     launch-invariant per-CTA template. This computes the per-CTA template once
     from TTIR, then a roofline entry per launch from its grid and tensor arg
-    sizes. Returns the ``roofline`` event payload, or None when disabled, when
-    there is no TTIR, or when there are no launches.
+    sizes. Returns the ``roofline`` event payload, or None when there is no
+    TTIR or when there are no launches.
 
-    Honors ``TRITONPARSE_ANALYSIS`` (analysis name "roofline"). Achieved
+    Enablement via ``TRITONPARSE_ANALYSIS`` (analysis name "roofline") is
+    handled uniformly by the launch-level analyzer registry dispatch (see
+    ``_analyze_roofline`` / ``_generate_launch_analysis``), not here. Achieved
     bandwidth (GB/s) needs per-launch kernel durations, which the trace does not
     capture, so it stays a profiler/NCU concern and is intentionally omitted.
     """
-    enabled = get_enabled_analyses()
-    if enabled is not None and "roofline" not in {n.lower() for n in enabled}:
-        return None
     if not compilation_event or not launches_with_indices:
         return None
 
@@ -1413,6 +1412,91 @@ def _generate_ir_analysis_legacy(
     return ir_analysis
 
 
+def _generate_launch_analysis(
+    entry: dict[str, Any], ctx: AnalyzerContext
+) -> dict[str, Any]:
+    """
+    Generate launch-level analysis results (adapter-driven).
+
+    Launch-level analyzers (e.g. ``roofline``) produce results that depend on
+    each kernel launch's grid and input sizes, so they read the launches from
+    ``ctx.launches_with_indices``. Unlike compile-level ``ir_analysis``, each
+    launch-level analyzer's result is emitted as its own event by the caller,
+    so the returned dict maps each analyzer id to its result payload.
+
+    Honors the ``TRITONPARSE_ANALYSIS`` environment variable. Resolution needs
+    backend metadata; if no adapter can be resolved, no launch-level analysis is
+    produced (returns ``{}``). There is no legacy fallback — launch-level
+    analysis is a new feature, so there are no pre-existing traces to support.
+
+    Args:
+        entry: Compilation trace entry containing payload
+        ctx: Per-call analyzer context carrying ``launches_with_indices``
+
+    Returns:
+        Dictionary mapping each launch-level analyzer id to its result payload
+    """
+    enabled_analyses = get_enabled_analyses()
+    if enabled_analyses is not None and len(enabled_analyses) == 0:
+        logger.debug("All analyses are disabled via TRITONPARSE_ANALYSIS env var")
+        return {}
+
+    if not ctx.launches_with_indices:
+        return {}
+
+    try:
+        return _generate_launch_analysis_adapter_driven(entry, ctx, enabled_analyses)
+    except ValueError as e:
+        # Adapter resolution needs backend metadata; without it there is nothing
+        # to run for launch-level analysis.
+        logger.debug(f"No adapter for launch analysis: {e}")
+        return {}
+
+
+def _generate_launch_analysis_adapter_driven(
+    entry: dict[str, Any],
+    ctx: AnalyzerContext,
+    enabled_analyses: set[str] | None = None,
+) -> dict[str, Any]:
+    """Adapter-driven launch-level analysis generation."""
+    from tritonparse.backend import get_backend_registry, LAUNCH_LEVEL
+
+    payload = entry.get("payload", {})
+    metadata = payload.get("metadata", {})
+    file_content = payload.get("file_content", {})
+
+    adapter = get_backend_registry().resolve_from_trace(metadata)
+
+    # Name validation/warning is handled by the compile-level listing pass
+    # (see _generate_ir_analysis_adapter_driven), which runs once per kernel;
+    # skip it here so the same misconfiguration is not warned about twice.
+    executable_analyzers = adapter.list_executable_analyzers(
+        file_content, enabled_analyses, level=LAUNCH_LEVEL, validate_names=False
+    )
+
+    analysis_results: dict[str, Any] = {}
+    for analyzer_name in executable_analyzers:
+        try:
+            result = adapter.run_analysis_pass(analyzer_name, entry, ctx)
+            if not result:
+                continue
+            # Contract: a launch-level analyzer returns exactly
+            # ``{analyzer_id: payload}``. The key becomes the emitted event_type
+            # (see trace_processor), so it must equal the registered analyzer id.
+            if set(result.keys()) != {analyzer_name}:
+                logger.warning(
+                    f"Launch analyzer '{analyzer_name}' must return a single key "
+                    f"equal to its id; got {sorted(result.keys())}. Skipping."
+                )
+                continue
+            analysis_results.update(result)
+            logger.debug(f"Launch analysis '{analyzer_name}' completed successfully")
+        except Exception as e:
+            logger.warning(f"Launch analysis '{analyzer_name}' failed: {e}")
+
+    return analysis_results
+
+
 # =============================================================================
 # STANDARDIZED ANALYZER WRAPPERS
 # =============================================================================
@@ -1575,4 +1659,32 @@ def _analyze_procedures_generic(
 
     if procedure_results:
         return {"procedure_checks": procedure_results}
+    return None
+
+
+def _analyze_roofline(
+    entry: dict[str, Any],
+    ctx: AnalyzerContext,
+) -> dict[str, Any] | None:
+    """
+    Launch-level analyzer for per-launch roofline (standardized wrapper).
+
+    Reads the kernel's launches from ``ctx.launches_with_indices`` and joins the
+    per-CTA TTIR template with each launch's grid and tensor arg sizes. Returns
+    None when there are no launches or no roofline could be computed.
+
+    Args:
+        entry: Compilation trace entry containing payload with file_content, etc.
+        ctx: Per-call analyzer context carrying ``launches_with_indices``
+
+    Returns:
+        Analysis results dictionary or None if analysis cannot be performed
+    """
+    launches_with_indices = ctx.launches_with_indices
+    if not launches_with_indices:
+        return None
+
+    roofline = generate_roofline(entry, launches_with_indices)
+    if roofline:
+        return {"roofline": roofline}
     return None
