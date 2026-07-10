@@ -3,6 +3,8 @@
 # pyre-strict
 
 import ast
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -162,3 +164,25 @@ import sys
         self.assertEqual(imports[0].lineno, 2)  # import os
         self.assertEqual(imports[1].lineno, 4)  # from typing import List
         self.assertEqual(imports[2].lineno, 7)  # import sys
+
+    def test_relative_import_shadowing_stdlib_resolves_to_sibling(self) -> None:
+        """A relative import of a local module that shadows a stdlib name must
+        resolve to the sibling file on disk, not the stdlib module.
+
+        Regression test: `from .math import helper` in a file next to a local
+        `math.py` was previously mis-resolved (via importlib) to the stdlib
+        `math`, marking it external and dropping the local definition.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            sibling = os.path.join(tmp, "math.py")
+            with open(sibling, "w") as f:
+                f.write("def helper():\n    return 1\n")
+            importer = os.path.join(tmp, "kernel.py")
+            tree = ast.parse("from .math import helper\n", filename=importer)
+            # No package context (mirrors files analyzed from a build/run-tree).
+            imports = self.parser.parse_imports(tree, importer, package=None)
+
+        self.assertEqual(len(imports), 1)
+        self.assertEqual(imports[0].names, ["helper"])
+        self.assertFalse(imports[0].is_external)
+        self.assertEqual(imports[0].resolved_path, sibling)

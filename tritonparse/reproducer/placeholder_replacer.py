@@ -1,7 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -335,6 +335,9 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
                         "\n\n# Dependent functions extracted from source file\n\n"
                     )
                     dependent_code += "\n\n".join(dep_result.functions.values())
+                    # Alias bindings for embedded deps must follow their defs.
+                    if dep_result.alias_bindings:
+                        dependent_code += "\n\n" + "\n".join(dep_result.alias_bindings)
                     source_code += "\n\n" + dependent_code
                     logger.debug("Appended dependent functions to kernel source code")
 
@@ -370,6 +373,10 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
                     import_lines.append("# Dependent functions for autotuning")
                     import_lines.append("")
                     import_lines.extend(dep_result.functions.values())
+                    # Alias bindings for embedded deps must follow their defs.
+                    if dep_result.alias_bindings:
+                        import_lines.append("")
+                        import_lines.extend(dep_result.alias_bindings)
                     import_lines.append("")
             else:
                 import_lines.extend(get_function_source(_disable_triton_autotune))
@@ -869,6 +876,57 @@ class DependentSourceResult:
 
     functions: Dict[str, str]  # qualified_name -> source_code
     import_statements: List[str]  # formatted import statements needed by dependencies
+    # "local = original" bindings for names imported under an alias that are now
+    # embedded as function definitions; rendered AFTER the embedded defs.
+    alias_bindings: List[str] = field(default_factory=list)
+
+
+def _render_dependent_imports(
+    imports: List[Any],
+    embedded_names: set[str],
+) -> tuple[List[str], List[str]]:
+    """Render import statements for extracted dependencies.
+
+    Names that are now embedded as function definitions are excluded from the
+    imports (the embedded ``def`` replaces them). For a name imported under an
+    alias (``from x import foo as bar``) that is embedded, we emit a
+    ``bar = foo`` binding instead of keeping the import, so the local name the
+    extracted code calls is still defined without importing the (often
+    unavailable) internal module.
+
+    Returns a tuple of (import_statements, alias_bindings); alias_bindings must
+    be rendered AFTER the embedded function definitions.
+    """
+    import_stmts: List[str] = []
+    alias_bindings: List[str] = []
+    for imp in imports:
+        if imp.import_type == "from_import":
+            # aliases maps {local_name: original_name}; invert for lookup.
+            orig_to_local = {orig: local for local, orig in imp.aliases.items()}
+            kept_names: List[str] = []
+            for name in imp.names:  # names hold the original imported names
+                if name in embedded_names:
+                    local = orig_to_local.get(name)
+                    if local and local != name:
+                        alias_bindings.append(f"{local} = {name}")
+                    # Non-aliased embedded names are covered by the embedded def.
+                    continue
+                kept_names.append(name)
+            if not kept_names:
+                continue
+            stmt = f"from {imp.module} import {', '.join(kept_names)}"
+        else:
+            stmt = f"import {imp.names[0]}" if imp.names else f"import {imp.module}"
+        # Skip duplicate or already-covered imports.
+        if stmt in import_stmts or stmt in _SKIP_IMPORTS:
+            continue
+        # Skip bare module names that are submodule references.
+        if imp.import_type == "import":
+            module = imp.names[0] if imp.names else imp.module
+            if module in _SKIP_BARE_MODULES:
+                continue
+        import_stmts.append(stmt)
+    return import_stmts, alias_bindings
 
 
 def get_dependent_source_map(
@@ -917,31 +975,19 @@ def get_dependent_source_map(
                 "  - %s. %s", short_name, result.functions[func_name].splitlines()[0]
             )
 
-        # Filter out imports already covered by _BASE_IMPORT_LINES and
-        # bare submodule names that aren't valid standalone imports.
-        import_stmts: List[str] = []
-        for imp in result.imports:
-            if imp.import_type == "from_import":
-                names_str = ", ".join(imp.names)
-                stmt = f"from {imp.module} import {names_str}"
-            else:
-                if imp.names:
-                    stmt = f"import {imp.names[0]}"
-                else:
-                    stmt = f"import {imp.module}"
-            # Skip duplicate or already-covered imports
-            if stmt in import_stmts or stmt in _SKIP_IMPORTS:
-                continue
-            # Skip bare module names that are submodule references
-            if imp.import_type == "import":
-                module = imp.names[0] if imp.names else imp.module
-                if module in _SKIP_BARE_MODULES:
-                    continue
-            import_stmts.append(stmt)
+        # Names that were extracted and embedded as function definitions must
+        # not also be imported: the original import often targets an internal
+        # module that is unavailable in the standalone reproducer, so keeping it
+        # would break execution (and duplicate/shadow the embedded definition).
+        embedded_names = set(result.function_short_names.values())
+        import_stmts, alias_bindings = _render_dependent_imports(
+            result.imports, embedded_names
+        )
 
         return DependentSourceResult(
             functions=result.functions,
             import_statements=import_stmts,
+            alias_bindings=alias_bindings,
         )
 
     except Exception as e:

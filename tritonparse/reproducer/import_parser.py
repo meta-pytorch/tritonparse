@@ -3,6 +3,7 @@
 # pyre-strict
 
 import ast
+import os
 
 from tritonparse.reproducer.import_info import ImportInfo
 from tritonparse.reproducer.import_resolver import ImportResolver
@@ -154,6 +155,17 @@ class ImportParser:
         # Resolve the module to a file path
         resolved_path, is_external = self.import_resolver.resolve_import(full_module)
 
+        # Relative imports can be mis-resolved by importlib to a stdlib or
+        # third-party module when the package context is unknown (e.g., files
+        # analyzed from a build/run-tree) or when a sibling module shadows a
+        # stdlib name (e.g., a local "math.py" shadowing the stdlib "math").
+        # Resolve such imports against the source file's directory on disk,
+        # which is unambiguous, so their definitions can be embedded.
+        if level > 0:
+            disk_path = self._resolve_relative_on_disk(source_file, module, level)
+            if disk_path is not None:
+                resolved_path, is_external = disk_path, False
+
         # Parse each imported name
         for alias in node.names:
             # Build aliases dict if alias is used
@@ -176,3 +188,42 @@ class ImportParser:
             )
 
         return imports
+
+    @staticmethod
+    def _resolve_relative_on_disk(
+        source_file: str, module: str, level: int
+    ) -> str | None:
+        """Resolve a relative import to a sibling module path on disk.
+
+        importlib (find_spec) can incorrectly resolve a relative import to a
+        stdlib/third-party module when the package context is unknown, or when a
+        local module shadows a stdlib name (e.g., a sibling ``math.py``). This
+        resolves the target directly from the importing file's directory.
+
+        Args:
+            source_file: Absolute path of the file containing the import.
+            module: Module part of ``from .<module> import ...`` ("" for
+                ``from . import ...``).
+            level: Relative-import level (1 = ".", 2 = "..", ...).
+
+        Returns:
+            Absolute path to the target ``.py`` (or package ``__init__.py``),
+            or None if it cannot be found on disk.
+        """
+        base_dir = os.path.dirname(os.path.abspath(source_file))
+        # level=1 -> current package directory; each extra level goes up one.
+        for _ in range(level - 1):
+            base_dir = os.path.dirname(base_dir)
+        if module:
+            rel = os.path.join(*module.split("."))
+            module_file = os.path.join(base_dir, rel + ".py")
+            if os.path.isfile(module_file):
+                return module_file
+            package_init = os.path.join(base_dir, rel, "__init__.py")
+            if os.path.isfile(package_init):
+                return package_init
+            return None
+        package_init = os.path.join(base_dir, "__init__.py")
+        if os.path.isfile(package_init):
+            return package_init
+        return None
