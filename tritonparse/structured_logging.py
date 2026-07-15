@@ -28,7 +28,6 @@ import zstandard as zstd  # @manual=fbsource//third-party/pypi/zstandard:zstanda
 # triton/fb/config_backend), and torch in turn imports triton at startup;
 # a top-level `import torch` here would create a circular import. See D100891381
 # for the original incident and D105172002 for the torch-side workaround.
-from triton.knobs import JITHook, LaunchHook
 from tritonparse._json_compat import dumps, loads
 
 from .shared_vars import (
@@ -1677,7 +1676,7 @@ def add_launch_metadata(grid, metadata, arg_dict, inductor_args=None):
     }
 
 
-class JITHookImpl(JITHook):
+class JITHookImpl:
     """
     JIT Hook implementation that overrides or sets the launch_metadata function for Triton kernels.
 
@@ -1741,7 +1740,7 @@ class JITHookImpl(JITHook):
         return True
 
 
-class LaunchHookImpl(LaunchHook):
+class LaunchHookImpl:
     """
     Launch Hook implementation for capturing and logging kernel launch metadata.
 
