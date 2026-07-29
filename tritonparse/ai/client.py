@@ -6,20 +6,48 @@ LLM Client abstractions for AI-powered analysis.
 This module provides:
 - Data structures for LLM communication (Message, Response, ToolCall)
 - Abstract base class LLMClient for different LLM providers
+- CLI clients for Claude Code and Codex
 - MockClient for testing without actual LLM calls
 """
 
+import json
 import logging
 import os
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterator, List, Optional, Tuple
 
 from tritonparse._json_compat import JSONDecodeError, loads
 
+try:
+    from security.frameworks.python.exec.subprocess import TrustedSubprocessWithList
+except ModuleNotFoundError as error:  # pragma: no cover - OSS source fallback
+    _missing_module = error.name or ""
+    if _missing_module != "security" and not _missing_module.startswith("security."):
+        raise
+
+    class TrustedSubprocessWithList:
+        """Portable fallback when Meta's trusted subprocess wrapper is unavailable."""
+
+        @staticmethod
+        def run(
+            *, executable: str, cmd_args: List[str], **kwargs: Any
+        ) -> "subprocess.CompletedProcess[Any]":
+            # The executable is fixed by the caller and dynamic values remain
+            # separate argv entries, so the OSS fallback never invokes a shell.
+            return subprocess.run([executable, *cmd_args], **kwargs)  # noqa: P204
+
+
 logger: logging.Logger = logging.getLogger(__name__)
+
+_CODEX_TRANSIENT_FAILURE_MARKERS: Tuple[str, ...] = (
+    "stream disconnected before completion",
+    "no_capacity",
+    "no capacity",
+)
 
 
 @dataclass
@@ -176,6 +204,188 @@ class MockClient(LLMClient):
         """
         response = self.chat(messages, temperature)
         yield response.content
+
+
+class CodexClient(LLMClient):
+    """LLM client using the Codex CLI's non-interactive ``exec`` mode.
+
+    The client is intentionally read-only and ephemeral. System messages map to
+    invocation-scoped Codex developer instructions, while the user message is
+    supplied through stdin to avoid shell quoting and command-line length limits.
+    """
+
+    def __init__(
+        self,
+        retry_count: int = 3,
+        timeout: int = 600,
+        model: Optional[str] = None,
+        cwd: Optional[str] = None,
+    ) -> None:
+        if retry_count < 1:
+            raise ValueError("retry_count must be at least 1")
+        self.retry_count = retry_count
+        self.timeout = timeout
+        self.model = model
+        self.cwd = os.path.abspath(cwd) if cwd else cwd
+
+    def chat(
+        self,
+        messages: List[Message],
+        temperature: float = 0.0,
+        max_tokens: Optional[int] = None,
+    ) -> Response:
+        """Run one stateless Codex turn and return its final agent message."""
+        del temperature, max_tokens
+        system_prompt, user_prompt = self._extract_prompts(messages)
+
+        for attempt in range(1, self.retry_count + 1):
+            try:
+                result, content = self._run_once(system_prompt, user_prompt)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError(
+                    f"Codex CLI timed out after {self.timeout}s"
+                ) from error
+            except OSError as error:
+                raise RuntimeError(f"Failed to launch Codex CLI: {error}") from error
+
+            if result.returncode == 0:
+                if not content:
+                    raise RuntimeError("Codex CLI returned no final response")
+                return Response(
+                    content=content,
+                    raw={
+                        "returncode": result.returncode,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                    },
+                )
+
+            failure = self._format_failure(result.stdout, result.stderr)
+            if attempt == self.retry_count or not self._is_transient_failure(failure):
+                raise RuntimeError(
+                    f"Codex CLI failed on attempt {attempt}/{self.retry_count}: {failure}"
+                )
+
+        raise AssertionError("Codex retry loop exited unexpectedly")
+
+    def chat_stream(
+        self,
+        messages: List[Message],
+        temperature: float = 0.0,
+    ) -> Iterator[str]:
+        """Yield the final response as one chunk.
+
+        CUTracer uses one-shot reasoning today. A future consumer that needs
+        progress events can add ``codex exec --json`` parsing without changing
+        the synchronous ``chat`` contract.
+        """
+        yield self.chat(messages, temperature).content
+
+    def _run_once(
+        self, system_prompt: str, user_prompt: str
+    ) -> Tuple["subprocess.CompletedProcess[Any]", str]:
+        output_fd, output_path = tempfile.mkstemp(
+            suffix=".md", prefix="codex_last_message_"
+        )
+        os.close(output_fd)
+        try:
+            result = TrustedSubprocessWithList.run(
+                executable="codex",
+                cmd_args=self._build_args(system_prompt, output_path),
+                input=user_prompt,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                cwd=self.cwd,
+                check=False,
+            )
+            content = Path(output_path).read_text(encoding="utf-8").strip()
+            return result, content
+        finally:
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+
+    def _build_args(self, system_prompt: str, output_path: str) -> List[str]:
+        args = [
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            'web_search="disabled"',
+            "-s",
+            "read-only",
+            "--disable",
+            "hooks",
+            "--disable",
+            "multi_agent",
+        ]
+        if system_prompt:
+            args.extend(
+                [
+                    "-c",
+                    f"developer_instructions={json.dumps(system_prompt, ensure_ascii=False)}",
+                ]
+            )
+        if self.cwd:
+            args.extend(["-C", self.cwd])
+        if self.model:
+            args.extend(["-m", self.model])
+        args.extend(
+            [
+                "exec",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--ignore-user-config",
+                "--color",
+                "never",
+                "--output-last-message",
+                output_path,
+                "-",
+            ]
+        )
+        return args
+
+    @staticmethod
+    def _extract_prompts(messages: List[Message]) -> Tuple[str, str]:
+        system_prompts: List[str] = []
+        user_prompts: List[str] = []
+        for message in messages:
+            if message.role == "system":
+                system_prompts.append(message.content)
+            elif message.role == "user":
+                user_prompts.append(message.content)
+            else:
+                raise ValueError(
+                    "CodexClient supports at most one system message, exactly one "
+                    "user message, and no other roles"
+                )
+
+        if len(system_prompts) > 1 or len(user_prompts) != 1:
+            raise ValueError(
+                "CodexClient supports at most one system message, exactly one user "
+                "message, and no other roles"
+            )
+
+        system_prompt = system_prompts[0] if system_prompts else ""
+        return system_prompt, user_prompts[0]
+
+    @staticmethod
+    def _format_failure(stdout: str, stderr: str) -> str:
+        stdout_tail = stdout[-500:].strip()
+        stderr_tail = stderr[-500:].strip()
+        if stdout_tail and stderr_tail:
+            return f"stdout: {stdout_tail}\nstderr: {stderr_tail}"
+        if stdout_tail:
+            return f"stdout: {stdout_tail}"
+        if stderr_tail:
+            return f"stderr: {stderr_tail}"
+        return "no stdout or stderr"
+
+    @staticmethod
+    def _is_transient_failure(failure: str) -> bool:
+        normalized = failure.lower()
+        return any(marker in normalized for marker in _CODEX_TRANSIENT_FAILURE_MARKERS)
 
 
 class ClaudeCodeClient(LLMClient):

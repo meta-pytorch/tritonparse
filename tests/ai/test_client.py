@@ -2,11 +2,16 @@
 
 """Tests for AI module client classes."""
 
+import json
+import os
+import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from tritonparse.ai import (
     ClaudeCodeClient,
+    CodexClient,
     LLMClient,
     Message,
     MockClient,
@@ -165,6 +170,221 @@ class TestMockClient(unittest.TestCase):
         client = MockClient(responses=["A", "B"])
         list(client.chat_stream([]))  # Consume the iterator
         self.assertEqual(client.call_count, 1)
+
+
+class TestCodexClient(unittest.TestCase):
+    """Tests for the read-only Codex CLI client."""
+
+    @staticmethod
+    def _write_final_message(cmd_args, content="Codex result"):
+        output_index = cmd_args.index("--output-last-message") + 1
+        output_path = Path(cmd_args[output_index])
+        output_path.write_text(content, encoding="utf-8")
+        return output_path
+
+    def test_init_default_values(self):
+        client = CodexClient()
+        self.assertIsNone(client.model)
+        self.assertEqual(client.retry_count, 3)
+        self.assertEqual(client.timeout, 600)
+        self.assertIsNone(client.cwd)
+
+    def test_rejects_zero_retry_count(self):
+        with self.assertRaisesRegex(ValueError, "retry_count"):
+            CodexClient(retry_count=0)
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_uses_safe_read_only_command(self, mock_run):
+        output_paths = []
+
+        def run_codex(**kwargs):
+            output_paths.append(self._write_final_message(kwargs["cmd_args"]))
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="progress", stderr=""
+            )
+
+        mock_run.side_effect = run_codex
+        model = 'gpt-test"; touch /tmp/not-run'
+        client = CodexClient(
+            retry_count=2,
+            timeout=42,
+            model=model,
+            cwd="/tmp/trace dir",
+        )
+
+        response = client.chat(
+            [
+                Message(role="system", content="System\ninstructions 😀"),
+                Message(role="user", content="Analyze this trace"),
+            ]
+        )
+
+        self.assertEqual(response.content, "Codex result")
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        self.assertEqual(kwargs["executable"], "codex")
+        self.assertEqual(kwargs["input"], "Analyze this trace")
+        self.assertEqual(kwargs["timeout"], 42)
+        self.assertEqual(kwargs["cwd"], "/tmp/trace dir")
+        self.assertTrue(kwargs["capture_output"])
+        self.assertTrue(kwargs["text"])
+        self.assertFalse(kwargs["check"])
+
+        args = kwargs["cmd_args"]
+        self.assertIn('approval_policy="never"', args)
+        self.assertIn('web_search="disabled"', args)
+        self.assertIn("read-only", args)
+        self.assertIn("hooks", args)
+        self.assertIn("multi_agent", args)
+        self.assertIn("--skip-git-repo-check", args)
+        self.assertIn("--ephemeral", args)
+        self.assertIn("--ignore-user-config", args)
+        self.assertIn("never", args)
+        self.assertIn(model, args)
+        self.assertEqual(args[-1], "-")
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
+        self.assertNotIn("--search", args)
+
+        developer_config = next(
+            arg for arg in args if arg.startswith("developer_instructions=")
+        )
+        self.assertIn("😀", developer_config)
+        self.assertEqual(
+            json.loads(developer_config.removeprefix("developer_instructions=")),
+            "System\ninstructions 😀",
+        )
+        self.assertEqual(len(output_paths), 1)
+        self.assertFalse(output_paths[0].exists())
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_rejects_unsupported_message_shapes(self, mock_run):
+        invalid_messages = [
+            [],
+            [Message(role="system", content="System")],
+            [
+                Message(role="user", content="First"),
+                Message(role="user", content="Second"),
+            ],
+            [
+                Message(role="system", content="First"),
+                Message(role="system", content="Second"),
+                Message(role="user", content="Analyze"),
+            ],
+            [
+                Message(role="assistant", content="Prior response"),
+                Message(role="user", content="Analyze"),
+            ],
+            [
+                Message(role="tool", content="Tool result"),
+                Message(role="user", content="Analyze"),
+            ],
+        ]
+
+        for messages in invalid_messages:
+            with self.subTest(messages=messages):
+                with self.assertRaisesRegex(ValueError, "exactly one user message"):
+                    CodexClient().chat(messages)
+
+        mock_run.assert_not_called()
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_resolves_relative_cwd(self, mock_run):
+        def run_codex(**kwargs):
+            self._write_final_message(kwargs["cmd_args"])
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+
+        mock_run.side_effect = run_codex
+        expected_cwd = os.path.abspath("relative/trace/dir")
+
+        CodexClient(cwd="relative/trace/dir").chat(
+            [Message(role="user", content="Analyze")]
+        )
+
+        kwargs = mock_run.call_args.kwargs
+        self.assertEqual(kwargs["cwd"], expected_cwd)
+        args = kwargs["cmd_args"]
+        cwd_index = args.index("-C") + 1
+        self.assertEqual(args[cwd_index], expected_cwd)
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_retries_transient_capacity_failure(self, mock_run):
+        attempts = 0
+
+        def run_codex(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout="", stderr="no_capacity"
+                )
+            self._write_final_message(kwargs["cmd_args"], "Recovered")
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+
+        mock_run.side_effect = run_codex
+        response = CodexClient(retry_count=2).chat(
+            [Message(role="user", content="Analyze")]
+        )
+
+        self.assertEqual(response.content, "Recovered")
+        self.assertEqual(mock_run.call_count, 2)
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_does_not_retry_deterministic_failure(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=2, stdout="", stderr="invalid model"
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "invalid model"):
+            CodexClient(retry_count=3).chat([Message(role="user", content="Analyze")])
+
+        mock_run.assert_called_once()
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_cleans_output_file_after_timeout(self, mock_run):
+        output_paths = []
+
+        def time_out(**kwargs):
+            args = kwargs["cmd_args"]
+            output_index = args.index("--output-last-message") + 1
+            output_paths.append(Path(args[output_index]))
+            raise subprocess.TimeoutExpired(cmd="codex", timeout=10)
+
+        mock_run.side_effect = time_out
+
+        with self.assertRaisesRegex(RuntimeError, "timed out after 10s"):
+            CodexClient(timeout=10).chat([Message(role="user", content="Analyze")])
+
+        self.assertEqual(len(output_paths), 1)
+        self.assertFalse(output_paths[0].exists())
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_rejects_empty_final_response(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "no final response"):
+            CodexClient().chat([Message(role="user", content="Analyze")])
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_stream_yields_final_response(self, mock_run):
+        def run_codex(**kwargs):
+            self._write_final_message(kwargs["cmd_args"], "Stream result")
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+
+        mock_run.side_effect = run_codex
+
+        chunks = list(
+            CodexClient().chat_stream([Message(role="user", content="Analyze")])
+        )
+
+        self.assertEqual(chunks, ["Stream result"])
 
 
 class TestClaudeCodeClient(unittest.TestCase):
@@ -377,7 +597,3 @@ class TestClaudeCodeClient(unittest.TestCase):
             any("claude_system_" in p for p in unlinked_paths),
             f"Expected claude_system_ temp file to be cleaned up, got: {unlinked_paths}",
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

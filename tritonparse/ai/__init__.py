@@ -9,6 +9,7 @@ analysis features like diff analysis and build error fixing.
 
 from tritonparse.ai.client import (
     ClaudeCodeClient,
+    CodexClient,
     LLMClient,
     Message,
     MockClient,
@@ -27,6 +28,7 @@ __all__ = [
     "LLMClient",
     "MockClient",
     "ClaudeCodeClient",
+    "CodexClient",
     # Parsers
     "extract_json",
     "extract_code_block",
