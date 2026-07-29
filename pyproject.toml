@@ -30,7 +30,7 @@ dev = [
     "ufmt==2.9.0",
     "usort==1.1.0",
     "ruff-api==0.2.0",
-    "ruff>=0.4.0",
+    "ruff==0.16.0",
     "coverage>=7.0.0",
 ]
 
@@ -44,6 +44,9 @@ sorter = "usort"
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.usort]
 first_party_detection = false
