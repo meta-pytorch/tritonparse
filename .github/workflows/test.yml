@@ -55,6 +55,10 @@ jobs:
               run: |
                   make format-check || (echo "❌ Format check failed. Please run 'make format' to fix formatting issues, then commit the changes." && echo "📖 For detailed formatting guide, see: https://github.com/meta-pytorch/tritonparse/wiki/05.-Code-Formatting" && exit 1)
 
+            - name: Check Python lint
+              run: |
+                  make lint-check || (echo "❌ Lint check failed. Please run 'make lint' to fix lint issues, then commit the changes." && exit 1)
+
     # ===================================================================
     # GPU tests on PyTorch self-hosted runner: AWS g5.4xlarge / NVIDIA
     # A10G, ephemeral EC2 (1 job per VM, no cross-PR pollution).

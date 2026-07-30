@@ -13,6 +13,8 @@ Usage:
 
 Options:
     --check-only    Only check for issues, don't fix them
+    --format-only   Only run the formatter
+    --lint-only     Only run the linter
     --verbose       Verbose output
     --help          Show this help message
 """
@@ -65,9 +67,7 @@ def run_ruff_check(check_only: bool = False, verbose: bool = False) -> bool:
     """Run ruff for linting only."""
     cmd = ["ruff", "check", "."]
 
-    if check_only:
-        cmd.append("--diff")
-    else:
+    if not check_only:
         cmd.append("--fix")
 
     return run_command(cmd, verbose)
@@ -95,6 +95,17 @@ Examples:
         action="store_true",
         help="Only check for issues, don't fix them",
     )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--format-only",
+        action="store_true",
+        help="Only run the formatter",
+    )
+    mode_group.add_argument(
+        "--lint-only",
+        action="store_true",
+        help="Only run the linter",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
@@ -102,28 +113,29 @@ Examples:
     # Run formatters on the entire project
     success = True
 
-    # 1. Run ufmt for unified formatting (sorter + formatter)
-    # ufmt reads configuration from pyproject.toml [tool.ufmt] section
-    print("Running ufmt for formatting (sorter + formatter from pyproject.toml)...")
-    if not run_ufmt(args.check_only, args.verbose):
-        print("❌ ufmt failed")
-        success = False
-    else:
-        print("✅ ufmt completed")
+    if not args.lint_only:
+        # Run ufmt for unified formatting (sorter + formatter).
+        # ufmt reads configuration from pyproject.toml [tool.ufmt] section.
+        print("Running ufmt for formatting (sorter + formatter from pyproject.toml)...")
+        if not run_ufmt(args.check_only, args.verbose):
+            print("❌ ufmt failed")
+            success = False
+        else:
+            print("✅ ufmt completed")
 
-    # 2. Run ruff for linting only
-    print("Running ruff for linting...")
-    if not run_ruff_check(args.check_only, args.verbose):
-        print("❌ ruff linting failed")
-        success = False
-    else:
-        print("✅ ruff linting completed")
+    if not args.format_only:
+        print("Running ruff for linting...")
+        if not run_ruff_check(args.check_only, args.verbose):
+            print("❌ ruff linting failed")
+            success = False
+        else:
+            print("✅ ruff linting completed")
 
     if success:
-        print("\n🎉 All formatting tools completed successfully!")
+        print("\n🎉 All selected code quality tools completed successfully!")
         return 0
     else:
-        print("\n❌ Some formatting tools failed. Please check the output above.")
+        print("\n❌ Some code quality tools failed. Please check the output above.")
         return 1
 
 
