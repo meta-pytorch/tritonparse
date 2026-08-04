@@ -13,37 +13,34 @@
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@monaco-editor/react": "^4.7.0",
-    "@types/react-syntax-highlighter": "^15.5.13",
     "clp-ffi-js": "^0.7.0-beta.3",
-    "monaco-editor": "^0.55.1",
-    "prismjs": "^1.30.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-resizable-panels": "^4.12.0",
-    "react-syntax-highlighter": "^16.1.1",
-    "react-window": "^2.2.7"
+    "monaco-editor": "^0.56.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-resizable-panels": "^4.12.2",
+    "react-syntax-highlighter": "^16.1.1"
   },
   "overrides": {
     "monaco-editor": {
-      "dompurify": "3.4.11"
+      "dompurify": "3.4.12"
     }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@tailwindcss/vite": "^4.3.2",
-    "@types/node": "^26.1.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "autoprefixer": "^10.5.2",
-    "eslint": "^10.6.0",
-    "eslint-plugin-react-hooks": "canary",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.7.0",
+    "globals": "^17.8.0",
     "postcss": "^8.5.25",
-    "tailwindcss": "^4.3.2",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.1",
-    "vite": "^8.1.2"
+    "typescript-eslint": "^8.65.0",
+    "vite": "^8.2.0"
   }
 }
