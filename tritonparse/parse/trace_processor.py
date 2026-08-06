@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
 from tritonparse.backend import AnalyzerContext
-from tritonparse.tools.compression import open_compressed_file
+from tritonparse.tools.compression import enumerate_json
 from tritonparse.tp_logger import get_logger
 
 from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
@@ -377,29 +377,22 @@ def _prescan_for_fake_compilations(
     compilation_hashes: Set[str] = set()
     first_launch_by_hash: Dict[str, Dict[str, Any]] = {}
 
-    with open_compressed_file(file_path) as f:
-        for line in f:
-            json_str = line.strip()
-            if not json_str:
-                continue
+    for _, parsed_json in enumerate_json(file_path):
+        if parsed_json is None:
+            continue
 
-            try:
-                parsed = loads(json_str)
-            except JSONDecodeError:
-                continue
+        event_type = parsed_json.get("event_type")
 
-            event_type = parsed.get("event_type")
+        if event_type == "compilation":
+            kernel_hash = parsed_json.get("payload", {}).get("metadata", {}).get("hash")
+            if kernel_hash:
+                compilation_hashes.add(kernel_hash)
 
-            if event_type == "compilation":
-                kernel_hash = parsed.get("payload", {}).get("metadata", {}).get("hash")
-                if kernel_hash:
-                    compilation_hashes.add(kernel_hash)
-
-            elif event_type == "launch":
-                kernel_hash = parsed.get("compilation_metadata", {}).get("hash")
-                if kernel_hash and kernel_hash not in first_launch_by_hash:
-                    # Only store the first launch event for each kernel
-                    first_launch_by_hash[kernel_hash] = parsed
+        elif event_type == "launch":
+            kernel_hash = parsed_json.get("compilation_metadata", {}).get("hash")
+            if kernel_hash and kernel_hash not in first_launch_by_hash:
+                # Only store the first launch event for each kernel
+                first_launch_by_hash[kernel_hash] = parsed_json
 
     return compilation_hashes, first_launch_by_hash
 
@@ -582,8 +575,8 @@ def parse_single_trace_content(trace_content: str) -> str:
         # Create bidirectional mappings between every pair of populated stages,
         # for example TTIR ↔ TTGIR, TTIR ↔ PTX, TTGIR ↔ PTX, ...
         stage_names = list(stage_maps.keys())
-        for i, src_stage in enumerate(stage_names):
-            for tgt_stage in stage_names[i + 1 :]:
+        for i, src_stage in enumerate(stage_names, start=1):
+            for tgt_stage in stage_names[i :]:
                 if stage_maps[src_stage] and stage_maps[tgt_stage]:
                     create_bidirectional_mapping(
                         stage_maps[src_stage],
@@ -834,130 +827,117 @@ def parse_single_rank(
 
     # Iterate over all input files in order
     for file_path in file_paths:
-        with open_compressed_file(file_path) as f:
-            for i, line in enumerate(f):
-                logger.debug(f"Processing line {i + 1} in {file_path}")
-                json_str = line.strip()
-                if not json_str:
+        for line_num, parsed_json in enumerate_json(file_path, start=1):
+            if parsed_json is None:
+                logger.warning(f"Failed to parse JSON on line {line_num} in {file_path}")
+                continue
+
+            logger.debug(f"Processing line {line_num} in {file_path}")
+
+            event_type = parsed_json.get("event_type", None)
+            payload = parsed_json.get("payload", {})
+
+            if event_type == "compilation":
+                kernel_hash = payload.get("metadata", {}).get("hash")
+                if not kernel_hash:
                     continue
-                try:
-                    parsed_json = loads(json_str)
-                except JSONDecodeError:
-                    logger.warning(
-                        f"Failed to parse JSON on line {i + 1} in {file_path}"
-                    )
+
+                # Group autotune compilations by session_id (always, even
+                # when this hash already has a real compilation recorded —
+                # the per-PID autotune session metadata may differ).
+                stack = parsed_json.get("stack", [])
+                session_id, user_stack = get_autotune_session_id(stack)
+                if session_id:
+                    autotune_sessions[session_id]["compilations"].append(parsed_json)
+                    if user_stack and session_id not in session_stacks:
+                        session_stacks[session_id] = user_stack
+
+                # Cross-PID dedup: if a real compilation with this hash
+                # was already recorded (from an earlier file), skip.
+                # First-wins matches the §7.6 semantics.
+                existing = (
+                    kernels_by_hash[kernel_hash]["compilation"]
+                    if kernel_hash in kernels_by_hash
+                    else None
+                )
+                if existing is not None and not existing.get("is_fake"):
                     continue
 
-                event_type = parsed_json.get("event_type", None)
-                payload = parsed_json.get("payload", {})
+                fname = _determine_output_fname(
+                    pt_info=payload.get("pt_info", {}),
+                    file_name_without_extension=file_name_without_extension,
+                    split_inductor_compilations=split_inductor_compilations,
+                    event=parsed_json,
+                    kernel_compile_mapping=kernel_compile_mapping,
+                )
+                output_file = os.path.join(output_dir, fname)
+                parsed_json["occurrence_id"] = next_occurrence_id
+                next_occurrence_id += 1
+                kernels_by_hash[kernel_hash]["compilation"] = parsed_json
+                kernels_by_hash[kernel_hash]["output_file"] = output_file
 
-                if event_type == "compilation":
-                    kernel_hash = payload.get("metadata", {}).get("hash")
-                    if not kernel_hash:
-                        continue
+            elif event_type == "launch":
+                kernel_hash = parsed_json.get("compilation_metadata", {}).get("hash")
 
-                    # Group autotune compilations by session_id (always, even
-                    # when this hash already has a real compilation recorded —
-                    # the per-PID autotune session metadata may differ).
-                    stack = parsed_json.get("stack", [])
-                    session_id, user_stack = get_autotune_session_id(stack)
-                    if session_id:
-                        autotune_sessions[session_id]["compilations"].append(
-                            parsed_json
-                        )
-                        if user_stack and session_id not in session_stacks:
-                            session_stacks[session_id] = user_stack
+                launch_group_hash = compute_launch_event_hash(parsed_json)
+                parsed_json["launch_group_hash"] = launch_group_hash
 
-                    # Cross-PID dedup: if a real compilation with this hash
-                    # was already recorded (from an earlier file), skip.
-                    # First-wins matches the §7.6 semantics.
-                    existing = (
-                        kernels_by_hash[kernel_hash]["compilation"]
-                        if kernel_hash in kernels_by_hash
-                        else None
-                    )
-                    if existing is not None and not existing.get("is_fake"):
-                        continue
+                parsed_json["occurrence_id"] = next_occurrence_id
+                occurrence_id = next_occurrence_id
+                next_occurrence_id += 1
 
-                    fname = _determine_output_fname(
-                        pt_info=payload.get("pt_info", {}),
-                        file_name_without_extension=file_name_without_extension,
-                        split_inductor_compilations=split_inductor_compilations,
-                        event=parsed_json,
-                        kernel_compile_mapping=kernel_compile_mapping,
-                    )
-                    output_file = os.path.join(output_dir, fname)
-                    parsed_json["occurrence_id"] = next_occurrence_id
-                    next_occurrence_id += 1
-                    kernels_by_hash[kernel_hash]["compilation"] = parsed_json
-                    kernels_by_hash[kernel_hash]["output_file"] = output_file
+                stack = parsed_json.get("stack", [])
+                session_id, user_stack = get_autotune_session_id(stack)
+                is_benchmark = _is_autotune_benchmark_launch(stack)
 
-                elif event_type == "launch":
-                    kernel_hash = parsed_json.get("compilation_metadata", {}).get(
-                        "hash"
-                    )
-
-                    launch_group_hash = compute_launch_event_hash(parsed_json)
-                    parsed_json["launch_group_hash"] = launch_group_hash
-
-                    parsed_json["occurrence_id"] = next_occurrence_id
-                    occurrence_id = next_occurrence_id
-                    next_occurrence_id += 1
-
-                    stack = parsed_json.get("stack", [])
-                    session_id, user_stack = get_autotune_session_id(stack)
-                    is_benchmark = _is_autotune_benchmark_launch(stack)
-
-                    if session_id:
-                        if is_benchmark:
-                            parsed_json["autotune_launch_type"] = "benchmark"
+                if session_id:
+                    if is_benchmark:
+                        parsed_json["autotune_launch_type"] = "benchmark"
+                    else:
+                        if autotune_sessions[session_id]["benchmark_occurrence_ids"]:
+                            parsed_json["autotune_launch_type"] = "winner"
                         else:
-                            if autotune_sessions[session_id][
-                                "benchmark_occurrence_ids"
-                            ]:
-                                parsed_json["autotune_launch_type"] = "winner"
-                            else:
-                                parsed_json["autotune_launch_type"] = "cached_winner"
+                            parsed_json["autotune_launch_type"] = "cached_winner"
 
-                    launch_by_group_hash[launch_group_hash] = parsed_json
+                launch_by_group_hash[launch_group_hash] = parsed_json
 
-                    if session_id:
-                        autotune_sessions[session_id]["launch_group_hashes"].add(
-                            launch_group_hash
+                if session_id:
+                    autotune_sessions[session_id]["launch_group_hashes"].add(
+                        launch_group_hash
+                    )
+                    if user_stack and session_id not in session_stacks:
+                        session_stacks[session_id] = user_stack
+                    if is_benchmark:
+                        autotune_sessions[session_id]["benchmark_occurrence_ids"].append(
+                            occurrence_id
                         )
-                        if user_stack and session_id not in session_stacks:
-                            session_stacks[session_id] = user_stack
-                        if is_benchmark:
-                            autotune_sessions[session_id][
-                                "benchmark_occurrence_ids"
-                            ].append(occurrence_id)
-                        else:
-                            autotune_sessions[session_id][
-                                "winner_occurrence_ids"
-                            ].append(occurrence_id)
-
-                    if kernel_hash:
-                        kernels_by_hash[kernel_hash]["launches"].append(
-                            (parsed_json, global_launch_index)
+                    else:
+                        autotune_sessions[session_id]["winner_occurrence_ids"].append(
+                            occurrence_id
                         )
-                        if not is_benchmark and session_id:
-                            autotune_winners[session_id] = launch_group_hash
-                    global_launch_index += 1
 
-                elif event_type == "autotune":
-                    stack = parsed_json.get("stack", [])
-                    session_id, user_stack = get_autotune_session_id(stack)
-                    if session_id:
-                        autotune_sessions[session_id]["autotune_result"] = {
-                            "best_config": parsed_json.get("best_config"),
-                            "configs_timings": parsed_json.get("configs_timings"),
-                            "duration": parsed_json.get("duration"),
-                            "cache_hit": parsed_json.get("cache_hit"),
-                            "cache_key": parsed_json.get("cache_key"),
-                            "kernel_name": parsed_json.get("kernel_name"),
-                        }
-                        if user_stack and session_id not in session_stacks:
-                            session_stacks[session_id] = user_stack
+                if kernel_hash:
+                    kernels_by_hash[kernel_hash]["launches"].append(
+                        (parsed_json, global_launch_index)
+                    )
+                    if not is_benchmark and session_id:
+                        autotune_winners[session_id] = launch_group_hash
+                global_launch_index += 1
+
+            elif event_type == "autotune":
+                stack = parsed_json.get("stack", [])
+                session_id, user_stack = get_autotune_session_id(stack)
+                if session_id:
+                    autotune_sessions[session_id]["autotune_result"] = {
+                        "best_config": parsed_json.get("best_config"),
+                        "configs_timings": parsed_json.get("configs_timings"),
+                        "duration": parsed_json.get("duration"),
+                        "cache_hit": parsed_json.get("cache_hit"),
+                        "cache_key": parsed_json.get("cache_key"),
+                        "kernel_name": parsed_json.get("kernel_name"),
+                    }
+                    if user_stack and session_id not in session_stacks:
+                        session_stacks[session_id] = user_stack
 
     # =====================================================
     # Pass 3: Organize and write output (unchanged from original)

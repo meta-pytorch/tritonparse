@@ -6,7 +6,11 @@ import tempfile
 
 from .parse.utils import unified_parse
 from .shared_vars import TEST_KEEP_OUTPUT
-from .structured_logging import clear_logging_config, init
+from .structured_logging import (
+    clean_up_log_handler,
+    clear_logging_config,
+    init,
+)
 
 
 def createUniqueTempDirectory():
@@ -84,6 +88,9 @@ class TritonParseManager:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        # Finalize trace output before parsing reads the generated files.
+        clean_up_log_handler()
+
         self.output_link = unified_parse(
             source=self.dir_path,
             overwrite=True,

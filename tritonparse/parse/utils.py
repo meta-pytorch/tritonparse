@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from tritonparse.shared_vars import is_fbcode
+from tritonparse.shared_vars import is_fbcode, TEST_KEEP_OUTPUT
 
 from .common import (
     copy_local_to_tmpdir,
@@ -162,29 +162,20 @@ def oss_run(
 
     # For signpost logging (not implemented in Python version)
 
-    if source.type == SourceType.LOCAL:
-        local_path = source.value
-        # Copy the results to a temp directory, then parse them
-        logs = copy_local_to_tmpdir(local_path, verbose)
+    local_path = source.value
+    # Copy the traces to a temp directory, then parse them
+    logs = copy_local_to_tmpdir(local_path, verbose)
 
-    elif source.type == SourceType.LOCAL_FILE:
-        local_path = source.value
-        # Copy the single file to a temp directory, then parse it
-        logs = copy_local_to_tmpdir(local_path, verbose)
-
-    if not source.type == SourceType.LOCAL_CLP:
-        # Parse the logs
-        parsed_log_dir, _ = parse_logs(
-            logs,
-            rank_config,
-            verbose,
-            split_inductor_compilations=split_inductor_compilations,
-            torch_trace_dir=torch_trace_dir,
-            procedure_checks=procedure_checks,
-            enable_pre_init_attribution=not no_pre_init_attribution,
-        )
-    else:
-        parsed_log_dir = source.value
+    # Parse the logs
+    parsed_log_dir, _ = parse_logs(
+        logs,
+        rank_config,
+        verbose,
+        split_inductor_compilations=split_inductor_compilations,
+        torch_trace_dir=torch_trace_dir,
+        procedure_checks=procedure_checks,
+        enable_pre_init_attribution=not no_pre_init_attribution,
+    )
 
     if out is not None:
         save_logs(Path(out), parsed_log_dir, overwrite, verbose)
@@ -194,6 +185,12 @@ def oss_run(
     else:
         out_dir = str(Path(parsed_log_dir).absolute())
     print_parsed_files_summary(out_dir)
+
+    if not TEST_KEEP_OUTPUT:
+        shutil.rmtree(logs, ignore_errors=True)
+        if out is not None:
+            shutil.rmtree(parsed_log_dir, ignore_errors=True)
+
     return None
 
 
