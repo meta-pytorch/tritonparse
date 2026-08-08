@@ -165,6 +165,43 @@ def check_paths(problems: list) -> None:
                 problems.append(f"{name}: references {rel}, which does not exist")
 
 
+# Longest run of characters with no line-break opportunity that a \texttt token may
+# contain.  \texttt does not hyphenate, so a long identifier is one unbreakable box; when
+# it lands at the end of a line TeX will accept an overfull line rather than the gaping
+# one that moving it would leave, and the token pokes out of the column.  Two rounds of
+# this were found by eye, both times after I had written a scanner that missed them --
+# once because the regex could not match the \texttt{-{}-flag} form at all, once because
+# it did not know that TeX breaks after an explicit hyphen or slash.  Hence this.
+MAX_UNBREAKABLE = 13
+
+# What TeX will break after inside \texttt, plus the break we insert by hand.
+_BREAKS = ("\\allowbreak", " ", "-", "/")
+_TEXTTT = re.compile(r"\\texttt\{((?:[^{}]|\{\})*)\}")
+
+
+def check_column_width(problems: list) -> None:
+    """Flag \texttt tokens with no way to break, in .tex documents only."""
+    for name in DOCS:
+        doc = Path(name) if Path(name).is_absolute() else ROOT / name
+        if doc.suffix != ".tex" or not doc.is_file():
+            continue
+        # Not read(): that strips \allowbreak, which is exactly what we are measuring.
+        text = doc.read_text(errors="replace")
+        for num, line in enumerate(text.splitlines(), 1):
+            if line.lstrip().startswith("%"):
+                continue
+            for m in _TEXTTT.finditer(line):
+                token = m.group(1).replace("-{}-", "--").replace("\\_", "_")
+                for sep in _BREAKS:
+                    token = token.replace(sep, "\x00")
+                longest = max((len(run) for run in token.split("\x00")), default=0)
+                if longest > MAX_UNBREAKABLE:
+                    problems.append(
+                        f"{name}:{num}: {m.group(1)!r} has {longest} characters with no "
+                        f"break point; add \\allowbreak at its component boundaries"
+                    )
+
+
 def check_camera_ready(problems: list) -> None:
     """Only the typeset document matters here; the others are never published."""
     for name in DOCS:
@@ -280,6 +317,7 @@ def main() -> int:
 
     check_paths(problems)
     check_retired(problems)
+    check_column_width(problems)
     if args.camera_ready:
         check_camera_ready(problems)
     check_timings(problems)
