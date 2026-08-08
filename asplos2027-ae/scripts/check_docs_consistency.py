@@ -174,9 +174,19 @@ def check_paths(problems: list) -> None:
 # it did not know that TeX breaks after an explicit hyphen or slash.  Hence this.
 MAX_UNBREAKABLE = 13
 
+# Token length was not the usual cause, though.  Two literals separated by a single short
+# word leave TeX only two pieces of glue in that stretch of line: it cannot tune the
+# width, so it chooses between a very loose line and an overfull one.  That is what put
+# "and WORK_DIR" into the margin, where WORK_DIR is eight characters and could not
+# possibly overflow on its own.  Keep ordinary words between adjacent \texttt tokens.
+MAX_ADJACENT_PAIR = 30
+
 # What TeX will break after inside \texttt, plus the break we insert by hand.
 _BREAKS = ("\\allowbreak", " ", "-", "/")
 _TEXTTT = re.compile(r"\\texttt\{((?:[^{}]|\{\})*)\}")
+# The same pattern without the group: re.split with a capturing group interleaves the
+# captures into the result, so splitting on _TEXTTT does not give you the gaps.
+_TEXTTT_SPLIT = re.compile(r"\\texttt\{(?:[^{}]|\{\})*\}")
 
 
 def check_column_width(problems: list) -> None:
@@ -200,6 +210,32 @@ def check_column_width(problems: list) -> None:
                         f"{name}:{num}: {m.group(1)!r} has {longest} characters with no "
                         f"break point; add \\allowbreak at its component boundaries"
                     )
+        _check_adjacent(name, text, problems)
+
+
+def _plain(token: str) -> str:
+    """As the reader sees it: \\allowbreak takes the space after it with it."""
+    token = re.sub(r"\\allowbreak\s*", "", token)
+    return token.replace("-{}-", "--").replace("\\_", "_").strip()
+
+
+def _check_adjacent(name: str, text: str, problems: list) -> None:
+    """Two long literals with almost nothing between them crowd the line-breaker."""
+    body = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("%"))
+    for para in re.split(r"\n\s*\n", body):
+        tokens = [_plain(t) for t in _TEXTTT.findall(para)]
+        gaps = _TEXTTT_SPLIT.split(para)[1:-1] if len(tokens) > 1 else []
+        for i, gap in enumerate(gaps):
+            if len(gap.split()) > 1:
+                continue
+            pair = len(tokens[i]) + len(tokens[i + 1])
+            if pair > MAX_ADJACENT_PAIR:
+                line = body[:body.find(para)].count("\n") + 1
+                problems.append(
+                    f"{name}:~{line}: {tokens[i]!r} and {tokens[i + 1]!r} are "
+                    f"{pair} characters with one word between them; put a few more "
+                    f"ordinary words there"
+                )
 
 
 def check_camera_ready(problems: list) -> None:
