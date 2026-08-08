@@ -1,0 +1,8 @@
+{
+  "tritonparse_url_prefix": "",
+  "rank_none": {
+    "regular_files": [],
+    "mapped_file": "dedicated_log_triton_trace_ae__mapped.ndjson.gz",
+    "rank_suffix": ""
+  }
+}

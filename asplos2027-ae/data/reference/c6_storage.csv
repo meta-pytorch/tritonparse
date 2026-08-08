@@ -1,0 +1,13 @@
+claim,metric,value,unit,paper_value,verdict
+C6,trials,3,count,,
+C6,trace_records,4380,count,,
+C6,reconstruct_ratio_trial0,75.01,x,,
+C6,reconstruct_ratio_trial1,75.62,x,,
+C6,reconstruct_ratio_trial2,74.42,x,,
+C6,reconstruct_ratio_mean,75.02,x,57.4,PASS
+C6,reconstruct_ratio_halfspread,0.6,x,,
+C6,reconstruct_pct_of_raw_mean,1.33,%,1.85,
+C6,runtime_pct_of_raw_mean,50.44,%,21.9,informational
+C6,wholefile_gzip_pct_of_raw_mean,0.85,%,,informational
+C6,gpu,NVIDIA H100,,NVIDIA H100,
+C6,platform,Linux-6.16.1-x86_64-with-glibc-2.34,,,

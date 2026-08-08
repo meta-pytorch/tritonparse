@@ -58,6 +58,21 @@ parsed_output/
 !tests/example_output/logs/**
 !tests/example_output/parsed_output/**
 !tests/example_output/parsed_output_complex/**
+
+# ASPLOS'27 artifact: the reference trace must ship, and the rules above
+# (logs, *.ndjson, *.ndjson.gz, *.json) would otherwise exclude all of it.
+# setup_env.sh installs a conda distribution here when the host has no usable one, and
+# records where it and the environment ended up.  run_all.sh writes one directory per
+# run.  All of it is a reviewer's local state, none of it ships.
+asplos2027-ae/.conda/
+asplos2027-ae/.env-prefix
+asplos2027-ae/.conda-root
+asplos2027-ae/logs/
+
+!asplos2027-ae/traces/
+!asplos2027-ae/traces/**
+!asplos2027-ae/data/
+!asplos2027-ae/data/**
 !website/public/**
 .tox/
 .nox/

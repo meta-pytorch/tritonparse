@@ -1,0 +1,71 @@
+# TritonParse ASPLOS'27 Artifact Evaluation — pinned dependency set
+#
+# Normally you do not install this by hand: environment.yml pulls it in, so that conda
+# supplies the interpreter and Node while the versions that determine what the
+# measurements mean stay here, in one place, with the reasoning attached.  Installing it
+# directly into a virtualenv is the supported alternative and gives you everything
+# except Node.
+#
+# Validated 2026-08-06 on Linux x86_64 / NVIDIA H100 / driver 580.126.09 / Python 3.13,
+# under both a conda environment built from environment.yml and a plain virtualenv.
+#
+# These are RELEASED versions, deliberately not nightlies: a reviewer installing this
+# in September must get the same stack we tested in August.  Do not relax to `>=`.
+#
+# NOTE ON VERSIONS: the paper's measurements (Table 1) were taken on PyTorch 2.9.0 /
+# Triton 3.4.0 / CUDA 12.8 / ROCm 6.4.0.  The artifact pins a newer released stack
+# because TritonParse has evolved since submission and the older stack no longer
+# installs cleanly against current drivers.  Absolute numbers therefore differ from
+# the paper; the artifact validates mechanisms and relative magnitudes.  See
+# README.md, "Version delta versus the paper".
+
+# --- core stack -------------------------------------------------------------------
+# torch 2.13.0 pins triton==3.7.1 exactly; triton is listed for explicitness.
+#
+# DRIVER CAVEAT: plain `pip install torch==2.13.0` resolves to the +cu130 build, which
+# needs a recent NVIDIA driver (validated on 580.126.09).  On an older driver, install
+# the same torch version from a lower-CUDA index instead -- see README.md,
+# "Installation":
+#     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu126
+#     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu129
+# There is NO cu128 build of 2.13.0; do not use that index as a fallback.
+torch==2.13.0
+triton==3.7.1
+
+# --- required by generated reproducers ---------------------------------------------
+# TritonParse-generated reproducer scripts `import numpy`.  Without it the reproducer
+# fails at import time even though torch itself is installed.
+#
+# 2.4.1 rather than the newest: numpy 2.5 requires Python >= 3.12, which would silently
+# exclude reviewers on 3.11.  2.4.1 needs >= 3.11 and is what sets this artifact's
+# Python floor -- everything else pinned here accepts 3.10.
+numpy==2.4.1
+
+# --- required to run the project's own test suites ---------------------------------
+# tritonparse's [test] extra.  Without it one module in tests/gpu fails to import
+# ("ModuleNotFoundError: No module named 'parameterized'") and the GPU suite reports
+# an error even though the library itself is fine.
+parameterized==0.9.0
+
+# --- optional, improves reviewer experience ----------------------------------------
+# Without black, the reproducer generator logs
+#   "black library not available, code formatting will be skipped"
+# and emits unformatted (still correct, but harder to read) Python.
+black==26.5.1
+
+# --- TritonParse itself -------------------------------------------------------------
+# Two supported options; pick ONE.
+#
+# (a) From PyPI — simplest, no build step:
+#         pip install tritonparse==0.5.1
+#
+# (b) From this artifact snapshot — keeps the library and the bundled tests/ in sync.
+#     REQUIRED WORKAROUND: the project versions itself with setuptools-scm, which needs
+#     git metadata.  A Zenodo/GitHub zip has no .git, so a plain `pip install .` fails
+#     with "setuptools-scm was unable to detect version".  Pretend the version instead:
+#
+#         SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRITONPARSE=0.5.1 pip install <repo-root>
+#
+# Option (b) is what the AE scripts assume, because 00_kick_the_tires.sh also runs the
+# repository's own tests/cpu suite and those must match the installed library.
+tritonparse==0.5.1

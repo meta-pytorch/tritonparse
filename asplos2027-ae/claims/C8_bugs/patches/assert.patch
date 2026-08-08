@@ -1,0 +1,10 @@
+--- toy_kernel.py	2026-08-04 21:33:38.327819152 -0700
++++ toy_kernel.py	2026-08-04 21:34:04.332256777 -0700
+@@ -25,6 +25,7 @@
+ @triton.jit(debug=True)
+ def scale_kernel(x_ptr, o_ptr, n_elements, stride_ym, BLOCK: tl.constexpr):
+     pid = tl.program_id(0)
++    assert stride_ym == 192, "stride check failed"
+     offs = pid * BLOCK + tl.arange(0, BLOCK)
+     mask = offs < n_elements
+     x = tl.load(x_ptr + offs, mask=mask)

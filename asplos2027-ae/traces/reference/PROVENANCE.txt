@@ -1,0 +1,17 @@
+{
+  "python": "3.13.11",
+  "torch": "2.13.0+cu130",
+  "triton": "3.7.1",
+  "torch_cuda": "13.0",
+  "gpu": "NVIDIA H100",
+  "platform": "Linux-6.16.1-x86_64-with-glibc-2.34",
+  "raw_logs": [
+    "dedicated_log_triton_trace_ae_.ndjson"
+  ],
+  "archives": [
+    "dedicated_log_triton_trace_ae__mapped.ndjson.gz"
+  ],
+  "raw_bytes": 326156,
+  "archive_bytes": 98511,
+  "reconstruct_ratio": 3.31
+}

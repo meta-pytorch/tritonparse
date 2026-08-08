@@ -1,0 +1,27 @@
+Reference results shipped with the artifact.
+
+These are the numbers WE measured, so that a reviewer can compare their run against
+ours and not only against the paper.  The AE guidance asks for exactly this:
+
+    "Pre-record results from your platform and ship a script that automatically
+     compares fresh results against them, sparing reviewers from parsing stdout."
+
+Use scripts/compare_to_reference.py to do the comparison; 01_gpu_core.sh runs it
+automatically at the end.
+
+Recorded on:
+  host      Linux 6.16 x86-64
+  gpu       NVIDIA H100 (sm_90)
+  driver    580.126.09
+  python    3.13.11
+  torch     2.13.0+cu130
+  triton    3.7.1
+  numpy     2.4.1
+  tritonparse 0.5.1
+  date      2026-08-05
+            (c9_rope.csv re-recorded 2026-08-06 on the same host, when the
+             native_mul_bf16 row was added; its other values are unchanged)
+
+These numbers are NOT the paper's.  The paper's values appear in the paper_value
+column of each CSV; see README.md, "Version delta versus the paper", for why the
+two differ.

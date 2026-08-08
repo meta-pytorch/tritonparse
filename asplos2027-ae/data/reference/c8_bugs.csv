@@ -1,0 +1,8 @@
+claim,metric,value,unit,paper_value,verdict
+C8,assert_original_class,assert,class,assert,
+C8,assert_reproduced_class,assert,class,assert,PASS
+C8,ima_original_class,memfault,class,memfault,
+C8,ima_reproduced_class,memfault,class,memfault,PASS
+C8,hang_original_class,hang,class,hang,
+C8,hang_reproduced_class,hang,class,hang,PASS
+C8,bug_classes_reproduced,3,count,3,PASS

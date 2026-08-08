@@ -1,0 +1,6 @@
+claim,metric,value,unit,paper_value,verdict
+C1,backend,cuda,,cuda+hip,
+C1,compilations,5,count,,
+C1,launch_events,14,count,,
+C1,stages_expected,ttir|ttgir|llir|ptx,,,
+C1,compilations_missing_stages,0,count,0,PASS

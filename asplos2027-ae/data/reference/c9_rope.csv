@@ -1,0 +1,13 @@
+claim,metric,value,unit,paper_value,verdict
+C9,samples_per_trial,10000,count,10000,
+C9,trials,5,count,,
+C9,divergence_seed0,24.39,%,,
+C9,divergence_seed1,24.46,%,,
+C9,divergence_seed2,24.73,%,,
+C9,divergence_seed3,23.88,%,,
+C9,divergence_seed4,23.41,%,,
+C9,divergence_mean,24.17,%,25.84,PASS
+C9,divergence_halfspread,0.66,%,,
+C9,ptx_vs_model_mismatches,0,count,0,PASS
+C9,gpu,NVIDIA H100,,NVIDIA H100,
+C9,native_mul_bf16,true,,true,

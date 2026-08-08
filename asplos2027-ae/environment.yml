@@ -1,0 +1,47 @@
+# TritonParse — ASPLOS'27 Artifact Evaluation
+#
+# One command builds everything this artifact needs, including the Node.js toolchain
+# for the optional Review-interface build:
+#
+#     conda env create -f environment.yml
+#     conda activate tritonparse-ae
+#
+# Then install TritonParse itself and run the checks; see README.md, "Installation".
+#
+# WHY THE PINS LIVE IN A SEPARATE FILE.  Only three things below come from conda:
+# the interpreter, pip, and Node.  Everything that actually determines what the
+# measurements mean -- torch, triton, numpy, tritonparse -- is pulled from
+# requirements-pinned.txt, which stays the single source of truth for versions and
+# carries the reasoning behind each pin.  Conda has no build of torch 2.13.0+cu130,
+# so mirroring those pins here would create a second list that could silently drift
+# from the first.
+#
+# conda-forge only, deliberately, and `nodefaults` is load-bearing rather than tidy.
+# Listing conda-forge does not by itself displace `defaults`: conda merges the channel
+# list from the host's own .condarc, and recent conda versions then refuse to solve
+# until Anaconda's commercial Terms of Service have been accepted for pkgs/main --
+#
+#     CondaToSNonInteractiveError: Terms of Service have not been accepted ...
+#
+# which is a failure this artifact would otherwise inflict on any reviewer who has not
+# accepted them.  `nodefaults` drops that channel and the gate with it.  (We hit this
+# while validating; it is not hypothetical.)
+name: tritonparse-ae
+
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  # 3.13 is what we validated.  The floor is 3.11 (set by numpy 2.4.1) if you need to
+  # match an existing environment -- see README.md, "Software".
+  - python=3.13
+  - pip
+
+  # Node is needed only by the optional 02_review_ui.sh.  It is here rather than left
+  # to the host because it is otherwise the one dependency the artifact cannot supply
+  # itself.  Validated on v24 / npm 11.
+  - nodejs=24
+
+  - pip:
+      - -r requirements-pinned.txt

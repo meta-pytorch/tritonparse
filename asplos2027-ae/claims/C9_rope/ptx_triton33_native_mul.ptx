@@ -1,0 +1,16 @@
+// Transcribed verbatim from the paper, Listing 2 (right column, "Triton 3.3").
+// NOT captured by re-running Triton 3.3; the provenance of this file is the paper text.
+//
+// Semantics: out = in_rope1 * cos_rope - in_rope2 * sin_rope, where only the second
+// product is rounded (by a native bf16 multiply); the first product stays unrounded
+// inside the final fma.  That single difference in rounding points is what makes the
+// two sequences disagree on a quarter of random inputs -- see bf16_rounding_study.py.
+
+// temp = in_rope2 * sin_rope
+mul.bf16 %temp, %in_rope2, %sin_rope;
+
+// neg_temp = -temp
+neg.bf16 %neg_temp, %temp;
+
+// result = in_rope1 * cos_rope + neg_temp
+fma.rn.bf16 %result, %in_rope1, %cos_rope, %neg_temp;
