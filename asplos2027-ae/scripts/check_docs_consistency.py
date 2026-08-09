@@ -172,14 +172,21 @@ def check_paths(problems: list) -> None:
 # this were found by eye, both times after I had written a scanner that missed them --
 # once because the regex could not match the \texttt{-{}-flag} form at all, once because
 # it did not know that TeX breaks after an explicit hyphen or slash.  Hence this.
-MAX_UNBREAKABLE = 13
+# Only a token that could not fit the column even on a line of its own has to be broken
+# from the inside.  Below that, an \allowbreak is not neutral: it offers TeX a break that
+# leaves a fragment at the end of a line, and in a crowded paragraph TeX will take it --
+# which is how TRITONPARSE_REPO, sixteen characters in a column that holds about fifty,
+# ended up with TRITONPARSE_ hanging in the margin.  Space the prose out instead.
+MAX_UNBREAKABLE = 25
 
 # Token length was not the usual cause, though.  Two literals separated by a single short
 # word leave TeX only two pieces of glue in that stretch of line: it cannot tune the
 # width, so it chooses between a very loose line and an overfull one.  That is what put
 # "and WORK_DIR" into the margin, where WORK_DIR is eight characters and could not
 # possibly overflow on its own.  Keep ordinary words between adjacent \texttt tokens.
-MAX_ADJACENT_PAIR = 30
+# SKIP_UNITTESTS=1 one word away from WORK_DIR is twenty-four characters, and that pair
+# was reported poking out.  So the limit is below it.
+MAX_ADJACENT_PAIR = 22
 
 # What TeX will break after inside \texttt, plus the break we insert by hand.
 _BREAKS = ("\\allowbreak", " ", "-", "/")
