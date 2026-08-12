@@ -41,6 +41,12 @@ log = logging.getLogger(__name__)
 
 TEXT_FILE_EXTENSIONS = [".ttir", ".ttgir", ".llir", ".ptx", ".amdgcn", ".json"]
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit for file content extraction
+# Size cap for a launch event's "function" handle. Triton documents this as an
+# opaque backend value (CUDA/HIP report an int address or None), but some
+# backends hand back the whole compiled binary instead — megabytes per launch
+# event, which dwarfs everything else in the trace. Nothing downstream reads
+# the handle, so anything above the cap is replaced by a size summary.
+MAX_LAUNCH_FUNCTION_CHARS = 256
 
 triton_trace_log = logging.getLogger("tritonparse_trace")
 # The folder to store the triton trace log.
@@ -98,6 +104,9 @@ set_runtime_sass_dump_override(
 
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
+# Set once the first oversized launch "function" handle is summarized, so the
+# message is emitted once per process instead of once per kernel launch.
+_logged_oversized_launch_function = False
 # Per-hash run counter and per-launch blob save flag for skip/max runs gating
 _kernel_run_counts_per_hash: dict[str, int] = {}
 _save_blobs_for_current_launch = True
@@ -1740,6 +1749,109 @@ class JITHookImpl:
         return True
 
 
+def summarize_launch_function(function: Any) -> Union[int, str, None]:
+    """
+    Reduce a launch event's ``function`` handle to something small enough to log.
+
+    ``None`` and ``int`` — the shape Triton documents and what CUDA/HIP report —
+    pass through untouched (``bool`` excepted; see below). Every other type is
+    stringified, and replaced by a size summary once it exceeds
+    ``MAX_LAUNCH_FUNCTION_CHARS``.
+
+    The cap is always measured against the string this returns, never against
+    the input: a binary handle renders as up to four characters per byte, so
+    sizing the input in bytes and returning its repr would let the field run
+    several times over the limit.
+
+    Args:
+        function: The raw ``function`` value from Triton's launch metadata.
+
+    Returns:
+        The original handle, or a string of at most
+        ``MAX_LAUNCH_FUNCTION_CHARS`` characters.
+    """
+    # `bool` subclasses `int`, but a JSON boolean is not an integer — the
+    # validator rejects one for the schema's "integer", and it matches neither
+    # "string" nor "null" either. Letting it through would emit a record that
+    # fails validation, which is the exact failure this function exists to
+    # prevent, so a bool falls through to be stringified below.
+    if function is None or (
+        isinstance(function, int) and not isinstance(function, bool)
+    ):
+        return function
+
+    # Bytes-like handles are sized before rendering, because rendering a
+    # multi-MB one is exactly what this function exists to avoid. The byte
+    # count is only a cheap-to-render guard, though — the cap is applied to the
+    # rendered string below, since that is what actually lands in the trace.
+    # A byte renders as up to four characters (``\xNN``), so a handle that
+    # clears the guard costs at most ~4x the limit to render and discard.
+    if isinstance(function, (bytes, bytearray, memoryview)):
+        # nbytes, not len(): len() of a memoryview counts elements, which
+        # equals the byte count only when itemsize == 1.
+        size = function.nbytes if isinstance(function, memoryview) else len(function)
+        if size <= MAX_LAUNCH_FUNCTION_CHARS:
+            # ``str()`` of a memoryview renders its address, not its content, so
+            # it would differ between two runs holding identical bytes — enough
+            # to make the field look like it varies across launches.
+            rendered = (
+                str(bytes(function))
+                if isinstance(function, memoryview)
+                else str(function)
+            )
+            if len(rendered) <= MAX_LAUNCH_FUNCTION_CHARS:
+                return rendered
+            # The byte count cleared the guard, so it is not what tripped the
+            # cap — saying "N bytes, above the N limit" here would contradict
+            # itself. Name the rendered length, which is what actually did.
+            _log_oversized_launch_function(
+                type(function).__name__, len(rendered), "chars"
+            )
+        else:
+            _log_oversized_launch_function(type(function).__name__, size, "bytes")
+        # The summary reports the handle's own size either way: for a binary
+        # handle that is the number worth knowing, not its repr length.
+        return f"<{type(function).__name__}: {size} bytes omitted>"
+
+    text = str(function)
+    if len(text) <= MAX_LAUNCH_FUNCTION_CHARS:
+        return text
+    _log_oversized_launch_function(type(function).__name__, len(text), "chars")
+    return f"<{type(function).__name__}: {len(text)} chars omitted>"
+
+
+def _log_oversized_launch_function(type_name: str, size: int, unit: str) -> None:
+    """
+    Record that a launch ``function`` handle was summarized, at most once.
+
+    Debug level on purpose. For a backend whose handle is not a scalar this
+    fires on every run of every process, yet nothing is wrong and there is
+    nothing to act on — and the trace already states the same fact in the field
+    itself, as ``<bytes: N bytes omitted>``. Logging it louder would put a
+    permanent, unactionable warning in front of every user of that backend.
+
+    The dedup is best-effort, not a guarantee: the flag is read and set without
+    a lock, so two threads summarizing their first oversized handle at the same
+    moment can both log. That is deliberate. The goal is "do not repeat this on
+    every launch", not "exactly once", and the whole cost of losing the race is
+    a duplicate debug line that is off by default — not worth synchronizing a
+    function on the launch path for.
+    """
+    global _logged_oversized_launch_function
+    if _logged_oversized_launch_function:
+        return
+    _logged_oversized_launch_function = True
+    log.debug(
+        "[tritonparse] Launch metadata 'function' is a %s of %d %s, above the "
+        "%d limit; logging a size summary instead. The handle is an opaque "
+        "backend value that no tritonparse analysis reads.",
+        type_name,
+        size,
+        unit,
+        MAX_LAUNCH_FUNCTION_CHARS,
+    )
+
+
 class LaunchHookImpl:
     """
     Launch Hook implementation for capturing and logging kernel launch metadata.
@@ -1789,7 +1901,7 @@ class LaunchHookImpl:
 
         trace_data = defaultdict(dict)
         trace_data["name"] = metadata_dict["name"]
-        trace_data["function"] = metadata_dict["function"]
+        trace_data["function"] = summarize_launch_function(metadata_dict["function"])
         trace_data["stream"] = metadata_dict["stream"]
         launch_metadata_tritonparse = metadata_dict.get(
             "launch_metadata_tritonparse", None

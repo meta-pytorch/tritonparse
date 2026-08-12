@@ -31,8 +31,8 @@
       "description": "Kernel name."
     },
     "function": {
-      "type": ["integer", "null"],
-      "description": "Kernel function handle (memory address), or null if not captured."
+      "type": ["integer", "string", "null"],
+      "description": "Kernel function handle, or null if not captured. CUDA/HIP report an integer memory address. Backends that report a non-scalar handle (e.g. the compiled binary itself) are reduced to a short string summary."
     },
     "stream": {
       "type": "integer",

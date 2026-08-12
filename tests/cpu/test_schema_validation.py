@@ -148,8 +148,8 @@ class ValidateRecordTest(unittest.TestCase):
         is_valid, errors = validate_record(record)
         self.assertTrue(is_valid, f"Unexpected errors: {errors}")
 
-    def test_launch_record_function_wrong_type(self):
-        """function field rejects non-integer/non-null types like string."""
+    def test_valid_launch_record_function_summary_string(self):
+        """function field accepts the summary string emitted for huge handles."""
         record = {
             "event_type": "launch",
             "pid": 1,
@@ -157,14 +157,33 @@ class ValidateRecordTest(unittest.TestCase):
             "name": "k",
             "grid": [1],
             "stream": 0,
-            "function": "not_an_int",
+            "function": "<bytes: 4168024 bytes omitted>",
             "stack": [],
             "compilation_metadata": {"hash": "a", "name": "k"},
             "extracted_args": {},
         }
         is_valid, errors = validate_record(record)
-        self.assertFalse(is_valid)
-        self.assertTrue(any("function" in e and "type" in e for e in errors))
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_launch_record_function_wrong_type(self):
+        """function field rejects composite types like list and object."""
+        for bad_value in ([1, 2, 3], {"handle": 1}):
+            with self.subTest(function=bad_value):
+                record = {
+                    "event_type": "launch",
+                    "pid": 1,
+                    "timestamp": "t",
+                    "name": "k",
+                    "grid": [1],
+                    "stream": 0,
+                    "function": bad_value,
+                    "stack": [],
+                    "compilation_metadata": {"hash": "a", "name": "k"},
+                    "extracted_args": {},
+                }
+                is_valid, errors = validate_record(record)
+                self.assertFalse(is_valid)
+                self.assertTrue(any("function" in e and "type" in e for e in errors))
 
     def test_valid_launch_diff_record(self):
         record = {
