@@ -13,6 +13,45 @@ SUMMARY_FIELDS = ["pid", "timestamp", "stream", "function", "data_ptr"]
 # Fields to completely exclude from launch diff (internal tracking fields)
 EXCLUDED_FIELDS = ["occurrence_id", "launch_group_hash", "autotune_launch_type"]
 
+# Upper bound, in characters, on any single string carried through a launch
+# payload. Two known values sit far above it and carry no information the
+# trace doesn't already hold elsewhere:
+#   - `compilation_metadata.asm.*` duplicates IR that the compilation event
+#     already stores verbatim in `file_content`.
+#   - `function` is an opaque backend handle that some backends report as the
+#     entire compiled binary (~4 MB per launch event; 98% of one real trace).
+# Both also render into the web viewer as a single unbounded blob.
+MAX_VALUE_CHARS = 4096
+
+
+def summarize_oversized_strings(value: Any) -> Any:
+    """
+    Recursively replace strings longer than ``MAX_VALUE_CHARS`` with a summary.
+
+    Returns a new object; the input is left untouched so callers that hash or
+    compare the original are unaffected.
+
+    Args:
+        value: Any JSON-like value (dict, list, or scalar).
+
+    Returns:
+        The value with over-long strings swapped for ``<N chars omitted>``.
+    """
+    if isinstance(value, str):
+        if len(value) > MAX_VALUE_CHARS:
+            return f"<{len(value)} chars omitted>"
+        return value
+    if isinstance(value, dict):
+        return {k: summarize_oversized_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [summarize_oversized_strings(v) for v in value]
+    return value
+
+
+def _is_excluded_field(flat_key: str) -> bool:
+    """True when a flattened launch key is internal bookkeeping, not trace data."""
+    return any(excluded in flat_key for excluded in EXCLUDED_FIELDS)
+
 
 def _format_id_ranges(ids: List[int]) -> str:
     """
@@ -579,8 +618,16 @@ def _generate_launch_diff(
     launch_index_map = [launch[1] for launch in launches]
 
     if len(launch_events) == 1:
+        # A single launch has nothing to compare against, but it still goes
+        # through the same field filtering as the multi-launch path below —
+        # otherwise internal bookkeeping and multi-MB blobs land in `sames`.
+        sames_flat = {
+            key: summarize_oversized_strings(value)
+            for key, value in _flatten_dict(launch_events[0]).items()
+            if not _is_excluded_field(key)
+        }
         return (
-            _unflatten_dict(_flatten_dict(launch_events[0])),
+            _unflatten_dict(sames_flat),
             {},
             _to_ranges(launch_index_map),
         )
@@ -602,12 +649,12 @@ def _generate_launch_diff(
 
     for key, value_groups in data_by_key.items():
         # Skip internal tracking fields
-        if any(excluded in key for excluded in EXCLUDED_FIELDS):
+        if _is_excluded_field(key):
             continue
         if len(value_groups) == 1:
             # This key has the same value across all launches
             value_str = list(value_groups.keys())[0]
-            sames_flat[key] = loads(value_str)
+            sames_flat[key] = summarize_oversized_strings(loads(value_str))
         else:
             # This key has different values
             is_summary = any(summary_key in key for summary_key in SUMMARY_FIELDS)
@@ -621,7 +668,7 @@ def _generate_launch_diff(
                 for value_str, indices in value_groups.items():
                     values_dist.append(
                         {
-                            "value": loads(value_str),
+                            "value": summarize_oversized_strings(loads(value_str)),
                             "count": len(indices),
                             "launches": _to_ranges(indices),
                         }

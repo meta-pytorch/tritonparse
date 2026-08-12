@@ -12,7 +12,11 @@ from tritonparse.backend import AnalyzerContext
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
-from .event_diff import _generate_autotune_analysis_events, _generate_launch_diff
+from .event_diff import (
+    _generate_autotune_analysis_events,
+    _generate_launch_diff,
+    summarize_oversized_strings,
+)
 from .ir_analysis import _generate_ir_analysis, _generate_launch_analysis
 from .ir_parser import _parse_generic_loc, extract_ptx_amdgcn_mappings
 from .mapper import create_bidirectional_mapping, create_python_mapping
@@ -898,6 +902,9 @@ def parse_single_rank(
                     )
 
                     launch_group_hash = compute_launch_event_hash(parsed_json)
+                    # Shrink after hashing, so group hashes stay byte-identical
+                    # to what the same trace produced before this guard.
+                    parsed_json = summarize_oversized_strings(parsed_json)
                     parsed_json["launch_group_hash"] = launch_group_hash
 
                     parsed_json["occurrence_id"] = next_occurrence_id
