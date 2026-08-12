@@ -612,6 +612,49 @@ export async function loadLogDataFromFile(file: File): Promise<LogEntry[]> {
 }
 
 /**
+ * Drops `metadata.asm` entries that `file_content` already carries.
+ *
+ * Triton keeps its own copy of the compilation artifacts in `metadata.asm`,
+ * keyed by artifact filename. tritonparse extracts those same artifacts from
+ * the Triton cache directory into `payload.file_content`, which is what the IR
+ * Files section and every IR view read. Left alone, `asm` renders a second,
+ * verbatim IR dump inside the metadata block.
+ *
+ * Entries are matched by content rather than by key, so differing key
+ * spellings don't matter, and anything `file_content` does not cover is kept —
+ * no artifact silently disappears.
+ *
+ * @param metadata - Compilation metadata from the trace, if the event has any.
+ * @param fileContent - Mapping from artifact filename to its text content.
+ * @returns Metadata with redundant `asm` entries removed, or the input
+ *   unchanged when there is nothing to prune.
+ */
+function pruneRedundantAsm(
+    metadata: KernelMetadata | undefined,
+    fileContent: Record<string, string> | undefined
+): KernelMetadata | undefined {
+    const asm = metadata?.asm;
+    if (!asm || typeof asm !== "object" || Array.isArray(asm)) {
+        return metadata;
+    }
+
+    const knownContent = new Set(Object.values(fileContent || {}));
+    const remaining = Object.fromEntries(
+        Object.entries(asm as Record<string, unknown>).filter(
+            ([, content]) =>
+                typeof content !== "string" || !knownContent.has(content)
+        )
+    );
+
+    const pruned: KernelMetadata = { ...metadata };
+    delete pruned.asm;
+    if (Object.keys(remaining).length > 0) {
+        pruned.asm = remaining;
+    }
+    return pruned;
+}
+
+/**
  * Process raw log entries to extract kernel information
  * @param logEntries - Array of log entries from the trace file
  * @returns Array of processed kernel objects ready for display
@@ -659,7 +702,10 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 filePaths: entry.payload.file_path,
                 sourceMappings,
                 pythonSourceInfo: entry.payload.python_source,
-                metadata: entry.payload.metadata,
+                metadata: pruneRedundantAsm(
+                    entry.payload.metadata,
+                    entry.payload.file_content
+                ),
                 ir_stages: entry.payload.ir_stages,
                 // Fake compilation fields
                 isFake: entry.is_fake,

@@ -4,7 +4,18 @@ import DiffViewer from "../components/DiffViewer";
 import { RooflineSummary, RooflineLaunchTable } from "../components/RooflineView";
 import { ProcessedKernel } from "../utils/dataLoader";
 import ToggleSwitch from "../components/ToggleSwitch";
+import TruncatedValue from "../components/TruncatedValue";
 import { DocumentTextIcon, ChevronRightIcon } from "../components/icons";
+
+/**
+ * Collapse threshold for a value in the responsive metadata grid. Cells are as
+ * narrow as 180px, so a few hundred characters already runs to dozens of lines
+ * and stretches the whole row.
+ */
+const GRID_CELL_MAX_CHARS = 200;
+
+/** Collapse threshold for the full-width "long fields" list. */
+const FULL_WIDTH_MAX_CHARS = 1000;
 
 interface KernelOverviewProps {
   /** A list of all processed kernels available for viewing. */
@@ -248,14 +259,17 @@ const formatMetadataValue = (value: unknown): string => {
  */
 interface MetadataItemProps {
   label: string;
-  value: React.ReactNode;
+  value: string;
   span?: number; // Number of columns to span (default: 1)
+  /** Length above which the value collapses behind a toggle. */
+  maxChars?: number;
 }
 
 const MetadataItem: React.FC<MetadataItemProps> = ({
   label,
   value,
   span = 1,
+  maxChars = GRID_CELL_MAX_CHARS,
 }) => (
   <div
     className={`flex flex-col ${span > 1 ? `col-span-${span}` : ""} ${
@@ -263,7 +277,11 @@ const MetadataItem: React.FC<MetadataItemProps> = ({
     }`}
   >
     <span className="text-sm font-medium text-gray-500">{label}</span>
-    <span className="font-mono text-sm break-words">{value}</span>
+    <TruncatedValue
+      text={value}
+      maxChars={maxChars}
+      className="font-mono text-sm break-words"
+    />
   </div>
 );
 
@@ -526,9 +544,11 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                             )
                             .join(" ")}
                         </span>
-                        <span className="font-mono text-sm block break-all">
-                          {formatMetadataValue(value)}
-                        </span>
+                        <TruncatedValue
+                          text={formatMetadataValue(value)}
+                          maxChars={FULL_WIDTH_MAX_CHARS}
+                          className="font-mono text-sm block break-all"
+                        />
                       </div>
                     ))}
                 </div>
