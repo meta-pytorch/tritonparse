@@ -107,6 +107,12 @@ _trace_launch_enabled = False
 # Set once the first oversized launch "function" handle is summarized, so the
 # message is emitted once per process instead of once per kernel launch.
 _logged_oversized_launch_function = False
+# Derived-artifact failures already reported, keyed by
+# (adapter name, target stage name, exception type name). Derivation runs once
+# per compilation, so an environment-level problem such as a missing external
+# tool would otherwise warn once per kernel; this keeps it to once per process
+# per artifact/error kind while still making the failure visible.
+_logged_derived_artifact_failures: set[tuple[str, str, str]] = set()
 # Per-hash run counter and per-launch blob save flag for skip/max runs gating
 _kernel_run_counts_per_hash: dict[str, int] = {}
 _save_blobs_for_current_launch = True
@@ -944,6 +950,55 @@ def extract_file_content(
     _extract_file_content_legacy(trace_data, metadata_group)
 
 
+def _record_derived_artifact_failure(
+    trace_data: Dict[str, Any],
+    derived_filename: str,
+    adapter_name: str,
+    target_stage_name: str,
+    tool_name: str,
+    exc: Exception,
+):
+    """Record a failed optional derived artifact instead of aborting the trace.
+
+    A placeholder is stored under the artifact's filename in ``file_content`` so
+    the failure is visible in the trace itself, and a warning is logged once per
+    (adapter, artifact, exception type) per process so that a systemic problem
+    such as a missing external tool does not produce one line per kernel.
+
+    Args:
+        trace_data (Dict[str, Any]): Trace event being populated.
+        derived_filename (str): Filename the artifact would have been stored under.
+        adapter_name (str): Backend adapter that owns the artifact, or "legacy".
+        target_stage_name (str): Name of the derived stage (e.g. "sass").
+        tool_name (str): External tool that produces it (e.g. "nvdisasm").
+        exc (Exception): The exception raised by the derivation function. Both
+            callers catch `Exception`, not `BaseException`, so KeyboardInterrupt
+            and SystemExit still propagate.
+    """
+    if isinstance(exc, subprocess.CalledProcessError):
+        message = f"<{tool_name} failed: {str(exc)}>"
+    elif isinstance(exc, (OSError, UnicodeDecodeError)):
+        message = f"<error dumping derived artifact: {str(exc)}>"
+    else:
+        message = f"<error dumping derived artifact with {tool_name}: {str(exc)}>"
+    trace_data["file_content"][derived_filename] = message
+
+    dedup_key = (adapter_name, target_stage_name, type(exc).__name__)
+    if dedup_key in _logged_derived_artifact_failures:
+        return
+    _logged_derived_artifact_failures.add(dedup_key)
+    log.warning(
+        "Derived artifact '%s' could not be produced by %s (adapter: %s): %s: %s. "
+        "This artifact is optional; the rest of the trace was written normally. "
+        "Further failures of this kind are not logged.",
+        target_stage_name,
+        tool_name,
+        adapter_name,
+        type(exc).__name__,
+        exc,
+    )
+
+
 def _extract_file_content_adapter_driven(
     trace_data: Dict[str, Any],
     metadata_group: Dict[str, str],
@@ -1011,16 +1066,30 @@ def _extract_file_content_adapter_driven(
             )
             continue
         derived_filename = f"{filename_no_ext}{target_stage.extension}"
+        # Derived artifacts are optional by construction: they are produced by
+        # running an external tool over an artifact that has already been
+        # captured. If that tool is missing or fails, everything else in this
+        # trace event is still valid, so contain *any* exception from
+        # derive_func here. Letting one escape would propagate out of
+        # maybe_trace_triton and abort the whole trace write, losing every other
+        # stage as well -- e.g. nvdisasm not being on the path raised an
+        # uncaught RuntimeError and produced no raw_logs at all.
+        # This is deliberately narrow in scope: only the optional derive_func
+        # call is wrapped, so failures in required extraction stages still
+        # surface normally.
         try:
             content = info.derive_func(source_path)
             if content is not None:
                 trace_data["file_content"][derived_filename] = content
-        except subprocess.CalledProcessError as e:
-            message = f"<{info.tool_name} failed: {str(e)}>"
-            trace_data["file_content"][derived_filename] = message
-        except (OSError, UnicodeDecodeError) as e:
-            message = f"<error dumping derived artifact: {str(e)}>"
-            trace_data["file_content"][derived_filename] = message
+        except Exception as e:
+            _record_derived_artifact_failure(
+                trace_data,
+                derived_filename,
+                adapter_name,
+                info.target_stage_name,
+                info.tool_name,
+                e,
+            )
 
 
 def _extract_file_content_legacy(
@@ -1062,15 +1131,15 @@ def _extract_file_content_legacy(
 
             sass_content = tritonparse.tools.disasm.extract(cubin_path)
             trace_data["file_content"][sass_filename] = sass_content
-        except subprocess.CalledProcessError as e:
-            message = f"<nvdisasm failed: {str(e)}>"
-            trace_data["file_content"][sass_filename] = message
-        except OSError as e:
-            message = f"<error reading cubin file: {str(e)}>"
-            trace_data["file_content"][sass_filename] = message
         except Exception as e:
-            message = f"<error dumping SASS: {str(e)}>"
-            trace_data["file_content"][sass_filename] = message
+            # Containment here is not new: this path always ended in a catch-all,
+            # so the abort described above was only ever reachable through the
+            # adapter-driven path. Routing it through the shared helper is what
+            # unifies the placeholder text between the two paths and adds the
+            # deduplicated warning.
+            _record_derived_artifact_failure(
+                trace_data, sass_filename, "legacy", "sass", "nvdisasm", e
+            )
 
 
 def extract_metadata_from_src(trace_data, src):
@@ -2149,6 +2218,10 @@ def clear_logging_config():
     triton_trace_folder = None
     _KERNEL_ALLOWLIST_PATTERNS = None
     _trace_launch_enabled = False
+    # The derived-artifact warning is deduplicated for the lifetime of a tracing
+    # session, not of the process: a second session in the same process has its
+    # own trace files, so a still-missing external tool has to warn again there.
+    _logged_derived_artifact_failures.clear()
 
     # 3. Reset tensor blob manager and related flags
     TENSOR_BLOB_MANAGER = None
