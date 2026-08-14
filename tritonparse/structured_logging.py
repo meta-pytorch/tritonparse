@@ -74,6 +74,18 @@ TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
     "true",
     "True",
 ]
+# Runtime override for full-Python-source extraction, set by
+# init(enable_full_python_source=...). None means "no override, honor
+# TRITON_FULL_PYTHON_SOURCE".
+#
+# Note the asymmetry with the SASS switch below: TRITONPARSE_DUMP_SASS has to be
+# turned into an override at module import time (set_runtime_sass_dump_override)
+# because shared_vars.get_enabled_derived_artifacts() is also consulted by the
+# reader/parse side, which can run without init() ever being called. This flag is
+# only ever read from extract_python_source_info() during compilation, i.e.
+# strictly after init() installed the compilation listener, so a plain runtime
+# override is sufficient and no import-time hook is needed.
+_RUNTIME_FULL_PYTHON_SOURCE_OVERRIDE: Optional[bool] = None
 # Compression algorithm for raw trace files
 # When enabled, each JSON record is compressed as a separate frame/member
 # and concatenated in sequence within a .bin.ndjson file.
@@ -815,6 +827,32 @@ def should_trace_kernel(
     return False
 
 
+def set_runtime_full_python_source_override(enabled: Optional[bool]) -> None:
+    """Set a runtime override for full-Python-source extraction.
+
+    Args:
+        enabled (Optional[bool]): True forces full-file capture, False forces
+            function-only capture, None clears the override so that the
+            TRITON_FULL_PYTHON_SOURCE environment variable decides.
+    """
+    global _RUNTIME_FULL_PYTHON_SOURCE_OVERRIDE
+    _RUNTIME_FULL_PYTHON_SOURCE_OVERRIDE = enabled
+
+
+def is_full_python_source_enabled() -> bool:
+    """Return whether full Python source extraction is enabled.
+
+    Precedence: the runtime override set by ``init(enable_full_python_source=...)``
+    wins over the ``TRITON_FULL_PYTHON_SOURCE`` environment variable. When no
+    override is set (the default), the environment variable alone decides, so
+    existing callers keep today's behavior.
+    """
+    if _RUNTIME_FULL_PYTHON_SOURCE_OVERRIDE is not None:
+        return _RUNTIME_FULL_PYTHON_SOURCE_OVERRIDE
+
+    return TRITON_FULL_PYTHON_SOURCE
+
+
 def extract_python_source_info(trace_data: Dict[str, Any], source):
     """
     Extract Python source code information from the source object and add it to trace_data.
@@ -823,13 +861,19 @@ def extract_python_source_info(trace_data: Dict[str, Any], source):
     from the provided source object (typically an ASTSource or IRSource instance).
     It adds file path, line numbers, and the actual source code to the trace_data.
 
-    By default, only the function definition is extracted. Set TRITON_FULL_PYTHON_SOURCE=1
-    to extract the entire Python source file.
+    By default, only the function definition is extracted. Pass
+    init(enable_full_python_source=True) or set TRITON_FULL_PYTHON_SOURCE=1 to
+    extract the entire Python source file. Function-only mode is lossy for nested
+    kernels: when the traced @triton.jit entry point is a thin wrapper that just
+    calls the real kernel, the captured source contains none of the real kernel
+    body, which breaks source mapping in `tritonparse diff` and in the viewer.
     @TODO: we should enable it by default in next diff and track the compilation time regression
 
     Environment Variables:
         TRITON_FULL_PYTHON_SOURCE: If set to "1", extract the full Python file
-                                   instead of just the function definition.
+                                   instead of just the function definition. The
+                                   init(enable_full_python_source=...) keyword
+                                   takes precedence over this variable.
         TRITON_MAX_SOURCE_SIZE: Maximum file size in bytes for full source extraction
                                (default: 10MB). Files larger than this will fall back
                                to function-only mode.
@@ -866,7 +910,7 @@ def extract_python_source_info(trace_data: Dict[str, Any], source):
 
     function_end_line = function_start_line + len(source_lines) - 1
 
-    if TRITON_FULL_PYTHON_SOURCE:
+    if is_full_python_source_enabled():
         # Full file mode: read the entire Python file
         try:
             # Check file size before reading
@@ -2103,6 +2147,7 @@ def init(
     enable_trace_launch_within_profiling: bool = False,
     enable_more_tensor_information: bool = False,
     enable_sass_dump: Optional[bool] = False,
+    enable_full_python_source: Optional[bool] = None,
     enable_tensor_blob_storage: bool = False,
     tensor_storage_quota: Optional[int] = None,
     compression: Optional[str] = None,
@@ -2125,6 +2170,14 @@ def init(
         enable_more_tensor_information (bool): Whether to enable more tensor information logging.
             It only works when enable_trace_launch/TRITON_TRACE_LAUNCH is True.
         enable_sass_dump (Optional[bool]): Whether to enable SASS dumping.
+        enable_full_python_source (Optional[bool]): Whether to capture the whole Python
+            source file of a kernel instead of only its function definition. Three-state:
+            True forces full-file capture, False forces function-only capture, and None
+            (the default) leaves TRITON_FULL_PYTHON_SOURCE in charge, so callers that do
+            not pass this keyword keep today's behavior. An explicitly passed bool wins
+            over the environment variable. Enabling this matters for nested kernels,
+            where the traced @triton.jit entry point is only a thin wrapper around the
+            real kernel and function-only capture records none of the real kernel body.
         enable_tensor_blob_storage (bool): Whether to enable tensor blob storage.
         tensor_storage_quota (Optional[int]): Storage quota in bytes for tensor blobs (default: 100GB).
         compression (Optional[str]): Compression format for trace files ("none", "gzip", "zstd", or "clp").
@@ -2156,6 +2209,13 @@ def init(
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
     set_runtime_sass_dump_override(True if enable_sass_dump else None)
+    # Passing the caller's value straight through is what makes None mean "no
+    # override, TRITON_FULL_PYTHON_SOURCE decides", so callers that omit the
+    # keyword keep today's behavior. As with enable_sass_dump above, the last
+    # init() call wins. Unlike enable_sass_dump, an explicit False here does force
+    # function-only capture instead of quietly deferring to the environment
+    # variable, which is why the default is None rather than False.
+    set_runtime_full_python_source_override(enable_full_python_source)
     if enable_tensor_blob_storage:
         TRITONPARSE_SAVE_TENSOR_BLOBS = True
 
@@ -2222,6 +2282,14 @@ def clear_logging_config():
     # session, not of the process: a second session in the same process has its
     # own trace files, so a still-missing external tool has to warn again there.
     _logged_derived_artifact_failures.clear()
+    # init() installs this override, so clearing the config has to take it back
+    # out; TritonParseManager.__exit__ calls us, and leaving it set would keep
+    # forcing full-file capture on everything the process compiles afterwards.
+    # The SASS override in shared_vars is deliberately NOT reset here: it is
+    # where the import-time value of TRITONPARSE_DUMP_SASS is stored, so
+    # clearing it would silently disable that environment variable instead of
+    # restoring it.
+    set_runtime_full_python_source_override(None)
 
     # 3. Reset tensor blob manager and related flags
     TENSOR_BLOB_MANAGER = None
