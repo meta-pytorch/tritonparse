@@ -1,5 +1,4 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# pyre-strict
 
 """
 compat_builder — offline tool for pre-generating commits.csv for a single LLVM bump.

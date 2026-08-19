@@ -1,5 +1,4 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# pyre-strict
 
 """
 CSV management for the compat_builder workflow.

@@ -1,5 +1,4 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# pyre-strict
 
 """
 State management for compat_builder workflow.

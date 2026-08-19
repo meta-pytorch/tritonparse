@@ -1,6 +1,5 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
-# pyre-strict
 
 """
 ConsolidatedResult: Data structures for multi-file call graph analysis results.

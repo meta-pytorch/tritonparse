@@ -1,5 +1,4 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# pyre-strict
 
 """
 Build structured LLM context for AI-powered compatibility fixing.

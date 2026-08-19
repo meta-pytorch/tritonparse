@@ -1,5 +1,4 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
-# pyre-strict
 
 """
 System prompts for AI-powered Triton/LLVM compatibility fixing.

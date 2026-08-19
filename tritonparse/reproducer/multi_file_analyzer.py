@@ -1,6 +1,5 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
-# pyre-strict
 
 """
 MultiFileCallGraphAnalyzer: Orchestrates multi-file static call graph analysis.

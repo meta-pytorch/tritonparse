@@ -1,5 +1,4 @@
 # (c) Meta Platforms, Inc. and affiliates.
-# pyre-strict
 
 """
 Unit tests for tritonparse launch tracing integration with torch.profiler.

@@ -1,6 +1,5 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
-# pyre-strict
 
 """
 Tests for extract_kernel_autotune_configs and match_autotune_config
