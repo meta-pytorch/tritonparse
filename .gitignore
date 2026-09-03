@@ -57,6 +57,7 @@ parsed_output/
 !tests/example_output/repro/**
 !tests/example_output/logs/**
 !tests/example_output/parsed_output_complex/**
+!tests/example_output/parsed_output_inductor/**
 !website/public/**
 # Event schemas are source, not output. Without this the blanket *.json rule
 # above silently drops every newly added schema file. Scoped to *.json rather

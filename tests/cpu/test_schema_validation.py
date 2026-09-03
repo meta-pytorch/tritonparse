@@ -5,7 +5,11 @@
 import json
 import unittest
 
-from tests.test_utils import get_raw_trace_file, get_test_ndjson_file
+from tests.test_utils import (
+    get_inductor_ndjson_file,
+    get_raw_trace_file,
+    get_test_ndjson_file,
+)
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.validation.json_validator import validate_record, validate_trace_file
 from tritonparse.validation.schema_loader import (
@@ -951,6 +955,49 @@ class ValidateTraceFileTest(unittest.TestCase):
         ):
             with self.subTest(event_type=event_type):
                 self.assertGreater(counts.get(event_type, 0), 0)
+
+    def test_validate_parsed_trace_inductor(self):
+        """Validate the inductor trace: dedicated_log_triton_trace_inductor__mapped.
+
+        The hand-written example has no `pt_info`, so before this fixture
+        existed the PtInfo half of the compilation schema was never checked
+        against real data.
+        """
+        result = validate_trace_file(str(get_inductor_ndjson_file()))
+        self.assertTrue(result["valid"], f"Validation errors: {result['errors']}")
+        self.assertGreater(result["event_type_counts"].get("compilation", 0), 0)
+
+    def test_inductor_trace_carries_pt_info(self):
+        with open_compressed_file(get_inductor_ndjson_file()) as f:
+            compilations = [
+                record
+                for record in (json.loads(line) for line in f if line.strip())
+                if record.get("event_type") == "compilation"
+            ]
+        self.assertGreater(len(compilations), 0)
+        for comp in compilations:
+            name = comp["payload"]["metadata"]["name"]
+            with self.subTest(kernel=name):
+                pt_info = comp["payload"].get("pt_info")
+                if pt_info is None:
+                    self.fail(f"{name} has no pt_info")
+                # 'attempt', not 'attempt_id' -- see the PtInfo schema.
+                self.assertIn("attempt", pt_info)
+                self.assertIsInstance(pt_info.get("frame_id"), int)
+
+    def test_every_record_in_inductor_trace(self):
+        with open_compressed_file(get_inductor_ndjson_file()) as f:
+            for line_num, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                is_valid, errors = validate_record(record)
+                self.assertTrue(
+                    is_valid,
+                    f"Record at line {line_num} "
+                    f"(event_type={record.get('event_type')}) failed: {errors}",
+                )
 
     def test_raw_trace_covers_the_writer_event_types(self):
         """Same guard for the raw fixture, which the writer produces directly."""

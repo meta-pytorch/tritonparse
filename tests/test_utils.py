@@ -37,6 +37,22 @@ def get_test_ndjson_file():
     return gz_file
 
 
+def get_inductor_ndjson_file():
+    """Get the parsed trace of an inductor (torch.compile) run.
+
+    Distinct from get_test_ndjson_file(): its kernels are inductor-generated,
+    so its compilation events carry `pt_info` frame attribution and its
+    python_source points at inductor's output_code.py. No hand-written trace
+    exercises those paths.
+    """
+    gz_file = (
+        Path(__file__).parent
+        / "example_output/parsed_output_inductor/dedicated_log_triton_trace_inductor__mapped.ndjson.gz"
+    )
+    assert gz_file.exists(), f"Test file not found: {gz_file}"
+    return gz_file
+
+
 def get_raw_trace_file():
     """Get the raw (unprocessed) test NDJSON trace file path."""
     raw_file = (
