@@ -289,11 +289,13 @@ function App() {
   };
 
   /**
-   * Loads the default data file from public directory
+   * Loads one of the bundled example traces from the public directory.
+   *
+   * Filenames are fixed by `tritonparse.tools.generate_examples`, which keeps
+   * the trace-log naming convention the parser requires; see BUNDLED_EXAMPLES.
    */
-  const loadDefaultData = async () => {
-    const logFile = "./dedicated_log_triton_trace_findhao__mapped.ndjson.gz";
-    await loadData(logFile);
+  const loadBundledExample = async (fileName: string) => {
+    await loadData(`./${fileName}`);
   };
 
   /**
@@ -447,7 +449,7 @@ function App() {
       }
       return (
         <WelcomeScreen
-          loadDefaultData={loadDefaultData}
+          loadBundledExample={loadBundledExample}
           handleFileSelected={handleFileSelected}
           openUrlInput={openUrlInput}
         />
@@ -456,7 +458,7 @@ function App() {
       // Show welcome screen when user clicks title to go home (even when data is loaded)
       return (
         <WelcomeScreen
-          loadDefaultData={loadDefaultData}
+          loadBundledExample={loadBundledExample}
           handleFileSelected={handleFileSelected}
           openUrlInput={openUrlInput}
         />
