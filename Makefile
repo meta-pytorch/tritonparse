@@ -1,6 +1,6 @@
 # Makefile for tritonparse project
 
-.PHONY: help format format-check lint lint-check test test-cuda clean install-dev website-install website-lint website-build website-build-single website-dev
+.PHONY: help format format-check lint lint-check test test-cuda clean install-dev regen-examples regen-examples-install website-install website-lint website-build website-build-single website-dev
 
 # Default target
 help:
@@ -13,6 +13,10 @@ help:
 	@echo "  test-cuda        - Run tests (including CUDA tests)"
 	@echo "  clean            - Clean up cache files"
 	@echo "  install-dev      - Install development dependencies"
+	@echo ""
+	@echo "Example trace targets (require a CUDA GPU):"
+	@echo "  regen-examples         - Regenerate example traces into ./example_output_regen"
+	@echo "  regen-examples-install - Regenerate and overwrite the checked-in examples"
 	@echo ""
 	@echo "Website targets:"
 	@echo "  website-install     - Install website dependencies"
@@ -60,6 +64,18 @@ clean:
 install-dev:
 	@echo "Installing development dependencies..."
 	pip install -e ".[dev]"
+
+# Example trace targets
+# WORKLOAD selects which example to build; see --list for the options.
+WORKLOAD ?= triton
+
+regen-examples:
+	@echo "Regenerating example trace '$(WORKLOAD)' (requires a CUDA GPU)..."
+	python -m tritonparse.tools.generate_examples $(WORKLOAD)
+
+regen-examples-install:
+	@echo "Regenerating example trace '$(WORKLOAD)' and overwriting checked-in copies..."
+	python -m tritonparse.tools.generate_examples $(WORKLOAD) --install
 
 # Website targets
 website-install:
