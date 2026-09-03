@@ -613,7 +613,7 @@ def parse_logs(
         verbose: Whether to print verbose information
         tritonparse_url_prefix: URL prefix for the generated file mapping
         split_inductor_compilations: Whether to split
-            output files by frame_id, compile_id, attempt_id, and compiled_autograd_id.
+            output files by frame_id, compile_id, attempt, and compiled_autograd_id.
             Defaults to True. This rule follows tlparse's behavior.
         torch_trace_dir: Optional path to directory containing inductor torch trace
             logs. When provided, kernel compilation attribution will use these logs to

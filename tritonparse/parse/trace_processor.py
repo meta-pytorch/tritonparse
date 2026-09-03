@@ -696,7 +696,9 @@ def _determine_output_fname(
 
     frame_id = pt_info.get("frame_id")
     frame_compile_id = pt_info.get("frame_compile_id")
-    attempt_id = pt_info.get("attempt_id", 0)
+    # The writer emits this as "attempt", not "attempt_id" (see
+    # structured_logging: trace_data["pt_info"]["attempt"] = trace_id.attempt).
+    attempt = pt_info.get("attempt", 0)
     cai = pt_info.get("compiled_autograd_id", "-")
 
     # Try to resolve via mapping when pt_info is missing
@@ -706,7 +708,7 @@ def _determine_output_fname(
             if resolved is not None:
                 frame_id = resolved.frame_id
                 frame_compile_id = resolved.frame_compile_id
-                attempt_id = resolved.attempt
+                attempt = resolved.attempt
                 cai = (
                     resolved.compiled_autograd_id
                     if resolved.compiled_autograd_id is not None
@@ -714,7 +716,7 @@ def _determine_output_fname(
                 )
 
     if frame_id is not None or frame_compile_id is not None:
-        return f"f{frame_id}_fc{frame_compile_id}_a{attempt_id}_cai{cai}.ndjson"
+        return f"f{frame_id}_fc{frame_compile_id}_a{attempt}_cai{cai}.ndjson"
     else:
         return f"{file_name_without_extension}_mapped.ndjson"
 
@@ -749,7 +751,7 @@ def parse_single_rank(
             calling for deterministic output.
         output_dir: Directory to save output files. Required.
         split_inductor_compilations: Whether to split output files by
-            frame_id/compile_id/attempt_id/compiled_autograd_id (tlparse style).
+            frame_id/compile_id/attempt/compiled_autograd_id (tlparse style).
         kernel_compile_mapping: Optional mapping from kernel source path to
             CompileInfo, used to recover frame_id/compile_id when pt_info is
             missing.

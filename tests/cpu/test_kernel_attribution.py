@@ -100,11 +100,25 @@ class TestDetermineOutputFname(unittest.TestCase):
     def test_with_pt_info(self):
         """Test normal case where pt_info has frame_id/compile_id."""
         fname = _determine_output_fname(
-            pt_info={"frame_id": 0, "frame_compile_id": 1, "attempt_id": 0},
+            pt_info={"frame_id": 0, "frame_compile_id": 1, "attempt": 0},
             file_name_without_extension="trace",
             split_inductor_compilations=True,
         )
         self.assertEqual(fname, "f0_fc1_a0_cai-.ndjson")
+
+    def test_with_pt_info_nonzero_attempt(self):
+        """A recompilation attempt must reach the filename.
+
+        The writer spells this key "attempt". Reading "attempt_id" instead
+        silently pins every filename to _a0_, so the two attempts of one frame
+        collide into a single output file.
+        """
+        fname = _determine_output_fname(
+            pt_info={"frame_id": 2, "frame_compile_id": 0, "attempt": 1},
+            file_name_without_extension="trace",
+            split_inductor_compilations=True,
+        )
+        self.assertEqual(fname, "f2_fc0_a1_cai-.ndjson")
 
     def test_without_pt_info_no_mapping(self):
         """Test fallback to mapped file when pt_info is missing and no mapping."""
