@@ -14,7 +14,7 @@ This directory contains the test suite for tritonparse, including both automated
 ### Sample Data
 - `example_output/`: Example output directory containing:
   - `logs/`: Sample log files
-  - `parsed_output/`: Sample parsed output files
+  - `parsed_output_complex/`: Sample parsed output files
 
 ## Running Tests
 
@@ -134,7 +134,7 @@ class TestTritonparseCUDA(unittest.TestCase):
     def setUp(self):
         # Automatic setup for CUDA tests
         pass
-    
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
     def test_my_function(self):
         @triton.jit
@@ -175,18 +175,20 @@ python -m unittest tests.test_tritonparse -v
 ```bash
 # Run manual test to verify basic functionality
 python tests/test_add.py
+```
 
 ### Example Output
-The `example_output/` directory demonstrates the expected output structure:
+The `example_output/` directory holds the fixtures the CPU tests read:
 
 ```
 example_output/
 ├── logs/
-│   └── dedicated_log_triton_trace_findhao_.ndjson
-└── parsed_output/
-    ├── dedicated_log_triton_trace_findhao__mapped.ndjson.gz
-    ├── log_file_list.json
-    └── f0_fc0_a0_cai-.ndjson.gz
+│   └── dedicated_log_triton_trace_findhao_.ndjson   # raw, straight off the writer
+├── parsed_output_complex/
+│   ├── dedicated_log_triton_trace_findhao__mapped.ndjson.gz
+│   └── log_file_list.json
+└── sass_test_data/
+    └── test_kernel.sass
 ```
 
 These files can be used to:
@@ -194,3 +196,13 @@ These files can be used to:
 - Understand expected output format
 - Debug parsing issues
 - Test with real log data
+
+They are generated, not hand-maintained. Regenerate them with:
+
+```bash
+make regen-examples-install   # requires a CUDA GPU
+```
+
+which also refreshes the example the website serves. A few tests pin exact
+counts from these files (`test_parsed_trace_event_counts`,
+`test_list_kernels_multiple`); update those alongside a regeneration.

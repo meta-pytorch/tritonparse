@@ -896,9 +896,9 @@ class ValidateTraceFileTest(unittest.TestCase):
     def test_validate_raw_trace_dedicated_log(self):
         """Validate raw trace: dedicated_log_triton_trace_findhao_.ndjson.
 
-        This is a raw NDJSON trace file with 2 compilation events captured
-        from a live Triton kernel run. Validates that every record conforms
-        to the compilation schema.
+        A raw NDJSON trace straight off the writer: 4 compilation, 20 launch
+        and 2 autotune records (the launch tail is capped by the generator).
+        Validates that every record conforms to its schema.
         """
         raw_file = get_raw_trace_file()
         result = validate_trace_file(str(raw_file))
@@ -909,9 +909,8 @@ class ValidateTraceFileTest(unittest.TestCase):
     def test_validate_parsed_trace_complex_mapped(self):
         """Validate parsed trace: dedicated_log_triton_trace_findhao__mapped.ndjson.gz.
 
-        This is a processed NDJSON trace (gzip-compressed) containing 5 compilation
-        events, 1557 launch events, and 5 launch_diff events. Validates that every
-        record across all event types conforms to the appropriate schema.
+        A processed, gzip-compressed trace covering every event type the parser
+        emits. Validates that each record conforms to its schema.
         """
         gz_file = get_test_ndjson_file()
         result = validate_trace_file(str(gz_file))
@@ -922,14 +921,43 @@ class ValidateTraceFileTest(unittest.TestCase):
         self.assertIn("launch_diff", result["event_type_counts"])
 
     def test_parsed_trace_event_counts(self):
-        """Verify expected event counts in the complex parsed trace."""
+        """Verify expected event counts in the complex parsed trace.
+
+        Two autotuned matmul configs plus two fused_op ACTIVATION
+        specializations give 4 compilations, and one derived event of each
+        per-kernel kind alongside them.
+        """
         gz_file = get_test_ndjson_file()
         result = validate_trace_file(str(gz_file))
         counts = result["event_type_counts"]
-        # The complex trace has 5 compilations, many launches, and 5 launch_diffs
-        self.assertEqual(counts.get("compilation", 0), 5)
-        self.assertEqual(counts.get("launch_diff", 0), 5)
+        self.assertEqual(counts.get("compilation", 0), 4)
+        self.assertEqual(counts.get("launch_diff", 0), 4)
         self.assertGreater(counts.get("launch", 0), 100)
+
+    def test_parsed_trace_covers_the_derived_event_types(self):
+        """The fixture must keep exercising every event type the parser emits.
+
+        roofline, ir_analysis and the autotune events postdate the original
+        fixture, so for a long time their schemas were never checked against
+        real data. Asserting their presence here keeps a future regeneration
+        from quietly dropping back to a compilation/launch-only trace.
+        """
+        counts = validate_trace_file(str(get_test_ndjson_file()))["event_type_counts"]
+        for event_type in (
+            "ir_analysis",
+            "roofline",
+            "autotune_analysis",
+            "autotune_summary",
+        ):
+            with self.subTest(event_type=event_type):
+                self.assertGreater(counts.get(event_type, 0), 0)
+
+    def test_raw_trace_covers_the_writer_event_types(self):
+        """Same guard for the raw fixture, which the writer produces directly."""
+        counts = validate_trace_file(str(get_raw_trace_file()))["event_type_counts"]
+        for event_type in ("compilation", "launch", "autotune"):
+            with self.subTest(event_type=event_type):
+                self.assertGreater(counts.get(event_type, 0), 0)
 
     def test_validate_nonexistent_file(self):
         result = validate_trace_file("/nonexistent/path/trace.ndjson")
@@ -958,8 +986,8 @@ class ValidateTraceFileTest(unittest.TestCase):
     def test_every_record_in_parsed_trace(self):
         """Validate each record in dedicated_log_triton_trace_findhao__mapped.ndjson.gz.
 
-        Iterates all 1567 records (5 compilation + 1557 launch + 5 launch_diff)
-        and reports the exact failing line/event_type on error.
+        Iterates every record and reports the exact failing line/event_type on
+        error, rather than only the first failure the file-level check finds.
         """
         gz_file = get_test_ndjson_file()
         with open_compressed_file(gz_file) as f:

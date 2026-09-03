@@ -56,7 +56,6 @@ parsed_output/
 !tests/example_output/
 !tests/example_output/repro/**
 !tests/example_output/logs/**
-!tests/example_output/parsed_output/**
 !tests/example_output/parsed_output_complex/**
 !website/public/**
 # Event schemas are source, not output. Without this the blanket *.json rule

@@ -76,10 +76,17 @@ class TestKernelQuery(unittest.TestCase):
         names = [k.name for k in result]
         self.assertEqual(names, ["fused_op_kernel", "matmul_kernel"])
 
-        # Check launch counts
+        # Check launch counts.
+        #
+        # fused_op_kernel's 4 is a property of the workload: the example calls
+        # it exactly four times, so this number is stable and meaningful.
+        # matmul_kernel's is not -- almost all of its launches are autotune
+        # benchmark repetitions, and the count varies run to run. It is pinned
+        # to whatever the committed fixture holds, which catches a corrupted or
+        # half-written fixture; refresh it with `make regen-examples-install`.
         kernel_dict = {k.name: k for k in result}
-        self.assertEqual(kernel_dict["matmul_kernel"].total_launches, 1553)
         self.assertEqual(kernel_dict["fused_op_kernel"].total_launches, 4)
+        self.assertEqual(kernel_dict["matmul_kernel"].total_launches, 1091)
 
     def test_find_launch_index_valid(self):
         """Test finding valid kernel name and launch_id."""
