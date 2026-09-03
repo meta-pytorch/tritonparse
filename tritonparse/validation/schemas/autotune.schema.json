@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "autotune.schema.json",
+  "title": "TritonParse Autotune Event",
+  "description": "Raw record written by the AutotuneListener callback each time Triton's autotuner resolves a kernel, whether by benchmarking or from its own cache. This is the writer-side event; the parser consumes it and folds it into the autotune_analysis event's `autotune_result` member.",
+  "type": "object",
+  "required": [
+    "event_type",
+    "kernel_name",
+    "cache_key",
+    "best_config",
+    "configs_timings",
+    "duration",
+    "cache_hit",
+    "autotune_key"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["autotune"],
+      "description": "Event type discriminator."
+    },
+    "pid": {
+      "type": "integer",
+      "description": "Process ID that ran the autotuner."
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "When the record was written."
+    },
+    "stack": {
+      "type": "array",
+      "description": "Call stack at the autotune callback.",
+      "items": { "$ref": "#/definitions/StackFrame" }
+    },
+    "kernel_name": {
+      "type": "string",
+      "description": "Name of the autotuned kernel function."
+    },
+    "cache_key": {
+      "type": "string",
+      "description": "The JITFunction's cache key."
+    },
+    "best_config": {
+      "type": "string",
+      "description": "String form of the winning triton.Config, e.g. \"BLOCK_SIZE_M: 16, ..., num_warps: 1\". Stringified by the writer because a Config is not JSON-serializable; it is also what keys configs_timings."
+    },
+    "configs_timings": {
+      "type": "object",
+      "description": "Measured timings keyed by the string form of each candidate config. Values are whatever the autotuner recorded -- currently a [min, mean, max] triple in milliseconds -- and are deliberately left unconstrained so a Triton-side change does not fail validation on a field nothing here interprets.",
+      "additionalProperties": true
+    },
+    "duration": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall-clock seconds the autotuner spent resolving this kernel."
+    },
+    "cache_hit": {
+      "type": "boolean",
+      "description": "True when the autotuner answered from its cache instead of timing the candidates."
+    },
+    "autotune_key": {
+      "type": "string",
+      "description": "String form of the autotune key tuple -- the argument values the @triton.autotune key= list selects on."
+    }
+  },
+  "definitions": {
+    "StackFrame": {
+      "type": "object",
+      "description": "A single frame in the call stack.",
+      "required": ["line", "name", "filename"],
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "type": "integer",
+          "description": "Line number in the source file."
+        },
+        "name": { "type": "string", "description": "Function name." },
+        "filename": { "type": "string", "description": "Source file path." },
+        "loc": {
+          "type": "string",
+          "description": "Code snippet at that line."
+        }
+      }
+    }
+  }
+}

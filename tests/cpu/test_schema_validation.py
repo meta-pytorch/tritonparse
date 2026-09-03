@@ -25,7 +25,10 @@ class SchemaLoaderTest(unittest.TestCase):
         self.assertIn("launch_diff", event_types)
         self.assertIn("ir_analysis", event_types)
         self.assertIn("roofline", event_types)
-        self.assertEqual(len(event_types), 5)
+        self.assertIn("autotune", event_types)
+        self.assertIn("autotune_analysis", event_types)
+        self.assertIn("autotune_summary", event_types)
+        self.assertEqual(len(event_types), 8)
 
     def test_get_schema_compilation(self):
         schema = get_schema("compilation")
@@ -63,13 +66,48 @@ class SchemaLoaderTest(unittest.TestCase):
         self.assertIn("IOCounts", schema["definitions"])
         self.assertIn("LoopSchedule", schema["definitions"])
 
+    def test_get_schema_autotune(self):
+        schema = get_schema("autotune")
+        self.assertIsNotNone(schema)
+        self.assertEqual(schema["properties"]["event_type"]["enum"], ["autotune"])
+        self.assertIn("configs_timings", schema["properties"])
+        self.assertIn("best_config", schema["properties"])
+
+    def test_get_schema_autotune_analysis(self):
+        schema = get_schema("autotune_analysis")
+        self.assertIsNotNone(schema)
+        self.assertEqual(
+            schema["properties"]["event_type"]["enum"], ["autotune_analysis"]
+        )
+        self.assertIn("session_id", schema["properties"])
+        self.assertIn("winner_compilation_hash", schema["properties"])
+        # Verify inner structure definitions exist
+        self.assertIn("definitions", schema)
+        for name in (
+            "CompilationAnalysis",
+            "LaunchAnalysis",
+            "AutotuneArgsSummary",
+            "AutotuneResult",
+        ):
+            self.assertIn(name, schema["definitions"])
+
+    def test_get_schema_autotune_summary(self):
+        schema = get_schema("autotune_summary")
+        self.assertIsNotNone(schema)
+        self.assertEqual(
+            schema["properties"]["event_type"]["enum"], ["autotune_summary"]
+        )
+        # Counts are wired up as a typed additionalProperties map
+        counts_schema = schema["properties"]["winner_run_counts"]
+        self.assertEqual(counts_schema["additionalProperties"]["type"], "integer")
+
     def test_get_schema_unknown_returns_none(self):
         schema = get_schema("nonexistent_event_type")
         self.assertIsNone(schema)
 
     def test_get_all_schemas(self):
         schemas = get_all_schemas()
-        self.assertEqual(len(schemas), 5)
+        self.assertEqual(len(schemas), 8)
         for event_type in get_supported_event_types():
             self.assertIn(event_type, schemas)
 
@@ -578,6 +616,272 @@ class ValidateRecordTest(unittest.TestCase):
         }
         is_valid, errors = validate_record(record)
         self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_compilation_pt_info_attempt(self):
+        """pt_info carries 'attempt' (not 'attempt_id'); see structured_logging."""
+        record = {
+            "event_type": "compilation",
+            "pid": 12345,
+            "timestamp": "2025-01-01T00:00:00Z",
+            "payload": {
+                "metadata": {"hash": "abc123", "name": "triton_poi_fused_add_0"},
+                "pt_info": {"frame_id": 0, "frame_compile_id": 1, "attempt": 0},
+            },
+        }
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_compilation_pt_info_attempt_wrong_type(self):
+        record = {
+            "event_type": "compilation",
+            "pid": 12345,
+            "timestamp": "2025-01-01T00:00:00Z",
+            "payload": {
+                "metadata": {"hash": "abc123"},
+                "pt_info": {"frame_id": 0, "attempt": "zero"},
+            },
+        }
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("attempt" in e for e in errors), errors)
+
+
+def _autotune_analysis_record(**overrides):
+    """A minimal but complete autotune_analysis record, as the parser emits it."""
+    record = {
+        "event_type": "autotune_analysis",
+        "session_id": "6852348bc10a0d9e",
+        "session_stack": [
+            {"line": 222, "name": "matmul", "filename": "bench.py", "loc": "mm(a, b)"}
+        ],
+        "name": "matmul_kernel",
+        "selected_hash": "9d4505033ff1cc25",
+        "winner_compilation_hash": "c024454524b8d34e",
+        "possible_groups": [["c024454524b8d34e", "479daaee1705cbd5"]],
+        "compilation_analysis": {
+            "configs": [
+                {
+                    "compilation_config_params": {"num_warps": 1, "num_stages": 1},
+                    "compilation_hash": "c024454524b8d34e",
+                }
+            ],
+            "compilation_hashes": ["c024454524b8d34e"],
+            "common_info": {
+                "stack": [{"line": 10, "name": "main", "filename": "bench.py"}],
+                "python_source": {"code": "@triton.jit\ndef matmul_kernel(): ..."},
+            },
+        },
+        "launch_analysis": {
+            "launch_group_hashes": ["9d4505033ff1cc25"],
+            "launch_params_diff": {"sames": {"grid": [1]}, "diffs": {}},
+        },
+        "cache_usage": False,
+        "launch_ranges": {"benchmark": "1-689", "winner": "690"},
+        "launch_occurrence_ids": {"benchmark": [1, 2], "winner": [690]},
+        "occurrence_id": 2540,
+    }
+    record.update(overrides)
+    return record
+
+
+def _autotune_record(**overrides):
+    """A raw autotune record, as the AutotuneListener callback writes it."""
+    record = {
+        "event_type": "autotune",
+        "pid": 732176,
+        "kernel_name": "matmul_kernel",
+        "cache_key": "ad39063f45fa6c849f13ea8b14e942f3",
+        "best_config": "BLOCK_SIZE_M: 16, num_warps: 1, num_stages: 1",
+        "configs_timings": {
+            "BLOCK_SIZE_M: 16, num_warps: 1, num_stages: 1": [0.29, 0.27, 0.34],
+            "BLOCK_SIZE_M: 32, num_warps: 1, num_stages: 1": [0.36, 0.31, 0.45],
+        },
+        "duration": 2.62,
+        "cache_hit": False,
+        "autotune_key": "(16, 16, 16, 'torch.float16')",
+        "stack": [{"line": 10, "name": "matmul", "filename": "bench.py"}],
+        "timestamp": "2026-01-01T00:00:00Z",
+    }
+    record.update(overrides)
+    return record
+
+
+class AutotuneSchemaTest(unittest.TestCase):
+    """Tests for the autotune / autotune_analysis / autotune_summary schemas."""
+
+    def test_valid_autotune_record(self):
+        is_valid, errors = validate_record(_autotune_record())
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_cache_hit_record(self):
+        """A cache hit reports no timings and near-zero duration."""
+        record = _autotune_record(cache_hit=True, configs_timings={}, duration=0.0)
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_missing_required_field(self):
+        record = _autotune_record()
+        del record["best_config"]
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("best_config" in e for e in errors), errors)
+
+    def test_autotune_best_config_must_be_stringified(self):
+        """The writer stringifies the Config; a raw object is a writer bug."""
+        record = _autotune_record(best_config={"BLOCK_SIZE_M": 16})
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("best_config" in e for e in errors), errors)
+
+    def test_autotune_negative_duration_rejected(self):
+        record = _autotune_record(duration=-1.0)
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("minimum" in e for e in errors), errors)
+
+    def test_autotune_boolean_duration_rejected(self):
+        record = _autotune_record(duration=True)
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("duration" in e and "type" in e for e in errors), errors)
+
+    def test_valid_autotune_analysis_record(self):
+        is_valid, errors = validate_record(_autotune_analysis_record())
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_analysis_cached_session(self):
+        """A cached session leaves the derived fields null but still validates."""
+        record = _autotune_analysis_record(
+            name=None,
+            compilation_analysis=None,
+            launch_analysis=None,
+            cache_usage=True,
+            possible_groups=[],
+            launch_ranges={"benchmark": "", "winner": "1"},
+            launch_occurrence_ids={"benchmark": [], "winner": [1]},
+        )
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_analysis_missing_required_field(self):
+        record = _autotune_analysis_record()
+        del record["cache_usage"]
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("cache_usage" in e for e in errors), errors)
+
+    def test_autotune_analysis_nullable_object_still_validated(self):
+        """A non-null nullable object must still have its structure checked.
+
+        compilation_analysis is typed ["object", "null"]. A validator that keys
+        structural checks off `type == "object"` skips the whole subtree for
+        such fields, so this asserts the nested required-field check fires.
+        """
+        record = _autotune_analysis_record()
+        del record["compilation_analysis"]["common_info"]
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(
+            any("compilation_analysis.common_info" in e for e in errors), errors
+        )
+
+    def test_autotune_analysis_nested_unexpected_field(self):
+        record = _autotune_analysis_record()
+        record["compilation_analysis"]["bogus"] = 1
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("compilation_analysis.bogus" in e for e in errors), errors)
+
+    def test_autotune_analysis_launch_occurrence_ids_item_type(self):
+        record = _autotune_analysis_record()
+        record["launch_occurrence_ids"]["benchmark"] = ["not-an-int"]
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(
+            any("launch_occurrence_ids.benchmark[0]" in e for e in errors), errors
+        )
+
+    def test_autotune_analysis_with_result_and_args_summary(self):
+        record = _autotune_analysis_record(
+            autotune_result={
+                "best_config": "BLOCK_SIZE_M: 16, num_warps: 1",
+                "configs_timings": {"BLOCK_SIZE_M: 16, num_warps: 1": [0.1, 0.2, 0.3]},
+                "benchmark_duration": 0.42,
+                "cache_hit": False,
+            },
+            autotune_args_summary={
+                "summary_version": 1,
+                "unchanged_args": {"M": {"type": "int", "value": 16}},
+                "per_config_args": {"c024454524b8d34e": {"M": {"values": []}}},
+                "arg_order": ["a", "b", "M"],
+                "autotune_configs": {"sames": {"num_warps": 1}, "varies": {}},
+            },
+        )
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_analysis_result_all_null(self):
+        """Every autotune_result member is a .get() off the raw event, so all
+        of them can be null when the autotuner event omitted the key."""
+        record = _autotune_analysis_record(
+            autotune_result={
+                "best_config": None,
+                "configs_timings": None,
+                "benchmark_duration": None,
+                "cache_hit": None,
+            }
+        )
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_analysis_args_summary_version_below_minimum(self):
+        record = _autotune_analysis_record(
+            autotune_args_summary={
+                "summary_version": 0,
+                "unchanged_args": {},
+                "per_config_args": {},
+                "arg_order": [],
+                "autotune_configs": {"sames": {}, "varies": {}},
+            }
+        )
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("summary_version" in e for e in errors), errors)
+
+    def test_valid_autotune_summary_record(self):
+        record = {
+            "event_type": "autotune_summary",
+            "winner_run_counts": {"c024454524b8d34e": 1, "479daaee1705cbd5": 2},
+            "occurrence_id": 2545,
+        }
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_autotune_summary_missing_counts(self):
+        record = {"event_type": "autotune_summary"}
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("winner_run_counts" in e for e in errors), errors)
+
+    def test_autotune_summary_count_wrong_type(self):
+        record = {
+            "event_type": "autotune_summary",
+            "winner_run_counts": {"c024454524b8d34e": "three"},
+        }
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(
+            any("winner_run_counts.c024454524b8d34e" in e for e in errors), errors
+        )
+
+    def test_autotune_summary_count_below_minimum(self):
+        record = {
+            "event_type": "autotune_summary",
+            "winner_run_counts": {"c024454524b8d34e": 0},
+        }
+        is_valid, errors = validate_record(record)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("minimum" in e for e in errors), errors)
 
 
 class ValidateTraceFileTest(unittest.TestCase):

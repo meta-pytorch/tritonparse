@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "autotune_summary.schema.json",
+  "title": "TritonParse Autotune Summary Event",
+  "description": "Emitted at most once per output file, after all autotune_analysis events, giving a global view of how often each winning config was actually run. Absent entirely when no session produced a winner run.",
+  "type": "object",
+  "required": ["event_type", "winner_run_counts"],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["autotune_summary"],
+      "description": "Event type discriminator."
+    },
+    "winner_run_counts": {
+      "type": "object",
+      "description": "Number of autotuning sessions that ran with each winning compilation, keyed by compilation hash. Counts sessions, not launches: a session contributes 1 whether it benchmarked first or reused a cached winner. Only hashes with at least one winner run appear.",
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "occurrence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Global ordering index across all events."
+    }
+  }
+}

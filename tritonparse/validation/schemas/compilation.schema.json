@@ -249,13 +249,15 @@
           "type": "integer",
           "description": "Compile ID within frame."
         },
-        "attempt_id": {
+        "attempt": {
           "type": "integer",
-          "description": "Attempt number."
+          "minimum": 0,
+          "description": "Recompilation attempt number, from torch._guards' trace id. Note the name: the writer emits 'attempt', not 'attempt_id'."
         },
         "compiled_autograd_id": {
-          "type": ["string", "null"],
-          "description": "Compiled autograd ID."
+          "type": "integer",
+          "minimum": 0,
+          "description": "Compiled autograd ID. torch types it as int | None, and the writer only emits the key when it is not None, so it is never null here."
         }
       }
     }

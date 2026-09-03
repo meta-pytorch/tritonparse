@@ -56,6 +56,20 @@ def _resolve_ref(schema: Dict[str, Any], ref: str) -> Optional[Dict[str, Any]]:
     return resolved
 
 
+def _type_allows(type_spec: Any, name: str) -> bool:
+    """Check whether a schema's ``type`` permits the JSON type ``name``.
+
+    ``type`` may be a single name (``"object"``) or a list of alternatives
+    (``["object", "null"]``).  Nullable objects and arrays are spelled with
+    the list form, so structural checks must key off "does this type spec
+    include 'object'" rather than "is it exactly 'object'"; otherwise a
+    nullable object silently skips all of its property validation.
+    """
+    if isinstance(type_spec, list):
+        return name in type_spec
+    return type_spec == name
+
+
 def _validate_type(value: Any, type_spec: Any) -> bool:
     """Check if a value matches a JSON Schema type specifier."""
     if isinstance(type_spec, list):
@@ -63,8 +77,8 @@ def _validate_type(value: Any, type_spec: Any) -> bool:
     expected = _TYPE_MAP.get(type_spec)
     if expected is None:
         return True
-    # In JSON, booleans are not integers
-    if type_spec == "integer" and isinstance(value, bool):
+    # In JSON, booleans are neither integers nor numbers.
+    if type_spec in ("integer", "number") and isinstance(value, bool):
         return False
     return isinstance(value, expected)
 
@@ -85,6 +99,8 @@ def _validate_record(
     - additionalProperties: false
     - array item types
     - $ref resolution (``#/definitions/`` only)
+    - nullable objects/arrays spelled as ``"type": ["object", "null"]``,
+      whose structure is still checked when the value is not null
 
     It does NOT implement the full JSON Schema spec.  See module docstring
     for known limitations.
@@ -111,7 +127,7 @@ def _validate_record(
         )
         return errors
 
-    if schema_type == "object" and isinstance(record, dict):
+    if _type_allows(schema_type, "object") and isinstance(record, dict):
         # Check required fields
         for field in schema.get("required", []):
             if field not in record:
@@ -149,7 +165,7 @@ def _validate_record(
                     )
                     errors.extend(sub_errors)
 
-    elif schema_type == "array" and isinstance(record, list):
+    elif _type_allows(schema_type, "array") and isinstance(record, list):
         items_schema = schema.get("items")
         if items_schema:
             for i, item in enumerate(record):

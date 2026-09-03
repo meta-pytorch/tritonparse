@@ -1,0 +1,322 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "autotune_analysis.schema.json",
+  "title": "TritonParse Autotune Analysis Event",
+  "description": "Generated once per autotuning session during processing. A session groups the compilations and benchmark launches that one @triton.autotune call produced, records which config won, and summarizes how the arguments and compilation params differed across the candidate configs. Sessions that neither benchmarked nor compiled more than once are skipped, so every emitted event describes a real autotune decision (either freshly benchmarked, or served from the autotuner's cache when cache_usage is true).",
+  "type": "object",
+  "required": [
+    "event_type",
+    "session_id",
+    "session_stack",
+    "name",
+    "selected_hash",
+    "winner_compilation_hash",
+    "possible_groups",
+    "compilation_analysis",
+    "launch_analysis",
+    "cache_usage",
+    "launch_ranges",
+    "launch_occurrence_ids"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["autotune_analysis"],
+      "description": "Event type discriminator."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Identifier of the autotuning session this event summarizes."
+    },
+    "session_stack": {
+      "type": "array",
+      "description": "User call stack at the point the autotuning session started. Empty when no stack was captured for the session.",
+      "items": { "$ref": "#/definitions/StackFrame" }
+    },
+    "name": {
+      "type": ["string", "null"],
+      "description": "Kernel name, taken from the first compilation in the session. Null for a cached session, which has no compilation events to read it from."
+    },
+    "selected_hash": {
+      "type": ["string", "null"],
+      "description": "launch_group_hash of the winning config, or null when the winner could not be determined."
+    },
+    "winner_compilation_hash": {
+      "type": ["string", "null"],
+      "description": "Compilation hash of the winning config, resolved from selected_hash via its launch event. Null when selected_hash is null or its launch event was not recorded."
+    },
+    "possible_groups": {
+      "type": "array",
+      "description": "Candidate groupings of compilation hashes, used by the frontend to associate this session with a kernel. A benchmarked session contributes exactly one group (its own compilation_hashes); a cached session contributes every known group containing winner_compilation_hash, and an empty list when neither is available.",
+      "items": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "compilation_analysis": { "$ref": "#/definitions/CompilationAnalysis" },
+    "launch_analysis": { "$ref": "#/definitions/LaunchAnalysis" },
+    "cache_usage": {
+      "type": "boolean",
+      "description": "True when the session ran no benchmark launches, i.e. the autotuner reused a cached winner instead of timing the candidates."
+    },
+    "launch_ranges": {
+      "$ref": "#/definitions/LaunchRanges"
+    },
+    "launch_occurrence_ids": {
+      "$ref": "#/definitions/LaunchOccurrenceIds"
+    },
+    "autotune_args_summary": {
+      "$ref": "#/definitions/AutotuneArgsSummary"
+    },
+    "autotune_result": {
+      "$ref": "#/definitions/AutotuneResult"
+    },
+    "occurrence_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Global ordering index across all events."
+    }
+  },
+  "definitions": {
+    "StackFrame": {
+      "type": "object",
+      "description": "A single frame in the call stack.",
+      "required": ["line", "name", "filename"],
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "type": "integer",
+          "description": "Line number in the source file."
+        },
+        "name": { "type": "string", "description": "Function name." },
+        "filename": { "type": "string", "description": "Source file path." },
+        "loc": {
+          "type": "string",
+          "description": "Code snippet at that line."
+        }
+      }
+    },
+    "PythonSource": {
+      "type": ["object", "null"],
+      "description": "Python source code of the Triton kernel. Null when the first compilation carried none.",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to the Python source file."
+        },
+        "start_line": {
+          "type": "integer",
+          "description": "Start line of the kernel function."
+        },
+        "end_line": {
+          "type": "integer",
+          "description": "End line of the kernel function."
+        },
+        "code": { "type": "string", "description": "Source code text." },
+        "function_start_line": {
+          "type": "integer",
+          "description": "Function start line (with full-file mode)."
+        },
+        "function_end_line": {
+          "type": "integer",
+          "description": "Function end line (with full-file mode)."
+        }
+      }
+    },
+    "CompilationAnalysis": {
+      "type": ["object", "null"],
+      "description": "The candidate configs this session compiled, plus the source context they share. Null when the session produced no compilation events (cached session) or the first compilation's hash was unknown.",
+      "required": ["configs", "compilation_hashes", "common_info"],
+      "additionalProperties": false,
+      "properties": {
+        "configs": {
+          "type": "array",
+          "description": "One entry per compilation event in the session, in compilation order.",
+          "items": { "$ref": "#/definitions/CompilationConfig" }
+        },
+        "compilation_hashes": {
+          "type": "array",
+          "description": "Hashes of the session's compilations. Shorter than configs when a compilation carried no hash.",
+          "items": { "type": "string" }
+        },
+        "common_info": { "$ref": "#/definitions/CommonInfo" }
+      }
+    },
+    "CompilationConfig": {
+      "type": "object",
+      "description": "One candidate config: the compilation params the autotuner varied, and the compilation they produced.",
+      "required": ["compilation_config_params", "compilation_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "compilation_config_params": {
+          "type": "object",
+          "description": "Subset of num_warps / num_stages / num_ctas / maxnreg present in this compilation's metadata. Keys absent from the metadata are omitted rather than nulled.",
+          "additionalProperties": true,
+          "properties": {
+            "num_warps": { "type": "integer" },
+            "num_stages": { "type": "integer" },
+            "num_ctas": { "type": "integer" },
+            "maxnreg": { "type": ["integer", "null"] }
+          }
+        },
+        "compilation_hash": {
+          "type": ["string", "null"],
+          "description": "Hash of this compilation, or null when the metadata carried none."
+        }
+      }
+    },
+    "CommonInfo": {
+      "type": "object",
+      "description": "Source context shared by the session's configs, taken from its first compilation.",
+      "required": ["stack", "python_source"],
+      "additionalProperties": false,
+      "properties": {
+        "stack": {
+          "type": ["array", "null"],
+          "description": "Call stack of the first compilation.",
+          "items": { "$ref": "#/definitions/StackFrame" }
+        },
+        "python_source": { "$ref": "#/definitions/PythonSource" }
+      }
+    },
+    "LaunchAnalysis": {
+      "type": ["object", "null"],
+      "description": "The session's launch groups and a same/diff breakdown of their launch parameters. Null when the session recorded no launch groups.",
+      "required": ["launch_group_hashes", "launch_params_diff"],
+      "additionalProperties": false,
+      "properties": {
+        "launch_group_hashes": {
+          "type": "array",
+          "description": "launch_group_hash of every launch group in the session.",
+          "items": { "type": "string" }
+        },
+        "launch_params_diff": {
+          "$ref": "#/definitions/LaunchParamsDiff"
+        }
+      }
+    },
+    "LaunchParamsDiff": {
+      "type": "object",
+      "description": "Launch fields that are identical across the session's launch groups versus those that vary. Both maps are keyed by launch event field name (grid, extracted_args, stack, ...); values are the raw field values or per-field diff summaries, so neither side is constrained further here.",
+      "required": ["sames", "diffs"],
+      "additionalProperties": false,
+      "properties": {
+        "sames": { "type": "object", "additionalProperties": true },
+        "diffs": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "LaunchRanges": {
+      "type": "object",
+      "description": "Human-readable occurrence-id ranges of the session's launches, e.g. \"12-34, 40\". Empty string when the corresponding list is empty.",
+      "required": ["benchmark", "winner"],
+      "additionalProperties": false,
+      "properties": {
+        "benchmark": {
+          "type": "string",
+          "description": "Ranges of launches performed while timing candidate configs."
+        },
+        "winner": {
+          "type": "string",
+          "description": "Ranges of launches performed with the winning config."
+        }
+      }
+    },
+    "LaunchOccurrenceIds": {
+      "type": "object",
+      "description": "The same launches as launch_ranges, as sorted occurrence-id lists.",
+      "required": ["benchmark", "winner"],
+      "additionalProperties": false,
+      "properties": {
+        "benchmark": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "winner": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "AutotuneArgsSummary": {
+      "type": "object",
+      "description": "How the kernel arguments and compilation params compared across the session's configs. Present only when the session had launch groups.",
+      "required": [
+        "summary_version",
+        "unchanged_args",
+        "per_config_args",
+        "arg_order",
+        "autotune_configs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "summary_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Schema version of this summary object, so consumers can detect layout changes."
+        },
+        "unchanged_args": {
+          "type": "object",
+          "description": "Arguments whose value was identical across every launch in the session, keyed by argument name. Values are extracted-arg descriptors, whose shape depends on the argument type.",
+          "additionalProperties": true
+        },
+        "per_config_args": {
+          "type": "object",
+          "description": "Per-compilation-hash argument value distributions. Each entry also carries compilation_config_params when the config params could be resolved.",
+          "additionalProperties": { "type": "object", "additionalProperties": true }
+        },
+        "arg_order": {
+          "type": "array",
+          "description": "Argument names in first-seen order, so the frontend can render columns stably.",
+          "items": { "type": "string" }
+        },
+        "autotune_configs": {
+          "$ref": "#/definitions/AutotuneConfigs"
+        }
+      }
+    },
+    "AutotuneConfigs": {
+      "type": "object",
+      "description": "Compilation params and argument values split into those shared by all configs and those the autotuner varied.",
+      "required": ["sames", "varies"],
+      "additionalProperties": false,
+      "properties": {
+        "sames": { "type": "object", "additionalProperties": true },
+        "varies": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "AutotuneResult": {
+      "type": "object",
+      "description": "Authoritative result reported by Triton's autotuner, present only when the AutotuneListener observed this session. Every member is copied straight off the raw autotune event with .get(), so any of them is null when that event omitted the key.",
+      "required": [
+        "best_config",
+        "configs_timings",
+        "benchmark_duration",
+        "cache_hit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "best_config": {
+          "type": ["string", "null"],
+          "description": "String form of the winning triton.Config."
+        },
+        "configs_timings": {
+          "type": ["object", "null"],
+          "description": "Measured timings keyed by the string form of each candidate config. Values are the raw timing payload the autotuner reported (typically [min, mean, max] milliseconds).",
+          "additionalProperties": true
+        },
+        "benchmark_duration": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Wall-clock seconds spent benchmarking the candidates."
+        },
+        "cache_hit": {
+          "type": ["boolean", "null"],
+          "description": "True when the autotuner answered from its own cache rather than re-timing."
+        }
+      }
+    }
+  }
+}
