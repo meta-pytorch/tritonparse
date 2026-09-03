@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Tuple
 
 from tritonparse.reproducer.function_extractor import _is_constexpr_annotation
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle
+from tritonparse.reproducer.utils import dedent_kernel_source
 from tritonparse.tp_logger import logger
 
 
@@ -116,7 +117,7 @@ def extract_params_from_source(
         Tuple of ``(param_name, is_constexpr)`` pairs.
     """
     try:
-        tree = ast.parse(source_code)
+        tree = ast.parse(dedent_kernel_source(source_code))
     except SyntaxError:
         logger.warning("Failed to parse kernel source for param extraction")
         return ()

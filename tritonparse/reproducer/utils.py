@@ -6,6 +6,7 @@ import importlib.util
 import json
 import logging
 import sys
+import textwrap
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -561,6 +562,38 @@ def _generate_import_statements(kernel_info) -> tuple[str, str]:
     return sys_stmt, import_stmt
 
 
+def dedent_kernel_source(kernel_source_code: str) -> str:
+    """Strip the common leading indentation from a captured kernel source.
+
+    The tracer records a kernel's source exactly as it appears in its file, so
+    a kernel defined inside a function or a class -- which is how most tests
+    and many real call sites write them -- arrives indented::
+
+        '    @triton.jit\\n    def fused_op_kernel(\\n        a_ptr,\\n ...'
+
+    ``ast.parse`` rejects that outright with "unexpected indent". Only the
+    parse needs the dedented form; what the trace stores is left alone, so the
+    stored ``start_line``/``end_line`` still line up with the original file.
+
+    Whitespace-only lines are emptied first: ``textwrap.dedent`` treats a line
+    of trailing spaces as content and would compute a common prefix of "" from
+    it, silently leaving the source indented. Line endings are preserved
+    exactly, so this only ever removes indentation.
+    """
+
+    def blank_out(line: str) -> str:
+        body = line.rstrip("\r\n")
+        if body.strip():
+            return line
+        # Whitespace-only: keep the line ending, drop the whitespace.
+        return line[len(body) :]
+
+    normalized = "".join(
+        blank_out(line) for line in kernel_source_code.splitlines(keepends=True)
+    )
+    return textwrap.dedent(normalized)
+
+
 def _parse_kernel_signature(kernel_source_code: str) -> tuple[list[str], list[str]]:
     """
     Parses a Triton kernel's source code using AST to distinguish positional args
@@ -584,7 +617,7 @@ def _parse_kernel_signature(kernel_source_code: str) -> tuple[list[str], list[st
     """
     try:
         # Parse source code into AST
-        tree = ast.parse(kernel_source_code)
+        tree = ast.parse(dedent_kernel_source(kernel_source_code))
 
         # Find the first function definition
         func_def = None

@@ -87,6 +87,17 @@ def reproduce(
     context_bundle = build_context_bundle(events, line_index)
     context_bundle.source_repo_dir = source_repo_dir
 
+    if (
+        kernel_import == KernelImportMode.DEFAULT
+        and context_bundle.kernel_info.is_nested
+    ):
+        logger.info(
+            "Kernel %s is nested and cannot be imported from its module; "
+            "embedding its source instead",
+            context_bundle.kernel_info.function_name,
+        )
+        kernel_import = KernelImportMode.COPY
+
     logger.debug(
         f"Built context bundle for kernel: {context_bundle.kernel_info.function_name}"
     )

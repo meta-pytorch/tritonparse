@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from tritonparse.reproducer.utils import dedent_kernel_source
 from tritonparse.tp_logger import logger
 
 # Sentinel object to mark arguments that should be skipped during processing
@@ -18,6 +19,7 @@ class KernelInfo:
     function_name: str
     source_code: str
     call_stack: List[Dict[str, Any]]
+    is_nested: bool = False
 
 
 @dataclass
@@ -117,19 +119,45 @@ def get_kernel_info(comp_event: Dict[str, Any]) -> KernelInfo:
     # The function name is in the compilation metadata payload
     func_name = (comp_event.get("payload", {}).get("metadata") or {}).get("name")
 
-    # Find '@triton.jit' decorator and slice the string from there
+    is_nested = False
+    if func_name:
+        function_match = re.search(
+            rf"^(?P<indent>[ \t]*)(?:async\s+)?def\s+{re.escape(func_name)}\s*\(",
+            code,
+            re.MULTILINE,
+        )
+        is_nested = bool(function_match and function_match.group("indent"))
+
+    # Find '@triton.jit' decorator and slice the string from there.
+    #
+    # Slice from the START OF ITS LINE, not from the marker's own offset. A
+    # kernel defined inside a function or class -- which is how most tests and
+    # plenty of real call sites write them -- is captured indented, and slicing
+    # mid-line drops only that first line's indentation while leaving the rest
+    # of the block indented. The result is not parseable by ast, and it is also
+    # what gets embedded verbatim into the generated reproducer script, so the
+    # damage is not confined to signature parsing. Dedenting afterwards gives
+    # every consumer a well-formed function.
     jit_marker = "@triton.jit"
     jit_pos = code.find(jit_marker)
     if jit_pos != -1:
-        code = code[jit_pos:]
+        line_start = code.rfind("\n", 0, jit_pos) + 1
+        code = code[line_start:]
         logger.debug("Extracted kernel source starting from '@triton.jit'.")
+    code = dedent_kernel_source(code)
 
     if not file_path or not func_name:
         raise RuntimeError(
             "Could not resolve kernel file path or function name from compilation event."
             " The import-based strategy cannot proceed."
         )
-    return KernelInfo(file_path, func_name, code, comp_event.get("stack", []))
+    return KernelInfo(
+        file_path=file_path,
+        function_name=func_name,
+        source_code=code,
+        call_stack=comp_event.get("stack", []),
+        is_nested=is_nested,
+    )
 
 
 def _decode_arg(raw: Any) -> Any:

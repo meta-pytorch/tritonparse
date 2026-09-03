@@ -10,7 +10,7 @@ class KernelImportMode(str, Enum):
     Inherits from str to allow direct string comparison and use in argparse.
 
     Attributes:
-        DEFAULT: Import kernel from original file (current behavior).
+        DEFAULT: Import a module-level kernel, or embed a nested kernel.
         COPY: Embed kernel source code directly in reproducer.
         OVERRIDE_TTIR: Generate a stub kernel with captured IR override.
     """

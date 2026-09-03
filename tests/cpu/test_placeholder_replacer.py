@@ -2,6 +2,8 @@
 """Tests for placeholder_replacer module constants and helper functions."""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
 
 from tritonparse.reproducer.ingestion.ndjson import ContextBundle, KernelInfo
@@ -12,6 +14,7 @@ from tritonparse.reproducer.placeholder_replacer import (
     _SKIP_BARE_MODULES,
     _SKIP_IMPORTS,
     DefaultPlaceholderReplacer,
+    get_dependent_source_map,
 )
 from tritonparse.reproducer.types import KernelImportMode
 
@@ -79,6 +82,30 @@ class TestModuleConstants(unittest.TestCase):
         for item in _EXTRA_IMPORT_PATTERNS:
             self.assertIsInstance(item, tuple)
             self.assertEqual(len(item), 2)
+
+
+class TestDependentSourceMap(unittest.TestCase):
+    def test_preserves_dependency_with_same_short_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.joinpath("pyproject.toml").write_text(
+                "[project]\nname = 'same-name-fixture'\n", encoding="utf-8"
+            )
+            root.joinpath("helper.py").write_text(
+                "def kernel():\n    return 1\n", encoding="utf-8"
+            )
+            entry = root / "entry.py"
+            entry.write_text(
+                "from helper import kernel as dependency_kernel\n\n"
+                "def kernel():\n"
+                "    return dependency_kernel()\n",
+                encoding="utf-8",
+            )
+
+            result = get_dependent_source_map("kernel", str(entry))
+
+        self.assertIsNotNone(result)
+        self.assertIn("helper.kernel", result.functions)
 
 
 def _make_context_bundle(

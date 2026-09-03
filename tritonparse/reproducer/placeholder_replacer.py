@@ -1,6 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
-from abc import ABC
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
@@ -30,6 +31,7 @@ from tritonparse.reproducer.utils import (
     _generate_invocation_snippet,
     _get_compile_params_for_invocation,
     _parse_kernel_signature,
+    dedent_kernel_source,
     TRITON_COMPILE_PARAMS,
 )
 from tritonparse.tp_logger import logger
@@ -112,9 +114,9 @@ class HandlerProtocol(Protocol):
     ) -> str: ...
 
 
-class PlaceholderReplacer(ABC):
+class PlaceholderReplacer:
     """
-    Abstract base class for template placeholder replacement.
+    Base dispatcher for template placeholder replacement.
 
     Subclasses should register replacement handlers in their __init__ method
     by calling self.register(placeholder, handler_function).
@@ -286,200 +288,169 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         kernel_import = kwargs.get("kernel_import", KernelImportMode.DEFAULT)
 
         if kernel_import == KernelImportMode.DEFAULT:
-            _, import_statement = _generate_import_statements(
-                context_bundle.kernel_info
-            )
-
-            # For DEFAULT mode, always disable autotune (import from original file)
-            final_stmt = "\n".join(
-                [import_statement, ""] + get_function_source(_disable_triton_autotune)
-            )
-            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, final_stmt)
+            replacement = self._render_default_kernel_import(context_bundle)
         elif kernel_import == KernelImportMode.COPY:
-            source_code = context_bundle.kernel_info.source_code
-            func_name = context_bundle.kernel_info.function_name
-
-            if not source_code or not source_code.strip():
-                raise ValueError("Kernel source code is empty, cannot use 'copy' mode")
-            if not func_name:
-                raise ValueError(
-                    "Cannot determine kernel function name for 'copy' mode"
-                )
-
-            # When preserve_autotune is enabled, re-extract kernel with decorators
-            if self.preserve_autotune:
-                source_with_decorators = extract_function_with_decorators(
-                    context_bundle.kernel_info.file_path,
-                    func_name,
-                    context_bundle.source_repo_dir,
-                )
-                if source_with_decorators:
-                    source_code = source_with_decorators
-                    logger.debug("Using kernel source with decorators for autotuning")
-
-            else:
-                # Standard behavior: add dependent functions after kernel
-                dep_result = get_dependent_source_map(
-                    context_bundle.kernel_info.function_name,
-                    context_bundle.kernel_info.file_path,
-                    context_bundle.source_repo_dir,
-                )
-                # Only add dependent functions if extraction was successful
-                if dep_result:
-                    # Add imports required by dependent functions
-                    if dep_result.import_statements:
-                        dep_imports_code = "\n".join(dep_result.import_statements)
-                        source_code = dep_imports_code + "\n\n" + source_code
-                    # Add separator and dependent functions
-                    dependent_code = (
-                        "\n\n# Dependent functions extracted from source file\n\n"
-                    )
-                    dependent_code += "\n\n".join(dep_result.functions.values())
-                    # Alias bindings for embedded deps must follow their defs.
-                    if dep_result.alias_bindings:
-                        dependent_code += "\n\n" + "\n".join(dep_result.alias_bindings)
-                    source_code += "\n\n" + dependent_code
-                    logger.debug("Appended dependent functions to kernel source code")
-
-            # Add common imports needed for most Triton kernels
-            import_lines = list(_BASE_IMPORT_LINES) + [""]
-
-            # Scan kernel and dependent source for additional imports
-            # (e.g., "import triton.language.extra.tlx as tlx")
-            all_source_for_imports = source_code
-            extra_imports = _detect_extra_imports(all_source_for_imports)
-            if extra_imports:
-                import_lines.extend(extra_imports)
-                import_lines.append("")
-
-            # Only add autotune disabling code when not preserving autotune
-            if self.preserve_autotune:
-                import_lines.append(
-                    "# NOTE: Autotuning is ENABLED - kernel will autotune on first run"
-                )
-                import_lines.append("")
-
-                # Inject dependent functions after imports so they can use @triton.jit
-                dep_result = get_dependent_source_map(
-                    func_name,
-                    context_bundle.kernel_info.file_path,
-                    context_bundle.source_repo_dir,
-                )
-                if dep_result:
-                    # Add imports required by dependent functions
-                    if dep_result.import_statements:
-                        import_lines.extend(dep_result.import_statements)
-                        import_lines.append("")
-                    import_lines.append("# Dependent functions for autotuning")
-                    import_lines.append("")
-                    import_lines.extend(dep_result.functions.values())
-                    # Alias bindings for embedded deps must follow their defs.
-                    if dep_result.alias_bindings:
-                        import_lines.append("")
-                        import_lines.extend(dep_result.alias_bindings)
-                    import_lines.append("")
-            else:
-                import_lines.extend(get_function_source(_disable_triton_autotune))
-
-            # Combine: imports + kernel source code + alias
-            embedded_code = "\n".join(import_lines)
-            embedded_code += "\n" + source_code
-            embedded_code += f"\n\n# Use kernel function directly\nimported_kernel_function = {func_name}"
-
-            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, embedded_code)
+            replacement = self._render_copy_kernel_import(context_bundle)
         elif kernel_import == KernelImportMode.OVERRIDE_TTIR:
-            source_code = context_bundle.kernel_info.source_code
-            func_name = context_bundle.kernel_info.function_name
-
-            if not source_code or not source_code.strip():
-                raise ValueError(
-                    "Kernel source code is empty, cannot use 'override-ttir' mode"
-                )
-            if not func_name:
-                raise ValueError(
-                    "Cannot determine kernel function name for 'override-ttir' mode"
-                )
-
-            # Build the autotune config with ir_override + constexpr values
-            constexpr_vals = get_constexpr_values(context_bundle)
-            compile_meta = context_bundle.compile
-
-            config_parts = []
-            # Constexpr kwargs
-            kwargs_repr = repr(constexpr_vals)
-            config_parts.append(f"kwargs={kwargs_repr}")
-            # Compile params
-            for param in TRITON_COMPILE_PARAMS:
-                value = compile_meta.get(param)
-                if value is not None:
-                    config_parts.append(f"{param}={value!r}")
-            # ir_override — find the best available IR file
-            config_parts.append("ir_override=_IR_OVERRIDE_FILE")
-
-            config_str = ", ".join(config_parts)
-
-            # Generate imports + IR file discovery + stub function + autotune wrapper
-            import_lines = list(_BASE_IMPORT_LINES) + [""]
-
-            # Scan original source for extra imports (e.g., tlx)
-            extra_imports = _detect_extra_imports(source_code)
-            if extra_imports:
-                import_lines.extend(extra_imports)
-                import_lines.append("")
-
-            import_lines.extend(
-                [
-                    "import os",
-                    "",
-                ]
-                + get_function_source(_find_ir_override_file, with_invocation=False)
-                + [
-                    "",
-                    "# Find the best captured IR file for ir_override",
-                    "_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))",
-                    "_IR_DIR = os.path.join(_SCRIPT_DIR, 'captured_irs')",
-                    "_IR_OVERRIDE_FILE = _find_ir_override_file(_IR_DIR) if os.path.isdir(_IR_DIR) else None",
-                    "",
-                ]
-            )
-
-            # Generate the stub function source
-            stub_code = generate_stub_source(func_name, source_code)
-
-            # Wrap with autotune carrying ir_override + constexpr values.
-            # Apply @triton.autotune programmatically so we can conditionally
-            # include ir_override only when the IR file exists.
-            # Detect indent of the import placeholder for the if/else block.
-            placeholder = self.KERNEL_IMPORT_PLACEHOLDER
-            indent = next(
-                (
-                    line[: len(line) - len(line.lstrip())]
-                    for line in code.splitlines()
-                    if line.lstrip().startswith(placeholder)
-                ),
-                "",
-            )
-            inner = indent + "    "
-
-            import_lines.extend(
-                [
-                    "# Stub kernel — body is replaced by captured IR via ir_override",
-                    stub_code,
-                    "",
-                    f"{indent}if _IR_OVERRIDE_FILE:",
-                    f"{inner}{func_name} = triton.autotune(",
-                    f"{inner}    configs=[triton.Config({config_str})],",
-                    f"{inner}    key=[],",
-                    f"{inner})({func_name})",
-                    "",
-                    f"{indent}imported_kernel_function = {func_name}",
-                ]
-            )
-
-            embedded_code = "\n".join(import_lines)
-            return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, embedded_code)
+            replacement = self._render_override_ttir_import(code, context_bundle)
         else:
             raise ValueError(f"Unknown kernel_import mode: {kernel_import}")
+        return code.replace(self.KERNEL_IMPORT_PLACEHOLDER, replacement)
+
+    def _render_default_kernel_import(self, context_bundle: ContextBundle) -> str:
+        _, import_statement = _generate_import_statements(context_bundle.kernel_info)
+        return "\n".join(
+            [import_statement, ""] + get_function_source(_disable_triton_autotune)
+        )
+
+    def _require_kernel_source(
+        self, context_bundle: ContextBundle, mode: str
+    ) -> tuple[str, str]:
+        source_code = context_bundle.kernel_info.source_code
+        func_name = context_bundle.kernel_info.function_name
+        if not source_code or not source_code.strip():
+            raise ValueError(f"Kernel source code is empty, cannot use {mode!r} mode")
+        if not func_name:
+            raise ValueError(f"Cannot determine kernel function name for {mode!r} mode")
+        return source_code, func_name
+
+    def _get_dependent_sources(
+        self, context_bundle: ContextBundle
+    ) -> Optional[DependentSourceResult]:
+        return get_dependent_source_map(
+            context_bundle.kernel_info.function_name,
+            context_bundle.kernel_info.file_path,
+            context_bundle.source_repo_dir,
+        )
+
+    def _append_dependent_sources(
+        self, source_code: str, dep_result: Optional[DependentSourceResult]
+    ) -> str:
+        if dep_result is None:
+            return source_code
+        if dep_result.import_statements:
+            source_code = "\n".join(dep_result.import_statements) + "\n\n" + source_code
+        dependent_parts = list(dep_result.functions.values())
+        dependent_parts.extend(dep_result.alias_bindings)
+        if dependent_parts:
+            source_code += (
+                "\n\n# Dependent functions extracted from source file\n\n"
+                + "\n\n".join(dependent_parts)
+            )
+            logger.debug("Appended dependent functions to kernel source code")
+        return source_code
+
+    def _append_preserved_autotune_dependencies(
+        self,
+        import_lines: list[str],
+        dep_result: Optional[DependentSourceResult],
+    ) -> None:
+        if dep_result is None:
+            return
+        if dep_result.import_statements:
+            import_lines.extend(dep_result.import_statements)
+            import_lines.append("")
+        dependent_parts = list(dep_result.functions.values())
+        dependent_parts.extend(dep_result.alias_bindings)
+        if dependent_parts:
+            import_lines.extend(["# Dependent functions for autotuning", ""])
+            import_lines.extend(dependent_parts)
+            import_lines.append("")
+
+    def _render_copy_kernel_import(self, context_bundle: ContextBundle) -> str:
+        source_code, func_name = self._require_kernel_source(context_bundle, "copy")
+        dep_result = self._get_dependent_sources(context_bundle)
+        if self.preserve_autotune:
+            source_with_decorators = extract_function_with_decorators(
+                context_bundle.kernel_info.file_path,
+                func_name,
+                context_bundle.source_repo_dir,
+            )
+            if source_with_decorators:
+                source_code = dedent_kernel_source(source_with_decorators)
+                logger.debug("Using kernel source with decorators for autotuning")
+        else:
+            source_code = self._append_dependent_sources(source_code, dep_result)
+
+        import_lines = list(_BASE_IMPORT_LINES) + [""]
+        extra_imports = _detect_extra_imports(source_code)
+        if extra_imports:
+            import_lines.extend(extra_imports + [""])
+        if self.preserve_autotune:
+            import_lines.extend(
+                [
+                    "# NOTE: Autotuning is ENABLED - kernel will autotune on first run",
+                    "",
+                ]
+            )
+            self._append_preserved_autotune_dependencies(import_lines, dep_result)
+        else:
+            import_lines.extend(get_function_source(_disable_triton_autotune))
+
+        embedded_code = "\n".join(import_lines) + "\n" + source_code
+        return (
+            f"{embedded_code}\n\n# Use kernel function directly\n"
+            f"imported_kernel_function = {func_name}"
+        )
+
+    def _render_override_ttir_import(
+        self, code: str, context_bundle: ContextBundle
+    ) -> str:
+        source_code, func_name = self._require_kernel_source(
+            context_bundle, "override-ttir"
+        )
+        config_parts = [f"kwargs={get_constexpr_values(context_bundle)!r}"]
+        for param in TRITON_COMPILE_PARAMS:
+            value = context_bundle.compile.get(param)
+            if value is not None:
+                config_parts.append(f"{param}={value!r}")
+        config_parts.append("ir_override=_IR_OVERRIDE_FILE")
+
+        import_lines = list(_BASE_IMPORT_LINES) + [""]
+        extra_imports = _detect_extra_imports(source_code)
+        if extra_imports:
+            import_lines.extend(extra_imports + [""])
+        import_lines.extend(
+            ["import os", ""]
+            + get_function_source(_find_ir_override_file, with_invocation=False)
+            + [
+                "",
+                "# Find the best captured IR file for ir_override",
+                "_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))",
+                "_IR_DIR = os.path.join(_SCRIPT_DIR, 'captured_irs')",
+                "_IR_OVERRIDE_FILE = _find_ir_override_file(_IR_DIR) if os.path.isdir(_IR_DIR) else None",
+                "",
+            ]
+        )
+        indent = self._placeholder_indent(code, self.KERNEL_IMPORT_PLACEHOLDER, "")
+        inner = indent + "    "
+        config_str = ", ".join(config_parts)
+        import_lines.extend(
+            [
+                "# Stub kernel — body is replaced by captured IR via ir_override",
+                generate_stub_source(func_name, source_code),
+                "",
+                f"{indent}if _IR_OVERRIDE_FILE:",
+                f"{inner}{func_name} = triton.autotune(",
+                f"{inner}    configs=[triton.Config({config_str})],",
+                f"{inner}    key=[],",
+                f"{inner})({func_name})",
+                "",
+                f"{indent}imported_kernel_function = {func_name}",
+            ]
+        )
+        return "\n".join(import_lines)
+
+    @staticmethod
+    def _placeholder_indent(code: str, placeholder: str, default: str) -> str:
+        return next(
+            (
+                line[: len(line) - len(line.lstrip())]
+                for line in code.splitlines()
+                if line.lstrip().startswith(placeholder)
+            ),
+            default,
+        )
 
     def _replace_utility_functions(
         self, code: str, context_bundle: ContextBundle, **kwargs
@@ -508,175 +479,147 @@ class DefaultPlaceholderReplacer(PlaceholderReplacer):
         pos_args, kw_args = _parse_kernel_signature(source_code)
 
         if kernel_import == KernelImportMode.OVERRIDE_TTIR:
-            # When ir_override is active, autotune provides constexpr values
-            # and compile params — only pass non-constexpr args.
-            # When ir_override is missing (no captured_irs/), the stub runs
-            # as a plain @triton.jit and needs all args + compile params.
-            #
-            # Non-constexpr args must be passed as keyword args, not positional:
-            # constexprs can be interleaved with regular params in the kernel
-            # signature (e.g. `..., N_CTX, is_predict: constexpr, Q_SHAPE_0, ...`).
-            # Dropping an interleaved constexpr from the positional list shifts
-            # subsequent args into wrong parameter slots, colliding with the
-            # autotune-provided kwarg for that constexpr ("got multiple values
-            # for argument X"). Passing by name avoids the position shift.
-            constexpr_vals = get_constexpr_values(context_bundle)
-            override_kw_args = [
-                a for a in pos_args + kw_args if a not in constexpr_vals
-            ]
-            override_snippet = _generate_invocation_snippet(
-                [], override_kw_args, compile_params=None
+            invocation_snippet = self._render_override_invocation(
+                code, context_bundle, pos_args, kw_args
             )
-            compile_params = _get_compile_params_for_invocation(
-                context_bundle.compile, kw_args
+        elif self.preserve_autotune:
+            invocation_snippet = self._render_preserved_autotune_invocation(
+                context_bundle, source_code, pos_args, kw_args
             )
-            fallback_snippet = _generate_invocation_snippet(
-                pos_args, kw_args, compile_params
-            )
-            # Find the placeholder's indent so the if/else aligns in any template.
-            placeholder = self.KERNEL_INVOCATION_PLACEHOLDER
-            indent = next(
-                (
-                    line[: len(line) - len(line.lstrip())]
-                    for line in code.splitlines()
-                    if line.lstrip().startswith(placeholder)
-                ),
-                "    ",
-            )
-            inner = indent + "    "
-            invocation_snippet = (
-                f"if _IR_OVERRIDE_FILE:\n"
-                f"{inner}{override_snippet}\n"
-                f"{indent}else:\n"
-                f"{inner}{fallback_snippet}"
-            )
-            return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
-
-        if self.preserve_autotune:
-            # Get full kernel source with decorators to find autotune config params
-            func_name = context_bundle.kernel_info.function_name
-            full_source_code = extract_function_with_decorators(
-                context_bundle.kernel_info.file_path,
-                func_name,
-                context_bundle.source_repo_dir,
-            )
-            # Fall back to captured source if extraction fails
-            if not full_source_code:
-                full_source_code = source_code
-
-            # Also get dependent functions - they may contain triton.Config definitions
-            dep_result_for_invocation = get_dependent_source_map(
-                func_name,
-                context_bundle.kernel_info.file_path,
-                context_bundle.source_repo_dir,
-            )
-            all_source_code = full_source_code
-            if dep_result_for_invocation:
-                all_source_code += "\n\n" + "\n\n".join(
-                    dep_result_for_invocation.functions.values()
-                )
-
-            # Get params that autotune configs provide
-            autotune_config_params = extract_autotune_config_params(all_source_code)
-
-            if not autotune_config_params:
-                # No autotune configs found (decorator extraction may have failed).
-                # Fall back to injecting compile params so the kernel launches with
-                # the correct num_warps / num_stages instead of Triton defaults,
-                # which can deadlock warp-specialized kernels.
-                logger.debug(
-                    "No autotune config params found; injecting compile params"
-                )
-                compile_params = _get_compile_params_for_invocation(
-                    context_bundle.compile, kw_args
-                )
-                invocation_snippet = _generate_invocation_snippet(
-                    pos_args, kw_args, compile_params
-                )
-            else:
-                # Filter out params provided by autotune configs
-                # Remaining constexpr params must be passed as keyword args
-                filtered_pos_args = []
-                extra_kw_args = []
-                for arg in pos_args:
-                    if arg in autotune_config_params:
-                        continue
-                    if autotune_config_params and is_constexpr_param(arg, source_code):
-                        extra_kw_args.append(arg)
-                    else:
-                        filtered_pos_args.append(arg)
-
-                filtered_kw_args = [
-                    arg for arg in kw_args if arg not in autotune_config_params
-                ]
-                all_filtered_kw_args = extra_kw_args + filtered_kw_args
-
-                # Get compile params that are NOT provided by autotune configs
-                # (e.g., num_warps=8 when configs don't specify num_warps)
-                autotune_compile_params = set(autotune_config_params) & set(
-                    TRITON_COMPILE_PARAMS
-                )
-                # Add autotune-handled compile params to the filter list so
-                # _get_compile_params_for_invocation excludes them from the result
-                extended_kw_args = list(kw_args) + list(autotune_compile_params)
-                remaining_compile_params = _get_compile_params_for_invocation(
-                    context_bundle.compile, extended_kw_args
-                )
-
-                # Generate invocation with remaining compile_params not handled by autotuner
-                invocation_snippet = self._generate_autotune_invocation_snippet(
-                    filtered_pos_args, all_filtered_kw_args, remaining_compile_params
-                )
         else:
-            # Standard behavior: pass compile params.
-            # Override compile params with values from triton.Config if available,
-            # because the compiler may overwrite them (e.g., WS kernels overwrite
-            # num_warps with the total warp count across all async_task groups).
-            effective_compile = dict(context_bundle.compile)
-
-            file_path = context_bundle.kernel_info.file_path
-            func_name = context_bundle.kernel_info.function_name
-            source_path = Path(file_path)
-
-            if not source_path.exists() and context_bundle.source_repo_dir:
-                source_repo_path = Path(context_bundle.source_repo_dir)
-                if source_repo_path.exists():
-                    for i in range(1, len(source_path.parts)):
-                        new_path = source_repo_path / Path(
-                            "/".join(source_path.parts[i:])
-                        )
-                        if new_path.exists():
-                            source_path = new_path
-                            break
-
-            if source_path.exists():
-                try:
-                    file_source = source_path.read_text()
-                    configs = extract_kernel_autotune_configs(file_source, func_name)
-                    if configs:
-                        override = match_autotune_config(configs, context_bundle.args)
-                        if override:
-                            for param in TRITON_COMPILE_PARAMS:
-                                if param in override:
-                                    effective_compile[param] = override[param]
-                            logger.debug(
-                                "Overrode compile params from triton.Config: %s",
-                                override,
-                            )
-                except Exception:
-                    logger.debug(
-                        "Failed to extract autotune configs from source",
-                        exc_info=True,
-                    )
-
-            compile_params = _get_compile_params_for_invocation(
-                effective_compile, kw_args
-            )
-            invocation_snippet = _generate_invocation_snippet(
-                pos_args, kw_args, compile_params
+            invocation_snippet = self._render_standard_invocation(
+                context_bundle, pos_args, kw_args
             )
 
         return code.replace(self.KERNEL_INVOCATION_PLACEHOLDER, invocation_snippet)
+
+    def _render_override_invocation(
+        self,
+        code: str,
+        context_bundle: ContextBundle,
+        pos_args: list[str],
+        kw_args: list[str],
+    ) -> str:
+        constexpr_vals = get_constexpr_values(context_bundle)
+        override_kw_args = [
+            arg for arg in pos_args + kw_args if arg not in constexpr_vals
+        ]
+        override_snippet = _generate_invocation_snippet([], override_kw_args, None)
+        compile_params = _get_compile_params_for_invocation(
+            context_bundle.compile, kw_args
+        )
+        fallback_snippet = _generate_invocation_snippet(
+            pos_args, kw_args, compile_params
+        )
+        indent = self._placeholder_indent(
+            code, self.KERNEL_INVOCATION_PLACEHOLDER, "    "
+        )
+        inner = indent + "    "
+        return (
+            f"if _IR_OVERRIDE_FILE:\n"
+            f"{inner}{override_snippet}\n"
+            f"{indent}else:\n"
+            f"{inner}{fallback_snippet}"
+        )
+
+    def _find_autotune_config_params(
+        self, context_bundle: ContextBundle, source_code: str
+    ) -> set[str]:
+        func_name = context_bundle.kernel_info.function_name
+        full_source_code = extract_function_with_decorators(
+            context_bundle.kernel_info.file_path,
+            func_name,
+            context_bundle.source_repo_dir,
+        )
+        full_source_code = dedent_kernel_source(full_source_code or source_code)
+        dep_result = self._get_dependent_sources(context_bundle)
+        if dep_result:
+            full_source_code += "\n\n" + "\n\n".join(dep_result.functions.values())
+        return extract_autotune_config_params(full_source_code)
+
+    def _render_preserved_autotune_invocation(
+        self,
+        context_bundle: ContextBundle,
+        source_code: str,
+        pos_args: list[str],
+        kw_args: list[str],
+    ) -> str:
+        config_params = self._find_autotune_config_params(context_bundle, source_code)
+        if not config_params:
+            logger.debug("No autotune config params found; injecting compile params")
+            compile_params = _get_compile_params_for_invocation(
+                context_bundle.compile, kw_args
+            )
+            return _generate_invocation_snippet(pos_args, kw_args, compile_params)
+
+        filtered_pos_args = [arg for arg in pos_args if arg not in config_params]
+        extra_kw_args = [
+            arg for arg in filtered_pos_args if is_constexpr_param(arg, source_code)
+        ]
+        filtered_pos_args = [
+            arg for arg in filtered_pos_args if arg not in extra_kw_args
+        ]
+        filtered_kw_args = [arg for arg in kw_args if arg not in config_params]
+        extended_kw_args = kw_args + list(config_params & set(TRITON_COMPILE_PARAMS))
+        remaining_compile_params = _get_compile_params_for_invocation(
+            context_bundle.compile, extended_kw_args
+        )
+        return self._generate_autotune_invocation_snippet(
+            filtered_pos_args,
+            extra_kw_args + filtered_kw_args,
+            remaining_compile_params,
+        )
+
+    @staticmethod
+    def _resolve_source_path(context_bundle: ContextBundle) -> Path:
+        source_path = Path(context_bundle.kernel_info.file_path)
+        source_repo_dir = context_bundle.source_repo_dir
+        if source_path.exists() or not source_repo_dir:
+            return source_path
+        source_repo_path = Path(source_repo_dir)
+        if not source_repo_path.exists():
+            return source_path
+        for index in range(1, len(source_path.parts)):
+            candidate = source_repo_path / Path("/".join(source_path.parts[index:]))
+            if candidate.exists():
+                return candidate
+        return source_path
+
+    def _render_standard_invocation(
+        self,
+        context_bundle: ContextBundle,
+        pos_args: list[str],
+        kw_args: list[str],
+    ) -> str:
+        effective_compile = dict(context_bundle.compile)
+        source_path = self._resolve_source_path(context_bundle)
+        if source_path.exists():
+            try:
+                configs = extract_kernel_autotune_configs(
+                    source_path.read_text(), context_bundle.kernel_info.function_name
+                )
+                override = (
+                    match_autotune_config(configs, context_bundle.args)
+                    if configs
+                    else None
+                )
+                if override:
+                    effective_compile.update(
+                        {
+                            param: override[param]
+                            for param in TRITON_COMPILE_PARAMS
+                            if param in override
+                        }
+                    )
+                    logger.debug(
+                        "Overrode compile params from triton.Config: %s", override
+                    )
+            except Exception:
+                logger.debug(
+                    "Failed to extract autotune configs from source", exc_info=True
+                )
+        compile_params = _get_compile_params_for_invocation(effective_compile, kw_args)
+        return _generate_invocation_snippet(pos_args, kw_args, compile_params)
 
     def _generate_autotune_invocation_snippet(
         self,
@@ -975,17 +918,32 @@ def get_dependent_source_map(
                 "  - %s. %s", short_name, result.functions[func_name].splitlines()[0]
             )
 
+        entry_source_path = source_path.resolve()
+        dependent_functions = {
+            qualified_name: dedent_kernel_source(source)
+            for qualified_name, source in result.functions.items()
+            if not (
+                result.function_short_names[qualified_name] == function_name
+                and Path(result.function_locations[qualified_name]).resolve()
+                == entry_source_path
+            )
+        }
+
         # Names that were extracted and embedded as function definitions must
         # not also be imported: the original import often targets an internal
         # module that is unavailable in the standalone reproducer, so keeping it
         # would break execution (and duplicate/shadow the embedded definition).
-        embedded_names = set(result.function_short_names.values())
+        embedded_names = {
+            result.function_short_names[qualified_name]
+            for qualified_name in dependent_functions
+        }
+        embedded_names.add(function_name)
         import_stmts, alias_bindings = _render_dependent_imports(
             result.imports, embedded_names
         )
 
         return DependentSourceResult(
-            functions=result.functions,
+            functions=dependent_functions,
             import_statements=import_stmts,
             alias_bindings=alias_bindings,
         )
