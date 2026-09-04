@@ -1,7 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import atexit
-import fnmatch
 import gzip
 import hashlib
 import inspect
@@ -29,6 +28,10 @@ import zstandard as zstd  # @manual=fbsource//third-party/pypi/zstandard:zstanda
 # a top-level `import torch` here would create a circular import. See D100891381
 # for the original incident and D105172002 for the torch-side workaround.
 from tritonparse._json_compat import dumps, loads
+from tritonparse.kernel_filter import (
+    first_matching_kernel_pattern,
+    parse_kernel_patterns,
+)
 
 from .shared_vars import (
     DEFAULT_TRACE_FILE_PREFIX,
@@ -749,19 +752,13 @@ def parse_kernel_allowlist() -> Optional[List[str]]:
     Returns:
         List[str] or None: List of kernel name patterns to trace, or None if all kernels should be traced
     """
-    if not TRITONPARSE_KERNEL_ALLOWLIST:
+    patterns = parse_kernel_patterns(TRITONPARSE_KERNEL_ALLOWLIST)
+    if patterns is None:
         return None
 
-    # Split by comma and strip whitespace
-    patterns = [pattern.strip() for pattern in TRITONPARSE_KERNEL_ALLOWLIST.split(",")]
-    # Filter out empty patterns
-    patterns = [pattern for pattern in patterns if pattern]
-
-    if not patterns:
-        return None
-
-    log.debug(f"Kernel allowlist patterns: {patterns}")
-    return patterns
+    parsed_patterns = list(patterns)
+    log.debug(f"Kernel allowlist patterns: {parsed_patterns}")
+    return parsed_patterns
 
 
 def extract_kernel_name(src) -> Optional[str]:
@@ -815,11 +812,12 @@ def should_trace_kernel(
         log.debug("Cannot extract kernel name, skipping trace")
         return False
 
-    # Check if kernel name matches any pattern in the allowlist
-    for pattern in allowlist_patterns:
-        if fnmatch.fnmatch(kernel_name, pattern):
-            log.debug(f"Kernel '{kernel_name}' matches pattern '{pattern}', will trace")
-            return True
+    matching_pattern = first_matching_kernel_pattern(kernel_name, allowlist_patterns)
+    if matching_pattern is not None:
+        log.debug(
+            f"Kernel '{kernel_name}' matches pattern '{matching_pattern}', will trace"
+        )
+        return True
 
     log.debug(
         f"Kernel '{kernel_name}' does not match any allowlist pattern, skipping trace"
