@@ -1,7 +1,6 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import argparse
-import os
 import shutil
 from pathlib import Path
 from typing import Optional

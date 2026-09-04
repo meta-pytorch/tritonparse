@@ -6,15 +6,21 @@ on:
     paths:
       - "website/**"
       - ".github/workflows/website-build.yml"
+      - ".github/workflows/deploy-pages.yml"
   pull_request:
     branches: [main]
     paths:
       - "website/**"
       - ".github/workflows/website-build.yml"
+      - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: website-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-test:
