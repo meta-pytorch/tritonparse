@@ -458,16 +458,14 @@ def _run_inductor() -> None:
     ``force_disable_caches`` guarantees the run actually compiles rather than
     replaying an FX graph cache hit, which would emit no compilation events.
 
-    Known gap: the trace will contain no usable launch records even though
-    launch tracing is enabled. tritonparse's launch metadata is injected by
-    JITHookImpl into the kernel's ``launch_metadata`` function; inductor
-    launches through its own CachingAutotuner launcher, which calls Triton's
-    stock ``bin.launch_metadata``, so the hook fires with no
-    ``launch_metadata_tritonparse`` payload. The resulting events carry an
-    empty ``compilation_metadata``, so the parser -- which groups launches onto
-    compilations by hash -- drops all of them. Tracing is left enabled anyway,
-    so that regenerating this example after that gap is closed picks the
-    launches up with no change here.
+    Launch records depend on ``structured_logging.init()`` reaching torch's
+    ``run_jit_post_compile_hook`` gate (it propagates both the env var and
+    the live config value). Without it, inductor launches through its own
+    CachingAutotuner launcher, which calls Triton's stock
+    ``bin.launch_metadata``; the hook then fires with no
+    ``launch_metadata_tritonparse`` payload, the resulting events carry an
+    empty ``compilation_metadata``, and the parser -- which groups launches
+    onto compilations by hash -- drops all of them.
     """
     import torch
     import torch._inductor.config as inductor_config

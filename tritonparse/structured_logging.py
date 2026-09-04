@@ -2070,6 +2070,31 @@ def enable_launch_tracing() -> None:
     log.debug("[tritonparse] Launch tracing enabled")
 
 
+def _enable_inductor_jit_post_compile_hook() -> None:
+    """Propagate launch tracing to torch inductor's JIT post-compile gate.
+
+    Inductor checks ``torch._inductor.config.run_jit_post_compile_hook`` at
+    compile time before simulating the JIT hook that installs tritonparse's
+    launch_metadata (torch/_inductor/runtime/triton_heuristics.py). That config
+    is initialized once from the environment at torch import time, so setting
+    only tritonparse's own module global never reaches it. Set both channels:
+    os.environ for future subprocess/spawn workers (fresh interpreters re-read
+    the env var at import), and the live module attribute for this process
+    (inline compilation and fork pools created after init()).
+
+    Best effort and one-way: missing torch, or an older torch without the
+    attribute, is a no-op; clear_logging_config() deliberately does not revert
+    it since already-captured launchers cannot be un-built.
+    """
+    os.environ["TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK"] = "1"
+    try:
+        from torch._inductor import config as inductor_config
+    except ImportError:
+        return
+    if hasattr(inductor_config, "run_jit_post_compile_hook"):
+        inductor_config.run_jit_post_compile_hook = True
+
+
 def _autotune_listener(*, fn, key, best_config, configs_timings, duration, cache_hit):
     """AutotuneListener callback — writes an 'autotune' event to NDJSON."""
     kernel_name = fn.fn.__name__
@@ -2204,6 +2229,10 @@ def init(
     elif enable_trace_launch_within_profiling:
         TRITON_TRACE_LAUNCH_WITHIN_PROFILING = True
         TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = True
+    if TRITON_TRACE_LAUNCH or TRITON_TRACE_LAUNCH_WITHIN_PROFILING:
+        # Reach torch inductor too: tritonparse's own global above is not read
+        # by inductor, which gates on its own config value / env var.
+        _enable_inductor_jit_post_compile_hook()
     if enable_more_tensor_information:
         TRITONPARSE_MORE_TENSOR_INFORMATION = True
     set_runtime_sass_dump_override(True if enable_sass_dump else None)

@@ -171,6 +171,42 @@ class InductorTracingTest(GPUTestBase):
                 for comp in comps:
                     self.assertEqual(comp["payload"]["pt_info"]["frame_id"], frame_id)
 
+    def test_launches_carry_compilation_metadata(self):
+        """Inductor launches keep the metadata that groups them.
+
+        Full launches (carrying ``compilation_metadata``) prove the
+        inductor JIT post-compile hook simulation ran, i.e.
+        structured_logging.init() reached torch's
+        run_jit_post_compile_hook gate. The gate starts cleared here so
+        the test fails if init() stops propagating it -- without the hook
+        the trace holds compilations but the parser drops every launch.
+        """
+        import torch._inductor.config as inductor_config
+
+        saved_flag = inductor_config.run_jit_post_compile_hook
+        saved_env = os.environ.get("TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK")
+        inductor_config.run_jit_post_compile_hook = False
+        os.environ.pop("TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK", None)
+        try:
+            out_dir = self._trace(split_inductor_compilations=False)
+        finally:
+            inductor_config.run_jit_post_compile_hook = saved_flag
+            if saved_env is None:
+                os.environ.pop("TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK", None)
+            else:
+                os.environ["TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK"] = saved_env
+        total = 0
+        full = 0
+        for path in sorted(glob.glob(os.path.join(out_dir, "*.ndjson*"))):
+            for event in self._read_events(path):
+                if event.get("event_type") != "launch":
+                    continue
+                total += 1
+                if isinstance(event.get("compilation_metadata"), dict):
+                    full += 1
+        self.assertGreater(total, 0, "no launches traced at all")
+        self.assertGreater(full, 0, "no full inductor launches traced")
+
     def test_no_split_merges_every_frame_into_one_file(self):
         """split=False is what the web viewer needs: a single mapped file."""
         out_dir = self._trace(split_inductor_compilations=False)

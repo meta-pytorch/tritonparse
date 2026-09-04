@@ -909,6 +909,34 @@ class ValidateTraceFileTest(unittest.TestCase):
         self.assertTrue(result["valid"], f"Validation errors: {result['errors']}")
         self.assertGreater(result["record_count"], 0)
         self.assertIn("compilation", result["event_type_counts"])
+        self.assertIn("launch", result["event_type_counts"])
+
+    def test_inductor_trace_has_full_launches(self):
+        """The inductor fixture must contain launches with metadata.
+
+        Full launches (carrying ``compilation_metadata``) prove the
+        inductor JIT post-compile hook simulation ran, i.e. init() reached
+        torch's gate. Regression test for inductor traces that contained
+        compilations but zero launches.
+        """
+        full_inductor_launches = 0
+        with open_compressed_file(get_inductor_ndjson_file()) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                if record.get("event_type") != "launch":
+                    continue
+                if isinstance(record.get("compilation_metadata"), dict) and str(
+                    record.get("name", "")
+                ).startswith("triton_"):
+                    full_inductor_launches += 1
+        self.assertGreater(
+            full_inductor_launches,
+            0,
+            "No full inductor launches in the inductor fixture",
+        )
 
     def test_validate_parsed_trace_complex_mapped(self):
         """Validate parsed trace: dedicated_log_triton_trace_findhao__mapped.ndjson.gz.
