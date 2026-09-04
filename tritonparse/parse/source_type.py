@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Tuple
 
 
+def contains_clp_archive(path: Path) -> bool:
+    """Return whether a directory contains a top-level CLP archive."""
+    return path.is_dir() and any(child.suffix == ".clp" for child in path.iterdir())
+
+
 class SourceType(str, Enum):
     """Enumeration of supported source types for OSS only."""
 
@@ -47,7 +52,7 @@ class Source:
     def _parse_source(self) -> Tuple[SourceType, str]:
         # Check if it's a local path
         path = Path(self.source_str)
-        if path.is_dir() and any(".clp" in p.name for p in path.iterdir()):
+        if contains_clp_archive(path):
             return SourceType.LOCAL_CLP, str(path.absolute())
         if path.is_dir():
             return SourceType.LOCAL, str(path.absolute())

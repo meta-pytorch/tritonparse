@@ -11,12 +11,14 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import zstandard as zstd
 from tritonparse._json_compat import dumps
+from tritonparse.kernel_filter import KernelPatterns
 from tritonparse.shared_vars import (
     DEFAULT_TRACE_FILE_PREFIX_WITHOUT_USER as LOG_PREFIX,
     is_fbcode,
 )
 from tritonparse.tp_logger import logger
 
+from .kernel_selection import format_kernel_filter_no_match, KernelFilterStats
 from .trace_processor import parse_single_rank
 
 
@@ -594,6 +596,30 @@ def _build_kernel_compile_mapping(
     return mapping if mapping else None
 
 
+def _combine_kernel_filter_stats(
+    stats_by_rank: list[KernelFilterStats],
+) -> KernelFilterStats:
+    return KernelFilterStats(
+        direct_matched_hash_count=sum(
+            stats.direct_matched_hash_count for stats in stats_by_rank
+        ),
+        direct_matched_session_count=sum(
+            stats.direct_matched_session_count for stats in stats_by_rank
+        ),
+        selected_hash_count=sum(stats.selected_hash_count for stats in stats_by_rank),
+        selected_session_count=sum(
+            stats.selected_session_count for stats in stats_by_rank
+        ),
+        emitted_kernel_group_count=sum(
+            stats.emitted_kernel_group_count for stats in stats_by_rank
+        ),
+        available_kernel_names=frozenset(
+            name for stats in stats_by_rank for name in stats.available_kernel_names
+        ),
+        unknown_name_count=sum(stats.unknown_name_count for stats in stats_by_rank),
+    )
+
+
 def parse_logs(
     logs_to_parse: str,
     rank_config: RankConfig,
@@ -603,6 +629,7 @@ def parse_logs(
     torch_trace_dir: Optional[str] = None,
     procedure_checks: list = None,
     enable_pre_init_attribution: bool = True,
+    kernel_patterns: Optional[KernelPatterns] = None,
 ) -> Tuple[str, dict]:
     """
     Parse logs.
@@ -629,6 +656,8 @@ def parse_logs(
             this kwarg) to debug the boundary between pre/post-init kernels.
             `--rank none` always shows the unattributed view regardless of
             this flag.
+        kernel_patterns: Normalized fnmatch patterns used to select complete
+            kernel hash and autotune-session groups.
     Returns:
         Tuple of (parsed log directory, file mapping)
     """
@@ -664,6 +693,7 @@ def parse_logs(
     kernel_compile_mapping = _build_kernel_compile_mapping(raw_log_dir, torch_trace_dir)
 
     file_mapping = {"tritonparse_url_prefix": tritonparse_url_prefix}
+    filter_stats_by_rank: list[KernelFilterStats] = []
     # Process one rank at a time. parse_single_rank merges events across all
     # PID files in the bucket by kernel_hash, so per-frame outputs no longer
     # collide between PIDs (the §3.5 finding A scenario).
@@ -680,13 +710,20 @@ def parse_logs(
         output_dir = os.path.join(parsed_log_dir, relative_path)
         os.makedirs(output_dir, exist_ok=True)
 
-        parse_single_rank(
+        filter_stats = parse_single_rank(
             files,
             output_dir,
             split_inductor_compilations,
             kernel_compile_mapping=kernel_compile_mapping,
             procedure_checks=procedure_checks,
+            kernel_patterns=kernel_patterns,
         )
+        if filter_stats is not None:
+            filter_stats_by_rank.append(filter_stats)
+            if filter_stats.emitted_kernel_group_count == 0:
+                if relative_path:
+                    shutil.rmtree(output_dir, ignore_errors=True)
+                continue
 
         # Collect generated files and gzip them immediately.
         if os.path.exists(output_dir):
@@ -711,6 +748,13 @@ def parse_logs(
             )
             if mapped_file:
                 file_mapping[rank_key]["mapped_file"] = mapped_file
+
+    if kernel_patterns is not None:
+        combined_stats = _combine_kernel_filter_stats(filter_stats_by_rank)
+        if combined_stats.emitted_kernel_group_count == 0:
+            message = format_kernel_filter_no_match(kernel_patterns, combined_stats)
+            shutil.rmtree(parsed_log_dir, ignore_errors=True)
+            raise RuntimeError(message)
 
     # Clean up the file mapping - remove None mapped_files and ensure no duplicates
     for rank_key, rank_data in file_mapping.items():
