@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, JSONDecodeError, loads
 from tritonparse.backend import AnalyzerContext
+from tritonparse.kernel_filter import KernelPatterns
 from tritonparse.tools.compression import open_compressed_file
 from tritonparse.tp_logger import get_logger
 
@@ -19,6 +20,11 @@ from .event_diff import (
 )
 from .ir_analysis import _generate_ir_analysis, _generate_launch_analysis
 from .ir_parser import _parse_generic_loc, extract_ptx_amdgcn_mappings
+from .kernel_selection import (
+    build_kernel_selection,
+    format_kernel_filter_no_match,
+    KernelFilterStats,
+)
 from .mapper import create_bidirectional_mapping, create_python_mapping
 from .sourcemap_utils import (
     _is_autotune_benchmark_launch,
@@ -727,7 +733,8 @@ def parse_single_rank(
     split_inductor_compilations: bool = True,
     kernel_compile_mapping: Optional[Dict[str, Any]] = None,
     procedure_checks: List[Dict[str, Any]] = None,
-):
+    kernel_patterns: Optional[KernelPatterns] = None,
+) -> Optional[KernelFilterStats]:
     """
     Process a list of trace files belonging to the same rank, merging events
     by kernel_hash across files (typically across PIDs for one rank).
@@ -757,9 +764,16 @@ def parse_single_rank(
             missing.
         procedure_checks: List of procedure check configurations. None uses
             the bundled default checks.
+        kernel_patterns: Normalized fnmatch patterns. When set, process only
+            the complete hash/autotune-session closure selected by those names.
+
+    Returns:
+        Filter statistics when kernel_patterns is set; otherwise None.
     """
     if not file_paths:
-        return
+        if kernel_patterns is None:
+            return None
+        return build_kernel_selection([], kernel_patterns).stats(0)
 
     if procedure_checks is None:
         procedure_checks = get_procedure_checks()
@@ -767,12 +781,20 @@ def parse_single_rank(
     # =====================================================
     # Pass 1: Pre-scan all input files to identify kernels needing fake comps
     # =====================================================
-    compilation_hashes, first_launch_by_hash = _prescan_for_fake_compilations_multi(
-        file_paths
-    )
+    selection = None
+    if kernel_patterns is None:
+        compilation_hashes, first_launch_by_hash = _prescan_for_fake_compilations_multi(
+            file_paths
+        )
+    else:
+        selection = build_kernel_selection(file_paths, kernel_patterns)
+        compilation_hashes = selection.index.real_compilation_hashes
+        first_launch_by_hash = selection.index.fake_compilation_seed_by_hash
 
     # Identify kernel hashes that need fake compilations
     kernels_needing_fake = set(first_launch_by_hash.keys()) - compilation_hashes
+    if selection is not None:
+        kernels_needing_fake.intersection_update(selection.selected_hashes)
 
     # Create fake compilations
     fake_compilations: List[Dict[str, Any]] = []
@@ -861,6 +883,11 @@ def parse_single_rank(
                     kernel_hash = payload.get("metadata", {}).get("hash")
                     if not kernel_hash:
                         continue
+                    if (
+                        selection is not None
+                        and kernel_hash not in selection.selected_hashes
+                    ):
+                        continue
 
                     # Group autotune compilations by session_id (always, even
                     # when this hash already has a real compilation recorded —
@@ -903,6 +930,18 @@ def parse_single_rank(
                         "hash"
                     )
 
+                    stack = parsed_json.get("stack", [])
+                    session_id, user_stack = get_autotune_session_id(stack)
+                    if selection is not None:
+                        if kernel_hash:
+                            if kernel_hash not in selection.selected_hashes:
+                                continue
+                        elif (
+                            session_id is None
+                            or session_id not in selection.selected_sessions
+                        ):
+                            continue
+
                     launch_group_hash = compute_launch_event_hash(parsed_json)
                     # Shrink after hashing, so group hashes stay byte-identical
                     # to what the same trace produced before this guard.
@@ -913,8 +952,6 @@ def parse_single_rank(
                     occurrence_id = next_occurrence_id
                     next_occurrence_id += 1
 
-                    stack = parsed_json.get("stack", [])
-                    session_id, user_stack = get_autotune_session_id(stack)
                     is_benchmark = _is_autotune_benchmark_launch(stack)
 
                     if session_id:
@@ -956,6 +993,11 @@ def parse_single_rank(
                 elif event_type == "autotune":
                     stack = parsed_json.get("stack", [])
                     session_id, user_stack = get_autotune_session_id(stack)
+                    if selection is not None and (
+                        session_id is None
+                        or session_id not in selection.selected_sessions
+                    ):
+                        continue
                     if session_id:
                         autotune_sessions[session_id]["autotune_result"] = {
                             "best_config": parsed_json.get("best_config"),
@@ -1070,6 +1112,13 @@ def parse_single_rank(
         with open(output_file, "w") as out:
             out.writelines(final_lines)
 
+    if selection is None:
+        return None
+    emitted_kernel_group_count = sum(
+        1 for data in kernels_by_hash.values() if data["output_file"]
+    )
+    return selection.stats(emitted_kernel_group_count)
+
 
 def parse_single_file(
     file_path: str,
@@ -1077,7 +1126,8 @@ def parse_single_file(
     split_inductor_compilations: bool = True,
     kernel_compile_mapping: Optional[Dict[str, Any]] = None,
     procedure_checks: List[Dict[str, Any]] = None,
-):
+    kernel_patterns: Optional[KernelPatterns] = None,
+) -> Optional[KernelFilterStats]:
     """
     Process a single trace file. Thin wrapper around parse_single_rank for
     backward compatibility — equivalent to a one-element batch.
@@ -1087,13 +1137,24 @@ def parse_single_file(
         output_dir: Directory for output files; defaults to file_path's dirname.
         split_inductor_compilations, kernel_compile_mapping, procedure_checks:
             same as parse_single_rank.
+        kernel_patterns: Normalized fnmatch patterns; same as parse_single_rank.
+
+    Returns:
+        Filter statistics when kernel_patterns is set; otherwise None.
+
+    Raises:
+        RuntimeError: If kernel_patterns selects no emitted kernel group.
     """
     if output_dir is None:
         output_dir = os.path.dirname(file_path)
-    parse_single_rank(
+    stats = parse_single_rank(
         [file_path],
         output_dir,
         split_inductor_compilations=split_inductor_compilations,
         kernel_compile_mapping=kernel_compile_mapping,
         procedure_checks=procedure_checks,
+        kernel_patterns=kernel_patterns,
     )
+    if stats is not None and stats.emitted_kernel_group_count == 0:
+        raise RuntimeError(format_kernel_filter_no_match(kernel_patterns, stats))
+    return stats
