@@ -40,11 +40,23 @@ const IRAnalysis: React.FC<IRAnalysisProps> = ({ kernels, selectedKernel }) => {
   }
 
   const io_counts = kernel.ir_analysis?.io_counts;
+  const buffer_ops = kernel.ir_analysis?.amd_buffer_ops;
   const ttgir_info = io_counts?.["amd_ttgir_bufferops_count"];
   const amdgcn_info = io_counts?.["amd_gcn_bufferops_count"];
   const loop_schedule = kernel.ir_analysis?.loop_schedules;
   const procedure_checks = kernel.ir_analysis?.procedure_checks;
-  const getCount = (info: Record<string, number> | undefined, key: string): string => { return info?.[key]?.toString() ?? "N/A"; };
+  const getCount = (
+    info: Record<string, number> | undefined,
+    ...keys: string[]
+  ): string => {
+    for (const key of keys) {
+      const count = info?.[key];
+      if (count !== undefined) {
+        return count.toString();
+      }
+    }
+    return "N/A";
+  };
 
   // Helper function to get procedure check status display
   const getProcedureCheckDisplay = (result: ProcedureCheckResult): { color: string; icon: string } => {
@@ -105,11 +117,29 @@ Check the specific conditions required for this procedure.`;
           Kernel: [{selectedKernel}] {kernel.name}
         </h2>
 
-        {io_counts && (ttgir_info || amdgcn_info) && (
+        {(buffer_ops || (io_counts && (ttgir_info || amdgcn_info))) && (
           <>
             <h3 className="text-lg font-medium mb-3 text-gray-800">
               AMD BufferOps Information
             </h3>
+
+            {buffer_ops && (
+              <div className="mb-4 flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center px-2 py-1 rounded text-sm font-medium border ${
+                    buffer_ops.enabled
+                      ? "bg-green-100 text-green-800 border-green-200"
+                      : "bg-red-100 text-red-800 border-red-200"
+                  }`}
+                >
+                  {buffer_ops.enabled ? "✓" : "✗"} Buffer Ops{" "}
+                  {buffer_ops.enabled ? "Enabled" : "Not Fully Enabled"} ({buffer_ops.status})
+                </span>
+                {buffer_ops.reason && (
+                  <span className="text-sm text-gray-600">{buffer_ops.reason}</span>
+                )}
+              </div>
+            )}
 
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200 mb-6">
               <div className="grid grid-cols-[repeat(auto-fit,_minmax(180px,_1fr))] gap-3">
@@ -125,11 +155,31 @@ Check the specific conditions required for this procedure.`;
                     </div>
                     <div className="flex flex-col">
                       <span className="text-sm font-medium text-gray-500">Tiled Buffer Load Count</span>
-                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdgpu.buffer_load_count")}</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdg.buffer_load_count", "amdgpu.buffer_load_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">Tiled Buffer Load-To-Local Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdg.buffer_load_to_local_count")}</span>
                     </div>
                     <div className="flex flex-col">
                       <span className="text-sm font-medium text-gray-500">Tiled Buffer Store Count</span>
-                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdgpu.buffer_store_count")}</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdg.buffer_store_count", "amdgpu.buffer_store_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">Tiled Atomic RMW Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "tt.atomic_rmw_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">Tiled Atomic CAS Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "tt.atomic_cas_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">Tiled Buffer Atomic RMW Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdg.buffer_atomic_rmw_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">Tiled Buffer Atomic CAS Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(ttgir_info, "amdg.buffer_atomic_cas_count")}</span>
                     </div>
                   </>
                 )}
@@ -150,6 +200,18 @@ Check the specific conditions required for this procedure.`;
                     <div className="flex flex-col">
                       <span className="text-sm font-medium text-gray-500">AMDGCN Buffer Store Instruction Count</span>
                       <span className="font-mono text-sm break-words">{getCount(amdgcn_info, "buffer_store_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">AMDGCN Buffer Atomic Instruction Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(amdgcn_info, "buffer_atomic_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">AMDGCN Global Atomic Instruction Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(amdgcn_info, "global_atomic_count")}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-500">AMDGCN Flat Atomic Instruction Count</span>
+                      <span className="font-mono text-sm break-words">{getCount(amdgcn_info, "flat_atomic_count")}</span>
                     </div>
                   </>
                 )}
