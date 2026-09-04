@@ -670,5 +670,171 @@ class TestDeviceStringHelpers(unittest.TestCase):
         self.assertEqual(normalize_accelerator_device_string(""), "cpu")
 
 
+class TestAmdBufferOpsStatus(unittest.TestCase):
+    """Derived AMD buffer-ops enablement status in ir_analysis."""
+
+    _TTGIR = """\
+tt.func @kernel(%arg0: !tt.ptr<f32>) {
+  %0 = tt.load %arg0 : !tt.ptr<f32>
+  %1 = amdg.buffer_load %arg0 : !tt.ptr<f32>
+  %2 = amdg.buffer_load_to_local %arg0 : !tt.ptr<f32>
+  %3 = tt.atomic_rmw add, %arg0, %0 : !tt.ptr<f32>
+  %4 = amdg.buffer_atomic_rmw add, %arg0, %0 : !tt.ptr<f32>
+  tt.store %arg0, %1 : !tt.ptr<f32>
+}"""
+
+    _GCN_ALL_BUFFER = """\
+buffer_load_dwordx4 v[1:4], off, s[4:7], 0
+buffer_store_dwordx2 v[1:2], v3, s[4:5]
+"""
+
+    _GCN_PARTIAL = """\
+buffer_load_dwordx4 v[1:4], off, s[4:7], 0
+global_store_dwordx2 v[1:2], v3, s[4:5]
+"""
+
+    _GCN_NONE = """\
+global_load_dwordx4 v[1:4], off, s[4:7], 0
+global_store_dwordx2 v[1:2], v3, s[4:5]
+"""
+
+    _GCN_NO_MEMOPS = """\
+s_waitcnt vmcnt(0)
+v_add_u32 v1, v2, v3
+"""
+
+    _GCN_ALL_BUFFER_ATOMICS = """\
+buffer_atomic_add v1, off, s[4:7], v2
+buffer_atomic_cmpswap_x2 v[1:2], off, s[4:7], v[3:4]
+"""
+
+    _GCN_PARTIAL_ATOMIC = """\
+buffer_load_dwordx4 v[1:4], off, s[4:7], 0
+global_atomic_add v1, off, s[4:7], v2
+"""
+
+    _GCN_ONLY_GLOBAL_ATOMICS = """\
+global_atomic_add v1, off, s[4:7], v2
+global_atomic_cmpswap v1, off, s[4:7], v[2:3]
+flat_atomic_add v1, off, s[4:7], v2
+"""
+
+    def _entry(self, gcn: str):
+        return {
+            "payload": {
+                "metadata": {"backend_name": "hip"},
+                "file_content": {
+                    "kernel.ttgir": self._TTGIR,
+                    "kernel.amdgcn": gcn,
+                },
+                "file_path": {},
+                "source_mappings": {},
+            }
+        }
+
+    def _run_pass(self, gcn: str):
+        adapter = get_backend_registry().resolve(adapter_name="hip_triton")
+        return adapter.run_analysis_pass(
+            "amd_buffer_ops", self._entry(gcn), AnalyzerContext()
+        )
+
+    def test_all_buffer_enabled(self):
+        result = self._run_pass(self._GCN_ALL_BUFFER)
+        status = result["amd_buffer_ops"]
+        self.assertTrue(status["enabled"])
+        self.assertEqual(status["status"], "all_buffer")
+        self.assertEqual(status["buffer_load_count"], 1)
+        self.assertEqual(status["buffer_store_count"], 1)
+        self.assertEqual(status["global_load_count"], 0)
+        self.assertEqual(status["global_store_count"], 0)
+
+    def test_partial_not_enabled(self):
+        result = self._run_pass(self._GCN_PARTIAL)
+        status = result["amd_buffer_ops"]
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["status"], "partial")
+
+    def test_no_buffer_ops(self):
+        result = self._run_pass(self._GCN_NONE)
+        status = result["amd_buffer_ops"]
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["status"], "none")
+
+    def test_no_memops_unknown(self):
+        result = self._run_pass(self._GCN_NO_MEMOPS)
+        status = result["amd_buffer_ops"]
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["status"], "unknown")
+
+    def test_ttgir_prefix_and_atomics(self):
+        """Real amdg. prefix counted; load_to_local not double-counted."""
+        result = self._run_pass(self._GCN_ALL_BUFFER)
+        ttgir = result["io_counts"]["amd_ttgir_bufferops_count"]
+        self.assertEqual(ttgir["tt.load_count"], 1)
+        self.assertEqual(ttgir["tt.store_count"], 1)
+        self.assertEqual(ttgir["tt.atomic_rmw_count"], 1)
+        self.assertEqual(ttgir["tt.atomic_cas_count"], 0)
+        self.assertEqual(ttgir["amdg.buffer_load_count"], 1)
+        self.assertEqual(ttgir["amdg.buffer_load_to_local_count"], 1)
+        self.assertEqual(ttgir["amdg.buffer_store_count"], 0)
+        self.assertEqual(ttgir["amdg.buffer_atomic_rmw_count"], 1)
+        self.assertEqual(ttgir["amdg.buffer_atomic_cas_count"], 0)
+
+    def test_legacy_amdgpu_prefix_counted(self):
+        """Historical amdgpu. spelling still matches."""
+        from tritonparse.parse.ir_analysis import process_amd_ttgir_bufferops
+
+        counts = process_amd_ttgir_bufferops(
+            "k.ttgir",
+            {"k.ttgir": "%x = amdgpu.buffer_load %p : !tt.ptr<f32>"},
+            {},
+        )
+        self.assertEqual(counts["amdg.buffer_load_count"], 1)
+
+    def test_all_buffer_atomics_enabled(self):
+        result = self._run_pass(self._GCN_ALL_BUFFER_ATOMICS)
+        status = result["amd_buffer_ops"]
+        self.assertTrue(status["enabled"])
+        self.assertEqual(status["status"], "all_buffer")
+        self.assertEqual(status["buffer_atomic_count"], 2)
+
+    def test_partial_with_global_atomics(self):
+        result = self._run_pass(self._GCN_PARTIAL_ATOMIC)
+        status = result["amd_buffer_ops"]
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["status"], "partial")
+        self.assertEqual(status["global_atomic_count"], 1)
+
+    def test_only_global_atomics(self):
+        result = self._run_pass(self._GCN_ONLY_GLOBAL_ATOMICS)
+        status = result["amd_buffer_ops"]
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["status"], "none")
+        self.assertEqual(status["global_atomic_count"], 2)
+        self.assertEqual(status["flat_atomic_count"], 1)
+
+    def test_status_keeps_io_counts(self):
+        """The new field is additive: existing io_counts are unchanged."""
+        result = self._run_pass(self._GCN_ALL_BUFFER)
+        self.assertIn("io_counts", result)
+        self.assertIn("amd_buffer_ops", result)
+        self.assertEqual(
+            result["io_counts"]["amd_gcn_bufferops_count"]["buffer_load_count"], 1
+        )
+
+    def test_legacy_path_emits_status(self):
+        """Legacy fallback (unknown backend) emits amd_buffer_ops too."""
+        old = os.environ.pop("TRITONPARSE_ANALYSIS", None)
+        try:
+            entry = self._entry(self._GCN_ALL_BUFFER)
+            entry["payload"]["metadata"] = {"backend_name": "unknown"}
+            result = _generate_ir_analysis(entry, AnalyzerContext())
+        finally:
+            if old is not None:
+                os.environ["TRITONPARSE_ANALYSIS"] = old
+        self.assertIn("amd_buffer_ops", result)
+        self.assertTrue(result["amd_buffer_ops"]["enabled"])
+
+
 if __name__ == "__main__":
     unittest.main()

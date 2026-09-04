@@ -18,11 +18,12 @@
     },
     "ir_analysis": {
       "type": "object",
-      "description": "Analysis results keyed by analysis type. Currently supports blockpingpong, io_counts, and loop_schedules.",
+      "description": "Analysis results keyed by analysis type. Currently supports blockpingpong, io_counts, amd_buffer_ops, and loop_schedules.",
       "additionalProperties": true,
       "properties": {
         "blockpingpong": { "$ref": "#/definitions/BlockPingpongResult" },
         "io_counts": { "$ref": "#/definitions/IOCounts" },
+        "amd_buffer_ops": { "$ref": "#/definitions/AmdBufferOpsStatus" },
         "loop_schedules": {
           "type": "array",
           "description": "Loop schedule analysis showing pipelined operation mapping to Python source lines.",
@@ -90,6 +91,54 @@
       "properties": {
         "amd_ttgir_bufferops_count": { "$ref": "#/definitions/BufferOpsCounts" },
         "amd_gcn_bufferops_count": { "$ref": "#/definitions/BufferOpsCounts" }
+      }
+    },
+    "AmdBufferOpsStatus": {
+      "type": "object",
+      "description": "Derived AMD buffer-ops enablement status. Grounded in AMDGCN: enabled is true only when every global memory op is a buffer op.",
+      "required": ["enabled", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "True only when all global memory ops in AMDGCN use buffer_load/buffer_store."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["all_buffer", "partial", "none", "unknown"],
+          "description": "Conversion outcome: all_buffer (fully converted), partial (mixed), none (no buffer ops), unknown (no global memory ops)."
+        },
+        "buffer_load_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "buffer_store_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "buffer_atomic_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "global_load_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "global_atomic_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "flat_atomic_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "global_store_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        }
       }
     },
     "LoopSchedule": {

@@ -611,6 +611,39 @@ class ValidateRecordTest(unittest.TestCase):
         is_valid, errors = validate_record(record)
         self.assertTrue(is_valid, f"Unexpected errors: {errors}")
 
+    def test_ir_analysis_amd_buffer_ops_status(self):
+        """Derived AMD buffer-ops enablement status."""
+        record = {
+            "event_type": "ir_analysis",
+            "hash": "abc123",
+            "ir_analysis": {
+                "amd_buffer_ops": {
+                    "enabled": True,
+                    "status": "all_buffer",
+                    "buffer_load_count": 8,
+                    "buffer_store_count": 2,
+                    "buffer_atomic_count": 1,
+                    "global_load_count": 0,
+                    "global_store_count": 0,
+                    "global_atomic_count": 0,
+                    "flat_atomic_count": 0,
+                    "reason": "All 11 global memory op(s) in AMDGCN use buffer ops.",
+                }
+            },
+        }
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
+    def test_ir_analysis_amd_buffer_ops_status_bad_enum(self):
+        """Invalid status enum values are rejected."""
+        record = {
+            "event_type": "ir_analysis",
+            "hash": "abc123",
+            "ir_analysis": {"amd_buffer_ops": {"enabled": True, "status": "sometimes"}},
+        }
+        is_valid, _ = validate_record(record)
+        self.assertFalse(is_valid)
+
     def test_ir_analysis_unknown_analysis_type_allowed(self):
         """Unknown analysis types pass (additionalProperties true on ir_analysis)."""
         record = {

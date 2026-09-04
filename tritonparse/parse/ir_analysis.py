@@ -519,7 +519,7 @@ def _get_dtype_bits(dtype_str: str) -> int | None:
 # Achieved GB/s needs per-launch durations (absent from the trace) and stays a
 # profiler/NCU concern.
 
-# I/O ops counted in TTIR. amdgpu.buffer_* / global_* are TTGIR/AMDGCN-stage ops
+# I/O ops counted in TTIR. amdg.buffer_* / global_* are TTGIR/AMDGCN-stage ops
 # (covered by the amd_buffer_ops analyzer) and never appear in TTIR, so counting
 # only tt.load/tt.store here is both correct and avoids double counting.
 _ROOFLINE_IO_KEYS = ("tt.load", "tt.store")
@@ -853,20 +853,63 @@ def find_procedures_with_patterns(
     return results
 
 
-def process_amd_bufferop(ir_content: str, io_keys: list[str]) -> dict[str, int]:
-    def make_key(prefix: str) -> str:
-        return f"{prefix}_count"
+def process_amd_bufferop(
+    ir_content: str, io_keys: list[tuple[str, str]]
+) -> dict[str, int]:
+    """Count IR lines matching each (count_key, regex pattern) pair.
 
-    io_keys = [(make_key(prefix), prefix) for prefix in io_keys]
-    output: dict[str, int] = {}
-    for dict_key, _ in io_keys:
-        output[dict_key] = 0
+    Patterns are matched with ``re.search`` per line so word boundaries and
+    alternations can be expressed (e.g. the ``amdg.``/``amdgpu.`` dialect
+    prefix, or keeping ``buffer_load_to_local`` out of ``buffer_load``).
+    """
+    output: dict[str, int] = {key: 0 for key, _ in io_keys}
     if ir_content:
         for line in ir_content.split("\n"):
-            for dict_key, code_key in io_keys:
-                if code_key in line:
-                    output[dict_key] += 1
+            for key, pattern in io_keys:
+                if re.search(pattern, line):
+                    output[key] += 1
     return output
+
+
+# TTGIR op patterns. The AMDGPU dialect prints with the ``amdg.`` prefix
+# (``amdgpu`` is only the C++ namespace); both spellings are matched so
+# historical traces keep working. ``buffer_load`` excludes
+# ``buffer_load_to_local`` via a word boundary (``_`` is a word character,
+# so ``\\b`` never matches between ``load`` and ``_to_local``).
+_TTGIR_BUFFEROP_PATTERNS: list[tuple[str, str]] = [
+    ("tt.load_count", r"\btt\.load\b"),
+    ("tt.store_count", r"\btt\.store\b"),
+    ("tt.atomic_rmw_count", r"\btt\.atomic_rmw\b"),
+    ("tt.atomic_cas_count", r"\btt\.atomic_cas\b"),
+    ("amdg.buffer_load_count", r"\bamdg(?:pu)?\.buffer_load\b"),
+    (
+        "amdg.buffer_load_to_local_count",
+        r"\bamdg(?:pu)?\.buffer_load_to_local\b",
+    ),
+    ("amdg.buffer_store_count", r"\bamdg(?:pu)?\.buffer_store\b"),
+    (
+        "amdg.buffer_atomic_rmw_count",
+        r"\bamdg(?:pu)?\.buffer_atomic_rmw\b",
+    ),
+    (
+        "amdg.buffer_atomic_cas_count",
+        r"\bamdg(?:pu)?\.buffer_atomic_cas\b",
+    ),
+]
+
+# AMDGCN instruction patterns. Converted atomics disassemble as
+# ``buffer_atomic_*``; unconverted ones as ``global_atomic_*`` (global
+# address space). ``flat_atomic_*`` is not expected from Triton's lowering
+# but is counted separately so it can never silently pass as converted.
+_GCN_BUFFEROP_PATTERNS: list[tuple[str, str]] = [
+    ("global_load_count", "global_load"),
+    ("global_store_count", "global_store"),
+    ("buffer_load_count", "buffer_load"),
+    ("buffer_store_count", "buffer_store"),
+    ("buffer_atomic_count", "buffer_atomic"),
+    ("global_atomic_count", "global_atomic"),
+    ("flat_atomic_count", "flat_atomic"),
+]
 
 
 def process_amd_ttgir_bufferops(
@@ -875,9 +918,7 @@ def process_amd_ttgir_bufferops(
     file_path: dict[str, str],
 ) -> dict[str, int]:
     ir_content = load_ir_contents(key, file_content, file_path)
-    # TODO: Add atomics
-    io_keys = ["tt.load", "tt.store", "amdgpu.buffer_load", "amdgpu.buffer_store"]
-    return process_amd_bufferop(ir_content, io_keys)
+    return process_amd_bufferop(ir_content, _TTGIR_BUFFEROP_PATTERNS)
 
 
 def process_amd_gcn_bufferops(
@@ -886,9 +927,7 @@ def process_amd_gcn_bufferops(
     file_path: dict[str, str],
 ) -> dict[str, int]:
     ir_content = load_ir_contents(key, file_content, file_path)
-    # TODO: Add atomics
-    io_keys = ["global_load", "global_store", "buffer_load", "buffer_store"]
-    return process_amd_bufferop(ir_content, io_keys)
+    return process_amd_bufferop(ir_content, _GCN_BUFFEROP_PATTERNS)
 
 
 def find_loop_bounds(ir_content: str) -> list[tuple[int, int]]:
@@ -1236,6 +1275,89 @@ def _analyze_buffer_ops(
     return io_counts
 
 
+# Status values for the derived amd_buffer_ops field. AMDGCN is authoritative:
+# buffer ops are fully in effect only when no global_load/global_store remain
+# (the documented "check the GCN" verification).
+_BUFFER_OPS_ALL_BUFFER = "all_buffer"
+_BUFFER_OPS_PARTIAL = "partial"
+_BUFFER_OPS_NONE = "none"
+_BUFFER_OPS_UNKNOWN = "unknown"
+
+
+def _derive_amd_buffer_ops_status(
+    gcn_counts: dict[str, int],
+) -> dict[str, Any]:
+    """Derive whether AMD buffer ops are enabled from AMDGCN op counts.
+
+    Args:
+        gcn_counts: Count dict from ``process_amd_gcn_bufferops`` with
+            load/store counts plus ``buffer_atomic_count``,
+            ``global_atomic_count`` and ``flat_atomic_count`` keys.
+
+    Returns:
+        Status dict with ``enabled`` (True only when every global memory
+        op in AMDGCN is a buffer op, atomics included), ``status`` (one of
+        ``all_buffer``, ``partial``, ``none``, ``unknown``), the per-op
+        counts, and a human-readable ``reason``.
+    """
+    buffer_load = gcn_counts.get("buffer_load_count", 0)
+    buffer_store = gcn_counts.get("buffer_store_count", 0)
+    buffer_atomic = gcn_counts.get("buffer_atomic_count", 0)
+    global_load = gcn_counts.get("global_load_count", 0)
+    global_store = gcn_counts.get("global_store_count", 0)
+    global_atomic = gcn_counts.get("global_atomic_count", 0)
+    flat_atomic = gcn_counts.get("flat_atomic_count", 0)
+
+    buffer_total = buffer_load + buffer_store + buffer_atomic
+    non_buffer_atomic = global_atomic + flat_atomic
+    global_total = global_load + global_store + non_buffer_atomic
+
+    status_payload: dict[str, Any] = {
+        "enabled": False,
+        "status": _BUFFER_OPS_UNKNOWN,
+        "buffer_load_count": buffer_load,
+        "buffer_store_count": buffer_store,
+        "buffer_atomic_count": buffer_atomic,
+        "global_load_count": global_load,
+        "global_store_count": global_store,
+        "global_atomic_count": global_atomic,
+        "flat_atomic_count": flat_atomic,
+        "reason": "",
+    }
+
+    atomic_note = ""
+    if buffer_atomic or non_buffer_atomic:
+        atomic_note = (
+            f" Includes {buffer_atomic} buffer atomic(s) and "
+            f"{non_buffer_atomic} non-buffer atomic(s)."
+        )
+
+    if buffer_total + global_total == 0:
+        status_payload["reason"] = (
+            "No global memory ops found in AMDGCN; buffer-ops enablement is unknown."
+        )
+    elif global_total == 0:
+        status_payload["enabled"] = True
+        status_payload["status"] = _BUFFER_OPS_ALL_BUFFER
+        status_payload["reason"] = (
+            f"All {buffer_total} global memory op(s) in AMDGCN use buffer ops."
+            f"{atomic_note}"
+        )
+    elif buffer_total == 0:
+        status_payload["status"] = _BUFFER_OPS_NONE
+        status_payload["reason"] = (
+            f"No buffer ops in AMDGCN; {global_total} non-buffer global "
+            f"memory op(s) remain.{atomic_note}"
+        )
+    else:
+        status_payload["status"] = _BUFFER_OPS_PARTIAL
+        status_payload["reason"] = (
+            f"Partial conversion: {buffer_total} buffer op(s) but "
+            f"{global_total} non-buffer global memory op(s) remain.{atomic_note}"
+        )
+    return status_payload
+
+
 def _analyze_loop_schedules(
     ttir_key: str,
     ttgir_key: str,
@@ -1383,6 +1505,11 @@ def _generate_ir_analysis_legacy(
         io_counts = _analyze_buffer_ops(ttgir_key, amdgcn_key, file_content, file_path)
         if io_counts:
             ir_analysis["io_counts"] = io_counts
+            gcn_counts = io_counts.get("amd_gcn_bufferops_count")
+            if gcn_counts is not None:
+                ir_analysis["amd_buffer_ops"] = _derive_amd_buffer_ops_status(
+                    gcn_counts
+                )
     if (
         ttir_key
         and ttgir_key
@@ -1572,7 +1699,11 @@ def _analyze_amd_buffer_ops(
     io_counts = _analyze_buffer_ops(ttgir_key, amdgcn_key, file_content, file_path)
 
     if io_counts:
-        return {"io_counts": io_counts}
+        result: dict[str, Any] = {"io_counts": io_counts}
+        gcn_counts = io_counts.get("amd_gcn_bufferops_count")
+        if gcn_counts is not None:
+            result["amd_buffer_ops"] = _derive_amd_buffer_ops_status(gcn_counts)
+        return result
     return None
 
 

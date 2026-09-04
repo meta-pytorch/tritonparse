@@ -228,9 +228,24 @@ export interface DisplayAttribute {
     compute_from?: string[];
 }
 
+export interface AmdBufferOpsStatus {
+    enabled: boolean;
+    status: 'all_buffer' | 'partial' | 'none' | 'unknown';
+    buffer_load_count?: number;
+    buffer_store_count?: number;
+    buffer_atomic_count?: number;
+    global_load_count?: number;
+    global_store_count?: number;
+    global_atomic_count?: number;
+    flat_atomic_count?: number;
+    reason?: string;
+}
+
 export interface IRAnalysisData {
     // Mapping from IR stage -> <IO type -> count>
     io_counts?: Record<string, Record<string, number>>;
+    // Derived AMD buffer-ops enablement status (grounded in AMDGCN counts)
+    amd_buffer_ops?: AmdBufferOpsStatus;
     loop_schedules?: [Record<string, [string]>];
     // FileCheck-based procedure detection results
     procedure_checks?: Record<string, ProcedureCheckResult>;
