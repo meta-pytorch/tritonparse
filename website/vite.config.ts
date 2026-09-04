@@ -15,7 +15,7 @@ function safeExecTrim(command: string): string | null {
 }
 
 const packageJson = JSON.parse(
-  readFileSync(resolve(__dirname, 'package.json'), 'utf-8')
+  readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf-8')
 )
 
 // Build-time metadata

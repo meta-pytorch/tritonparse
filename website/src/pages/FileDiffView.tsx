@@ -233,13 +233,12 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, leftLoadedFromLocal, leftKernelsFromLocal, leftLoadedUrlLocal, leftKernelsFromUrl]);
 
   // Resolve left/right kernels early for default panel computation
-  const leftArrayResolved = useMemo(() => (
+  const leftArrayResolved =
     (sess.left?.kernels?.length || 0) > 0
       ? sess.left.kernels
       : (leftLoadedFromLocal
         ? leftKernelsFromLocal
-        : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft))
-  ), [sess.left?.kernels, leftLoadedFromLocal, leftKernelsFromLocal, leftLoadedUrlLocal, leftKernelsFromUrl, kernelsLeft]);
+        : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft));
   const leftKernel = leftArrayResolved[leftIdx];
   const rightKernel = kernelsRight[rightIdx];
 
