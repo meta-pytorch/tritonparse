@@ -77,6 +77,15 @@ def _add_parse_args(parser: argparse.ArgumentParser) -> None:
         help="Analyze all ranks (includes files without rank)",
         action="store_true",
     )
+    parser.add_argument(
+        "--kernel-allowlist",
+        type=str,
+        help=(
+            "Parse only kernels whose names match one of these comma-separated "
+            "fnmatch patterns. Complete kernel and autotune event groups are kept; "
+            "this option does not control trace capture."
+        ),
+    )
     parser.add_argument("-v", "--verbose", help="Verbose logging", action="store_true")
     parser.add_argument(
         "--torch-trace-dir",
@@ -220,6 +229,7 @@ def unified_parse(
     torch_trace_dir: Optional[str] = None,
     procedure_checks_file: Optional[str] = None,
     no_pre_init_attribution: bool = False,
+    kernel_allowlist: Optional[str] = None,
     **kwargs,
 ):
     """
@@ -241,6 +251,9 @@ def unified_parse(
             default, no-rank trace files whose PID matches a ranked file
             are merged into that rank's output so kernels compiled before
             torch.distributed init are visible under their owning rank.
+        kernel_allowlist: Comma-separated fnmatch patterns for kernel names.
+            This filters existing trace logs and does not read the trace-time
+            TRITONPARSE_KERNEL_ALLOWLIST environment variable.
     """
     # Log usage for API invocations
     if not skip_logger and is_fbcode():
@@ -275,6 +288,7 @@ def unified_parse(
         torch_trace_dir=torch_trace_dir,
         procedure_checks=procedure_checks,
         no_pre_init_attribution=no_pre_init_attribution,
+        kernel_allowlist=kernel_allowlist,
         **kwargs,
     )
     return output
