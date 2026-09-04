@@ -17,9 +17,6 @@ import tritonparse.parse.utils
 import tritonparse.structured_logging
 
 log_path = "./logs"
-tritonparse.structured_logging.init(log_path, enable_trace_launch=True)
-
-os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "0"
 
 
 @triton.jit
@@ -74,6 +71,8 @@ def test_tensor_add():
 
 
 if __name__ == "__main__":
+    tritonparse.structured_logging.init(log_path, enable_trace_launch=True)
+    os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "0"
     test_tensor_add()
     # Use improved unified_parse with explicit output directory
     tritonparse.parse.utils.unified_parse(
