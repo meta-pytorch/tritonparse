@@ -76,6 +76,11 @@ class InductorHookConfigTest(unittest.TestCase):
                 "triton_trace_folder",
             )
         }
+        sl.TRITON_TRACE_LAUNCH = False
+        sl.TRITON_TRACE_LAUNCH_WITHIN_PROFILING = False
+        sl.TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK = False
+        sl.triton_trace_folder = None
+        sl._trace_launch_enabled = False
         self.trace_dir = tempfile.mkdtemp(prefix="tritonparse_inductor_hook_")
 
     def tearDown(self):
