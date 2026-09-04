@@ -19,7 +19,8 @@ import WelcomeScreen from "./components/WelcomeScreen";
 import ExternalLink from "./components/ExternalLink";
 import { mapLanguageToHighlighter } from "./utils/languageUtils";
 import { useFileDiffSession } from "./context/FileDiffSession";
-import { GitHubIcon, BookOpenIcon, ShareIcon } from "./components/icons";
+import { GitHubIcon, BookOpenIcon } from "./components/icons";
+import ShareButton from "./components/ShareButton";
 
 /**
  * Helper function to find a kernel by its hash
@@ -123,6 +124,8 @@ function App() {
         setActiveTab("comparison");
       } else if (view === "file_diff") {
         setActiveTab("file_diff");
+      } else if (view === "ir_analysis") {
+        setActiveTab("ir_analysis");
       }
       setDataLoaded(true);
       setShowWelcome(false);
@@ -134,6 +137,8 @@ function App() {
         newUrl.searchParams.set("view", "ir_code_comparison");
       } else if (view === "file_diff") {
         newUrl.searchParams.set("view", "file_diff");
+      } else if (view === "ir_analysis") {
+        newUrl.searchParams.set("view", "ir_analysis");
       }
       if (kernelHash) {
         const foundIndex = findKernelByHash(kernelHash, processedKernels);
@@ -191,6 +196,8 @@ function App() {
             setActiveTab("comparison");
           } else if (view === "file_diff") {
             setActiveTab("file_diff");
+          } else if (view === "ir_analysis") {
+            setActiveTab("ir_analysis");
           }
           setDataLoaded(true);
           setShowWelcome(false);
@@ -200,6 +207,7 @@ function App() {
           newUrl.searchParams.set("json_url", initialJsonUrl);
           if (view === "ir_code_comparison") newUrl.searchParams.set("view", "ir_code_comparison");
           else if (view === "file_diff") newUrl.searchParams.set("view", "file_diff");
+          else if (view === "ir_analysis") newUrl.searchParams.set("view", "ir_analysis");
           if (kernelHash) {
             const fi = findKernelByHash(kernelHash, processedKernels);
             if (fi >= 0) newUrl.searchParams.set("kernel_hash", kernelHash);
@@ -266,6 +274,8 @@ function App() {
           setActiveTab("comparison");
         } else if (view === "file_diff") {
           setActiveTab("file_diff");
+        } else if (view === "ir_analysis") {
+          setActiveTab("ir_analysis");
         }
 
         setDataLoaded(true);
@@ -347,6 +357,31 @@ function App() {
       window.history.replaceState({}, "", newUrl.toString());
     }
   };
+
+  /**
+   * Builds the shareable URL for the current single-trace view at click time.
+   */
+  const buildSingleTraceShareUrl = useCallback(() => {
+    const shareableUrl = new URL(window.location.href);
+
+    // Add or remove view parameter
+    if (activeTab === "comparison") {
+      shareableUrl.searchParams.set("view", "ir_code_comparison");
+    } else if (activeTab === "ir_analysis") {
+      shareableUrl.searchParams.set("view", "ir_analysis");
+    } else {
+      shareableUrl.searchParams.delete("view");
+    }
+
+    // Add or remove kernel_hash parameter
+    if (selectedKernel >= 0 && kernels[selectedKernel]?.metadata?.hash) {
+      shareableUrl.searchParams.set("kernel_hash", kernels[selectedKernel].metadata.hash);
+    } else {
+      shareableUrl.searchParams.delete("kernel_hash");
+    }
+
+    return shareableUrl.toString();
+  }, [activeTab, selectedKernel, kernels]);
 
   // Register app controls for FileDiffSession navigation
   useEffect(() => {
@@ -725,42 +760,16 @@ function App() {
         {/* Show error message if data loading failed */}
         {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-6">{error}</div>}
 
-        {/* Show loaded URL if available */}
-        {loadedUrl && dataLoaded && (
+        {/* Show loaded URL if available (File Diff owns its own Share button) */}
+        {loadedUrl && dataLoaded && activeTab !== "file_diff" && (
           <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded mb-6 flex items-center justify-between">
             <div>
               <span className="font-medium">Loaded from: </span>
               <span className="break-all">{loadedUrl}</span>
             </div>
-            <button
-              onClick={() => {
-                // Create a shareable URL with the current json_url
-                const shareableUrl = new URL(window.location.href);
-
-                // Add or remove view parameter
-                if (activeTab === "comparison") {
-                  shareableUrl.searchParams.set("view", "ir_code_comparison");
-                } else {
-                  shareableUrl.searchParams.delete("view");
-                }
-
-                // Add or remove kernel_hash parameter
-                if (selectedKernel >= 0 && kernels[selectedKernel]?.metadata?.hash) {
-                  shareableUrl.searchParams.set("kernel_hash", kernels[selectedKernel].metadata.hash);
-                } else {
-                  shareableUrl.searchParams.delete("kernel_hash");
-                }
-
-                navigator.clipboard
-                  .writeText(shareableUrl.toString())
-                  .then(() => alert("Shareable link copied to clipboard!"))
-                  .catch((err) => console.error("Failed to copy link:", err));
-              }}
-              className="ml-4 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm flex items-center"
-            >
-              <ShareIcon className="h-4 w-4 mr-1" />
-              Share
-            </button>
+            <span className="ml-4">
+              <ShareButton getShareUrl={buildSingleTraceShareUrl} />
+            </span>
           </div>
         )}
 

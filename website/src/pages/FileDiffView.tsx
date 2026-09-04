@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import DiffComparisonView from "../components/DiffComparisonView";
+import ShareButton from "../components/ShareButton";
 import { useFileDiffSession } from "../context/FileDiffSession";
 import { ProcessedKernel, loadLogData, loadLogDataFromFile, processKernelData, getIRType } from "../utils/dataLoader";
 import { normalizeDataUrl } from "../utils/urlUtils";
@@ -232,25 +233,26 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, leftLoadedFromLocal, leftKernelsFromLocal, leftLoadedUrlLocal, leftKernelsFromUrl]);
 
   // Resolve left/right kernels early for default panel computation
-  const leftArrayResolved = (sess.left?.kernels?.length || 0) > 0
-    ? sess.left.kernels
-    : (leftLoadedFromLocal
-      ? leftKernelsFromLocal
-      : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft));
+  const leftArrayResolved = useMemo(() => (
+    (sess.left?.kernels?.length || 0) > 0
+      ? sess.left.kernels
+      : (leftLoadedFromLocal
+        ? leftKernelsFromLocal
+        : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft))
+  ), [sess.left?.kernels, leftLoadedFromLocal, leftKernelsFromLocal, leftLoadedUrlLocal, leftKernelsFromUrl, kernelsLeft]);
   const leftKernel = leftArrayResolved[leftIdx];
   const rightKernel = kernelsRight[rightIdx];
 
   const effectiveIrType = irType || unionIrTypes[0];
 
-  // Update URL on state changes (File Diff owns its params)
-  const syncUrl = useCallback(() => {
+  // Build the shareable File Diff URL from current state (also used by syncUrl,
+  // so the copied link is never stale regardless of the debounced history sync)
+  const buildShareUrl = useCallback(() => {
     const params = new URLSearchParams(window.location.search);
     params.set(PARAM_VIEW, "file_diff");
-    // left always present
-    const leftArray = leftLoadedFromLocal
-      ? leftKernelsFromLocal
-      : (leftLoadedUrlLocal ? leftKernelsFromUrl : kernelsLeft);
-    if (leftArray[leftIdx]?.metadata?.hash) params.set(PARAM_KERNEL_HASH_A, String(leftArray[leftIdx].metadata!.hash));
+    // left always present; use the resolved array so kernel_hash_a matches the
+    // kernel actually being viewed (which prefers sess.left.kernels)
+    if (leftArrayResolved[leftIdx]?.metadata?.hash) params.set(PARAM_KERNEL_HASH_A, String(leftArrayResolved[leftIdx].metadata!.hash));
     else params.delete(PARAM_KERNEL_HASH_A);
     // right url/hash
     if (rightLoadedUrl) params.set(PARAM_JSON_B_URL, rightLoadedUrl);
@@ -273,8 +275,20 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     params.set(PARAM_ONLY_CHANGED, onlyChanged ? "1" : "0");
     const newUrl = new URL(window.location.href);
     newUrl.search = params.toString();
-    window.history.replaceState({}, "", newUrl.toString());
-  }, [kernelsLeft, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl, leftKernelsFromLocal, leftKernelsFromUrl]);
+    return newUrl.toString();
+  }, [leftArrayResolved, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl]);
+
+  // Update URL on state changes (File Diff owns its params)
+  const syncUrl = useCallback(() => {
+    window.history.replaceState({}, "", buildShareUrl());
+  }, [buildShareUrl]);
+
+  // Sharing requires both traces loaded from URLs: local files leave no
+  // restorable json_url/json_b_url in the link. Also require that neither side
+  // is still loading or errored, so we never copy a link that won't resolve.
+  const hasLeftShareUrl = !leftLoadedFromLocal && !loadingLeft && !errorLeft && !!(leftLoadedUrlLocal ?? leftLoadedUrl);
+  const hasRightShareUrl = !rightLoadedFromLocal && !loadingRight && !errorRight && !!rightLoadedUrl;
+  const canShareDiff = hasLeftShareUrl && hasRightShareUrl;
 
   // Debounce URL updates to reduce history churn
   useEffect(() => {
@@ -450,7 +464,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
 
   return (
     <div className="p-4">
-      <h1 className="text-xl font-semibold text-gray-800 mb-2">File Diff</h1>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-xl font-semibold text-gray-800">File Diff</h1>
+        <ShareButton
+          getShareUrl={buildShareUrl}
+          disabled={!canShareDiff}
+          disabledTitle="Load both traces from URLs to share (local files can't be shared via link)"
+        />
+      </div>
 
       <div className="bg-white rounded-lg p-3 mb-3 border border-gray-200">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
