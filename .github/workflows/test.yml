@@ -180,20 +180,18 @@ jobs:
                   # doesn't matter because the script is stdlib-only and
                   # PY_TAG is derived from that same interpreter, so the
                   # platform tag we filter on always matches the install
-                  # target. On any resolver failure, fall back to the
-                  # unpinned install (preserves the original behavior so
-                  # this leg never regresses).
+                  # target. On resolver failure, fail loudly instead of
+                  # silently testing a stale Triton (fail-loud policy).
                   PY_TAG=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
                   PIN=$(python .ci/triton_nightly_pin.py --pytag "$PY_TAG" --platform x86_64) || PIN=""
-                  if [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
-                      echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
-                      pip install "triton==$PIN" \
-                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
-                  else
-                      echo "Resolver did not produce a valid pin (got: '$PIN'); falling back to default"
-                      pip install -U --pre triton \
-                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
+                  if [[ ! "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
+                      echo "ERROR: Triton-nightly resolver produced no valid pin (got: '$PIN')."
+                      echo "Failing instead of testing a stale Triton: re-dispatch once the feed catches up."
+                      exit 1
                   fi
+                  echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
+                  pip install "triton==$PIN" \
+                      --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
                   python -c "import triton; print(f'Triton: {triton.__version__} from {triton.__file__}')"
 
             - name: Install project dependencies
@@ -404,18 +402,19 @@ jobs:
                   # Replace the pytorch-triton snapshot with the upstream
                   # Triton nightly (bundles the AMD backend), pinning to
                   # upstream HEAD via the same resolver as the CUDA job.
+                  # Fail-loud policy (same as CUDA job): never silently
+                  # test a stale Triton.
                   pip uninstall -y pytorch-triton triton 2>/dev/null || true
                   PY_TAG=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
                   PIN=$(python .ci/triton_nightly_pin.py --pytag "$PY_TAG" --platform x86_64) || PIN=""
-                  if [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
-                      echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
-                      pip install "triton==$PIN" \
-                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
-                  else
-                      echo "Resolver did not produce a valid pin (got: '$PIN'); falling back to default"
-                      pip install -U --pre triton \
-                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
+                  if [[ ! "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
+                      echo "ERROR: Triton-nightly resolver produced no valid pin (got: '$PIN')."
+                      echo "Failing instead of testing a stale Triton: re-dispatch once the feed catches up."
+                      exit 1
                   fi
+                  echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
+                  pip install "triton==$PIN" \
+                      --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
                   python -c "import triton; print(f'Triton: {triton.__version__} from {triton.__file__}')"
 
             - name: Install project dependencies
