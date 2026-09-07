@@ -269,164 +269,112 @@ jobs:
     # ===================================================================
     # GPU tests on AMD MI350 (gfx950) self-hosted runner, ROCm nightly.
     #
-    # Architecture: host-direct (NO `container:`). Unlike the NVIDIA
-    # jobs, we do not run inside a container image: ROCm needs
-    # /dev/kfd + /dev/dri device passthrough, and the runner host
-    # already ships a working ROCm stack + driver. This mirrors how
-    # pytorch/pytorch runs its own MI350 CI
-    # (rocm-mi350.yml -> linux.rocm.gpu.gfx950.1, docker-less test
-    # path via _rocm-test.yml).
+    # Architecture: prebuilt ROCm docker image + explicit `docker run`
+    # with GPU device passthrough. This copies tritonbench's
+    # `_linux-test-mi350.yml`, which runs on this exact same
+    # `amd-mi350-runner` pool. (An earlier revision of this job tried
+    # host-direct pip installs, but the runner host has no conda and
+    # wheel-based torch-ROCm setup is exactly what the tritonbench
+    # image already bakes in — see dispatch runs 34144336441 and
+    # 34145668510.)
+    #
+    # Image: `ghcr.io/meta-pytorch/tritonbench:rocm-latest`, built
+    # nightly from `rocm/pytorch:latest` + torch-ROCm + triton-main
+    # (see tritonbench `docker-rocm.yaml`). Verified 2026-09-07: the
+    # package is publicly pullable and its PYTORCH_ROCM_ARCH covers
+    # gfx950. The image's triton-main already contains the MI350 LLVM
+    # segfault fix (triton-lang/triton#10523). Pin to a dated
+    # `rocm-devYYYYMMDD` tag (same repo, pushed by docker-rocm.yaml)
+    # once this job is green — `rocm-latest` floats daily.
     #
     # Runner: `amd-mi350-runner` is the repo-visible ARC scale set
     # (ephemeral, 1 job per VM — same isolation semantics as the
     # g5.4xlarge NVIDIA runners). Fallback, if the scale set is ever
     # drained, is the shared PyTorch ROCm pool 1-GPU slice:
-    # `linux.rocm.gpu.meta-pytorch.mi350.1` (run-tests.sh only ever
-    # uses a single GPU). gfx942 (MI300X) slices are intentionally
-    # left out until this job is green.
+    # `linux.rocm.gpu.meta-pytorch.mi350.1`. gfx942 (MI300X) slices
+    # are intentionally left out until this job is green.
     #
     # Gating: `workflow_dispatch`-only while stabilizing. The GPU
     # self-hosted pool already queues for hours (see the 2.5h queue
     # on the 2026-09-04 main push); do NOT attach this to
     # pull_request until it is green several dispatches in a row.
-    #
-    # Known first-run unknown: PYTORCH_ROCM_TAG must match the
-    # runner's ROCm major version. `rocm7.1` is verified to exist as
-    # a nightly channel (see https://download.pytorch.org/whl/nightly/
-    # index, probed 2026-09-07). The Probe step below prints the
-    # host's actual ROCm version — if pip refuses the wheel set,
-    # adjust the tag to match and re-dispatch.
     # ===================================================================
     test-rocm-nightly:
         if: github.event_name == 'workflow_dispatch'
         runs-on: amd-mi350-runner
-        timeout-minutes: 90
+        timeout-minutes: 120
         env:
-            CONDA_ENV: tritonparse-rocm
-            PYTHON_VERSION: "3.14"
-            PYTORCH_ROCM_TAG: rocm7.1
-            # Same NVIDIA-published Triton nightly feed as the CUDA
-            # job: upstream Triton wheels bundle the AMD backend, so
-            # the pin + replace logic below is shared unchanged.
-            TRITON_NIGHTLY_INDEX_URL: "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/"
-            # HIP honors HIP_VISIBLE_DEVICES; keep CUDA_VISIBLE_DEVICES
-            # alongside it since run-tests.sh exports the latter and
-            # recent ROCm stacks respect both.
+            ROCM_IMAGE: ghcr.io/meta-pytorch/tritonbench:rocm-latest
+            TEST_TYPE: ${{ github.event.inputs.test-type || 'all' }}
+            COVERAGE: ${{ github.event.inputs.coverage || 'false' }}
+            # Single-GPU slice, same as run-tests.sh's
+            # CUDA_VISIBLE_DEVICES=0 on the NVIDIA jobs. HIP honors
+            # HIP_VISIBLE_DEVICES; keep both set.
             HIP_VISIBLE_DEVICES: "0"
             CUDA_VISIBLE_DEVICES: "0"
+            # Same inductor workarounds as tritonbench's test-gpu.sh:
+            # avoids "Could not find an active GPU backend" in
+            # subprocess workers and speeds up runs.
+            TORCHINDUCTOR_COMPILE_THREADS: "1"
+            TORCHINDUCTOR_MAX_AUTOTUNE: "0"
         steps:
             - uses: actions/checkout@v6
 
             - name: Probe ROCm host
               run: |
                   whoami
-                  python3 --version || true
-                  command -v conda || ls /opt/conda/bin/conda /opt/miniconda3/bin/conda "$HOME/miniconda3/bin/conda" 2>/dev/null || true
+                  docker --version
                   rocm-smi 2>/dev/null || true
-                  cat /opt/rocm/.info/version 2>/dev/null || true
                   rocminfo 2>/dev/null | grep -m4 -E "Marketing Name|gfx" || true
 
-            - name: Install Miniconda (if missing)
-              # The runner host has system Python but no conda (probed
-              # 2026-09-07). Install to $HOME (no sudo needed) and
-              # export CONDA_HOME for the setup step below. Same
-              # installer approach as .ci/setup.sh, user-local path.
+            - name: Pull ROCm test image
               run: |
-                  if command -v conda >/dev/null 2>&1 || [[ -x /opt/conda/bin/conda || -x /opt/miniconda3/bin/conda ]]; then
-                      echo "conda already present, skipping install"
-                      exit 0
+                  # Public package: anonymous pull works, but authenticate
+                  # to avoid rate limits (best-effort, non-fatal).
+                  echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
+                  docker pull "${ROCM_IMAGE}"
+                  # Record the exact digest in the log so any green run
+                  # is reproducible even though the tag floats.
+                  docker inspect --format='image digest: {{index .RepoDigests 0}}' "${ROCM_IMAGE}"
+
+            - name: Run tests in ROCm container
+              run: |
+                  # GPU passthrough flags copied from tritonbench's
+                  # _linux-test-mi350.yml (same runner pool). The
+                  # gha-gpu-isolation-settings env file exists on these
+                  # hosts; skip it gracefully if ever absent.
+                  GPU_FLAGS="--device /dev/kfd --device /dev/dri --security-opt seccomp=unconfined --group-add video"
+                  ENV_FILE=""
+                  if [[ -f /etc/podinfo/gha-gpu-isolation-settings ]]; then
+                      ENV_FILE="--env-file /etc/podinfo/gha-gpu-isolation-settings"
                   fi
-                  echo "Installing Miniconda to $HOME/miniconda3 ..."
-                  wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/Miniconda3-latest-Linux-x86_64.sh
-                  bash /tmp/Miniconda3-latest-Linux-x86_64.sh -b -u -p "$HOME/miniconda3"
-                  echo "CONDA_HOME=$HOME/miniconda3" >> "$GITHUB_ENV"
-                  echo "Installed: $("$HOME/miniconda3/bin/conda" --version)"
-
-            - name: Mark workspace as safe for git
-              # Same rationale as the NVIDIA jobs: setuptools-scm needs
-              # git introspection during 'pip install -e .'.
-              run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-            - name: Get daily cache timestamp
-              id: daily-cache
-              run: |
-                  DATE_STAMP=$(date +"%Y-%m-%d")
-                  echo "date=$DATE_STAMP" >> $GITHUB_OUTPUT
-                  echo "Using daily cache stamp: $DATE_STAMP"
-
-            - name: Cache pip dependencies
-              uses: actions/cache@v5
-              with:
-                  # Host-direct run (no container), so pip's cache is
-                  # under the runner user's real HOME — NOT
-                  # /github/home as in the container jobs.
-                  path: ~/.cache/pip
-                  key: ${{ runner.os }}-pip-${{ env.PYTORCH_ROCM_TAG }}-py${{ env.PYTHON_VERSION }}-${{ steps.daily-cache.outputs.date }}
-                  restore-keys: |
-                      ${{ runner.os }}-pip-${{ env.PYTORCH_ROCM_TAG }}-py${{ env.PYTHON_VERSION }}-
-
-            - name: Setup conda env + PyTorch ROCm nightly + Triton nightly
-              env:
-                  # Same as the CUDA job: lets the Triton-nightly
-                  # resolver below authenticate to the GitHub API.
-                  GITHUB_TOKEN: ${{ github.token }}
-              run: |
-                  # Locate conda: PATH first, then CONDA_HOME (set by the
-                  # Miniconda step when it had to install), then the
-                  # well-known prefixes. Fail fast with a clear message
-                  # (the Probe step above shows what the host has).
-                  CONDA_BIN="$(command -v conda 2>/dev/null || true)"
-                  for candidate in "${CONDA_HOME:-}/bin/conda" /opt/conda/bin/conda /opt/miniconda3/bin/conda "$HOME/miniconda3/bin/conda"; do
-                      if [[ -z "$CONDA_BIN" && -x "$candidate" ]]; then
-                          CONDA_BIN="$candidate"
-                      fi
-                  done
-                  if [[ -z "$CONDA_BIN" ]]; then
-                      echo "ERROR: conda not found (PATH, CONDA_HOME, /opt/conda, /opt/miniconda3, ~/miniconda3)."
-                      echo "See the 'Probe ROCm host' step output and either provision conda or extend this search."
-                      exit 1
-                  fi
-                  echo "Using conda: $CONDA_BIN"
-                  eval "$("$CONDA_BIN" shell.bash hook)"
-                  # NOTE: explicitly request `pip`: conda-forge's
-                  # `python` package does NOT pull pip in by default
-                  # (same caveat as .ci/setup.sh).
-                  conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" pip -y -c conda-forge
-                  conda activate "$CONDA_ENV"
-
-                  # PyTorch nightly for ROCm. These are wheel-based
-                  # installs (bundled ROCm user-space libs); only the
-                  # kernel driver comes from the host, so the tag must
-                  # match the host ROCm major version (see job header).
-                  pip install --pre torch torchvision torchaudio \
-                      --index-url "https://download.pytorch.org/whl/nightly/${PYTORCH_ROCM_TAG}"
-                  pip install packaging
-                  python -c "import torch; print(f'torch: {torch.__version__}'); print(f'cuda available (HIP backend): {torch.cuda.is_available()}')"
-
-                  # Replace the pytorch-triton snapshot with the upstream
-                  # Triton nightly (bundles the AMD backend), pinning to
-                  # upstream HEAD via the same resolver as the CUDA job.
-                  pip uninstall -y pytorch-triton triton 2>/dev/null || true
-                  PY_TAG=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
-                  PIN=$(python .ci/triton_nightly_pin.py --pytag "$PY_TAG" --platform x86_64) || PIN=""
-                  if [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
-                      echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
-                      pip install "triton==$PIN" \
-                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
-                  else
-                      echo "Resolver did not produce a valid pin (got: '$PIN'); falling back to default"
-                      pip install -U --pre triton \
-                          --extra-index-url "${TRITON_NIGHTLY_INDEX_URL}"
-                  fi
-                  python -c "import triton; print(f'Triton: {triton.__version__} from {triton.__file__}')"
-
-            - name: Install project dependencies
-              run: |
-                  bash .ci/install-project.sh
-
-            - name: Run tests
-              env:
-                  TEST_TYPE: ${{ github.event.inputs.test-type || 'all' }}
-                  COVERAGE: ${{ github.event.inputs.coverage || 'false' }}
-              run: |
-                  bash .ci/run-tests.sh
+                  docker run --rm \
+                      $GPU_FLAGS $ENV_FILE \
+                      --ipc=host --shm-size=8g \
+                      -e HIP_VISIBLE_DEVICES -e CUDA_VISIBLE_DEVICES \
+                      -e TORCHINDUCTOR_COMPILE_THREADS -e TORCHINDUCTOR_MAX_AUTOTUNE \
+                      -e TEST_TYPE -e COVERAGE \
+                      -v "$GITHUB_WORKSPACE:/tmp/workspace" \
+                      -w /tmp/workspace \
+                      "${ROCM_IMAGE}" bash -c '
+                          set -e
+                          source /workspace/setup_instance.sh
+                          python -c "import torch, triton; print(f\"torch: {torch.__version__}\"); print(f\"triton: {triton.__version__} from {triton.__file__}\"); print(f\"cuda available (HIP backend): {torch.cuda.is_available()}\")"
+                          # Container runs as root while the checkout is
+                          # owned by the host `runner` user: same
+                          # dubious-ownership story as the NVIDIA jobs,
+                          # fixed the same way (setuptools-scm needs git
+                          # introspection for `pip install -e .`).
+                          git config --global --add safe.directory /tmp/workspace
+                          pip install -e "/tmp/workspace/.[test]"
+                          if [[ "${COVERAGE}" == "true" ]]; then
+                              RUNNER="coverage run -m unittest"
+                          else
+                              RUNNER="python -m unittest"
+                          fi
+                          case "${TEST_TYPE}" in
+                              cpu) $RUNNER discover -s tests/cpu -t . -v ;;
+                              cuda|gpu) $RUNNER discover -s tests/gpu -t . -v ;;
+                              *) $RUNNER discover -s tests -t . -v ;;
+                          esac
+                      '
