@@ -321,9 +321,26 @@ jobs:
               run: |
                   whoami
                   python3 --version || true
-                  command -v conda || ls /opt/conda/bin/conda /opt/miniconda3/bin/conda 2>/dev/null || true
-                  rocm-smi --showid 2>/dev/null || rocm-smi 2>/dev/null || true
+                  command -v conda || ls /opt/conda/bin/conda /opt/miniconda3/bin/conda "$HOME/miniconda3/bin/conda" 2>/dev/null || true
+                  rocm-smi 2>/dev/null || true
+                  cat /opt/rocm/.info/version 2>/dev/null || true
                   rocminfo 2>/dev/null | grep -m4 -E "Marketing Name|gfx" || true
+
+            - name: Install Miniconda (if missing)
+              # The runner host has system Python but no conda (probed
+              # 2026-09-07). Install to $HOME (no sudo needed) and
+              # export CONDA_HOME for the setup step below. Same
+              # installer approach as .ci/setup.sh, user-local path.
+              run: |
+                  if command -v conda >/dev/null 2>&1 || [[ -x /opt/conda/bin/conda || -x /opt/miniconda3/bin/conda ]]; then
+                      echo "conda already present, skipping install"
+                      exit 0
+                  fi
+                  echo "Installing Miniconda to $HOME/miniconda3 ..."
+                  wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/Miniconda3-latest-Linux-x86_64.sh
+                  bash /tmp/Miniconda3-latest-Linux-x86_64.sh -b -u -p "$HOME/miniconda3"
+                  echo "CONDA_HOME=$HOME/miniconda3" >> "$GITHUB_ENV"
+                  echo "Installed: $("$HOME/miniconda3/bin/conda" --version)"
 
             - name: Mark workspace as safe for git
               # Same rationale as the NVIDIA jobs: setuptools-scm needs
@@ -354,23 +371,27 @@ jobs:
                   # resolver below authenticate to the GitHub API.
                   GITHUB_TOKEN: ${{ github.token }}
               run: |
-                  # Locate conda: PATH first, then the well-known
-                  # prefixes. Fail fast with a clear message (the
-                  # Probe step above shows what the host has).
+                  # Locate conda: PATH first, then CONDA_HOME (set by the
+                  # Miniconda step when it had to install), then the
+                  # well-known prefixes. Fail fast with a clear message
+                  # (the Probe step above shows what the host has).
                   CONDA_BIN="$(command -v conda 2>/dev/null || true)"
-                  for candidate in /opt/conda/bin/conda /opt/miniconda3/bin/conda; do
+                  for candidate in "${CONDA_HOME:-}/bin/conda" /opt/conda/bin/conda /opt/miniconda3/bin/conda "$HOME/miniconda3/bin/conda"; do
                       if [[ -z "$CONDA_BIN" && -x "$candidate" ]]; then
                           CONDA_BIN="$candidate"
                       fi
                   done
                   if [[ -z "$CONDA_BIN" ]]; then
-                      echo "ERROR: conda not found on PATH or in /opt/conda, /opt/miniconda3."
+                      echo "ERROR: conda not found (PATH, CONDA_HOME, /opt/conda, /opt/miniconda3, ~/miniconda3)."
                       echo "See the 'Probe ROCm host' step output and either provision conda or extend this search."
                       exit 1
                   fi
                   echo "Using conda: $CONDA_BIN"
                   eval "$("$CONDA_BIN" shell.bash hook)"
-                  conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" -y -c conda-forge
+                  # NOTE: explicitly request `pip`: conda-forge's
+                  # `python` package does NOT pull pip in by default
+                  # (same caveat as .ci/setup.sh).
+                  conda create -n "$CONDA_ENV" python="$PYTHON_VERSION" pip -y -c conda-forge
                   conda activate "$CONDA_ENV"
 
                   # PyTorch nightly for ROCm. These are wheel-based
