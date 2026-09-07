@@ -366,7 +366,15 @@ jobs:
                           # fixed the same way (setuptools-scm needs git
                           # introspection for `pip install -e .`).
                           git config --global --add safe.directory /tmp/workspace
-                          pip install -e "/tmp/workspace/.[test]"
+                          # Use `python -m pip` (NOT bare `pip`): the
+                          # setup script activates a uv venv whose bin
+                          # dir may not ship pip, in which case bare
+                          # `pip` silently resolves to /opt/venv and
+                          # dependencies land in the wrong interpreter
+                          # (seen 2026-09-07: every zstandard import
+                          # failed with 77 unittest errors).
+                          python -m pip --version >/dev/null 2>&1 || python -m ensurepip --upgrade
+                          python -m pip install -e "/tmp/workspace/.[test]"
                           if [[ "${COVERAGE}" == "true" ]]; then
                               RUNNER="coverage run -m unittest"
                           else
