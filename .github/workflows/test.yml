@@ -354,6 +354,7 @@ jobs:
                       -e HIP_VISIBLE_DEVICES -e CUDA_VISIBLE_DEVICES \
                       -e TORCHINDUCTOR_COMPILE_THREADS -e TORCHINDUCTOR_MAX_AUTOTUNE \
                       -e TEST_TYPE -e COVERAGE \
+                      -e GITHUB_TOKEN=${{ github.token }} \
                       -v "$GITHUB_WORKSPACE:/tmp/workspace" \
                       -w /tmp/workspace \
                       "${ROCM_IMAGE}" bash -c '
@@ -374,6 +375,28 @@ jobs:
                           # (seen 2026-09-07: every zstandard import
                           # failed with 77 unittest errors).
                           python -m pip --version >/dev/null 2>&1 || python -m ensurepip --upgrade
+                          # Replace the image's triton (3.8.0) with
+                          # upstream nightly HEAD via the shared
+                          # resolver — same pin logic as the CUDA job.
+                          # The image's triton predates the MI350 LLVM
+                          # segfault fix (triton-lang/triton#10523):
+                          # compiling any autotuned kernel on gfx950
+                          # segfaults (exit 139, seen 2026-09-07). The
+                          # image keeps providing the torch-ROCm stack;
+                          # only the compiler is swapped.
+                          python -m pip uninstall -y pytorch-triton triton 2>/dev/null || true
+                          PY_TAG=$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+                          PIN=$(python /tmp/workspace/.ci/triton_nightly_pin.py --pytag "$PY_TAG" --platform x86_64) || PIN=""
+                          if [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+git[0-9a-f]+$ ]]; then
+                              echo "Pinning Triton nightly to upstream HEAD: triton==$PIN"
+                              python -m pip install "triton==$PIN" \
+                                  --extra-index-url "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/"
+                          else
+                              echo "Resolver did not produce a valid pin (got: '$PIN'); falling back to default"
+                              python -m pip install -U --pre triton \
+                                  --extra-index-url "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/"
+                          fi
+                          python -c "import triton; print(f'Triton: {triton.__version__} from {triton.__file__}')"
                           python -m pip install -e "/tmp/workspace/.[test]"
                           if [[ "${COVERAGE}" == "true" ]]; then
                               RUNNER="coverage run -m unittest"
