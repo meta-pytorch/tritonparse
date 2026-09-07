@@ -285,20 +285,18 @@ jobs:
     # uses a single GPU). gfx942 (MI300X) slices are intentionally
     # left out until this job is green.
     #
-    # Gating: `workflow_dispatch`-only while stabilizing. The GPU
-    # self-hosted pool already queues for hours (see the 2.5h queue
-    # on the 2026-09-04 main push); do NOT attach this to
-    # pull_request until it is green several dispatches in a row.
+    # Gating: runs on pull_request / push like the NVIDIA jobs (green
+    # on dispatches 34145668510 and 34157688605). `workflow_dispatch`
+    # stays available for manual re-runs. Note the GPU self-hosted
+    # pool can queue for hours (see the 2.5h queue on the 2026-09-04
+    # main push).
     #
-    # Known first-run unknown: PYTORCH_ROCM_TAG must match the
-    # runner's ROCm major version. `rocm7.1` is verified to exist as
-    # a nightly channel (see https://download.pytorch.org/whl/nightly/
-    # index, probed 2026-09-07). The Probe step below prints the
-    # host's actual ROCm version — if pip refuses the wheel set,
-    # adjust the tag to match and re-dispatch.
+    # PYTORCH_ROCM_TAG must match the runner's ROCm major version.
+    # `rocm7.1` is verified working on the current hosts (dispatch
+    # 34145668510); the Probe step prints the host stack for
+    # re-validation if runners are reprovisioned.
     # ===================================================================
     test-rocm-nightly:
-        if: github.event_name == 'workflow_dispatch'
         runs-on: amd-mi350-runner
         timeout-minutes: 90
         env:
