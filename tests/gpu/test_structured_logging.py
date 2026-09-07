@@ -24,7 +24,7 @@ import triton.language as tl  # @manual=//triton:triton
 import tritonparse.parse.utils
 import tritonparse.structured_logging
 from parameterized import parameterized  # @manual
-from tests.test_utils import GPUTestBase
+from tests.test_utils import GPUTestBase, is_amd_gpu
 from triton.compiler import ASTSource, IRSource  # @manual=//triton:triton
 from triton.knobs import CompileTimes  # @manual=//triton:triton
 from tritonparse.shared_vars import TEST_KEEP_OUTPUT
@@ -306,15 +306,18 @@ class TestStructuredLogging(GPUTestBase):
             f"Expected 2 'launch' events, found {event_counts['launch']}",
         )
 
-        # Conditionally verify SASS content based on nvdisasm availability
-        if nvdisasm_available:
+        # Conditionally verify SASS content: SASS is NVIDIA-only (derived
+        # from cubins via nvdisasm). The tool binary ships inside the
+        # triton wheel on every backend, so its mere presence cannot gate
+        # this — also require a non-AMD GPU.
+        if nvdisasm_available and not is_amd_gpu():
             self.assertTrue(
                 event_counts["sass_found"],
                 "SASS content was not found in compilation events",
             )
             print("✓ Successfully verified SASS extraction functionality")
         else:
-            print("⚠️  SASS verification skipped: nvdisasm not available")
+            print("⚠️  SASS verification skipped: nvdisasm not available or AMD GPU")
 
         print(
             "✓ Verified correct event type counts: 1 unique compilation hash, 2 launch events"
@@ -366,14 +369,15 @@ class TestStructuredLogging(GPUTestBase):
                     break
 
             # Conditionally verify SASS content is preserved in parsed output
-            if nvdisasm_available:
+            # (NVIDIA-only; see above).
+            if nvdisasm_available and not is_amd_gpu():
                 self.assertTrue(
                     sass_found_in_parsed,
                     "SASS content was not preserved in parsed output",
                 )
             else:
                 print(
-                    "⚠️  SASS preservation verification skipped: nvdisasm not available"
+                    "⚠️  SASS preservation verification skipped: nvdisasm not available or AMD GPU"
                 )
 
         finally:

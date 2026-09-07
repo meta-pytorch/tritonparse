@@ -22,6 +22,35 @@ requires_gpu = unittest.skipUnless(torch.cuda.is_available(), "GPU not available
 skip_in_fbcode = unittest.skipIf(is_fbcode(), "Skip in internal FB environment")
 
 
+def is_amd_gpu() -> bool:
+    """True when an AMD GPU is present and usable (ROCm/HIP torch build).
+
+    Detected from the torch build flag plus cuda availability — no GPU
+    context is initialized, so this is safe to evaluate at import /
+    collection time (decorators below run then). Any lookup failure
+    means "not AMD". Mirrors tritonbench's is_hip() usage.
+    """
+    try:
+        return bool(torch.cuda.is_available() and torch.version.hip is not None)
+    except Exception:
+        return False
+
+
+def is_nvidia_gpu() -> bool:
+    """True when an NVIDIA GPU is present and usable (CUDA torch build)."""
+    try:
+        return bool(torch.cuda.is_available() and torch.version.hip is None)
+    except Exception:
+        return False
+
+
+# Backend-exclusive tests: the whole suite runs on every GPU job and
+# each arch skips what it cannot produce (same pattern as requires_gpu).
+skip_if_amd = unittest.skipIf(is_amd_gpu(), "NVIDIA-only test")
+
+skip_unless_amd = unittest.skipUnless(is_amd_gpu(), "AMD-only test")
+
+
 # =============================================================================
 # Helper functions
 # =============================================================================
