@@ -35,6 +35,38 @@ from tritonparse.tools.compression import open_compressed_file
 _AMD_BUFFER_OPS_STATUSES = frozenset({"all_buffer", "partial", "none", "unknown"})
 
 
+def _collect_statuses(parsed):
+    """Scan a parsed dir for AMDGCN compilations and amd_buffer_ops payloads.
+
+    Returns (compilations_with_amdgcn, statuses). Pure artifact scan —
+    unit-testable without a GPU.
+    """
+    statuses = []
+    compilations_with_amdgcn = 0
+    for fname in os.listdir(parsed):
+        if not (fname.endswith(".ndjson") or fname.endswith(".ndjson.gz")):
+            continue
+        with open_compressed_file(os.path.join(parsed, fname)) as f:
+            for line in f:
+                try:
+                    event = json.loads(line.strip())
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+                if event.get("event_type") == "compilation":
+                    # Compilation artifacts live in payload.file_content
+                    # keyed by filename (e.g. kernel.amdgcn) — same
+                    # convention as the .sass scan in
+                    # test_structured_logging.py.
+                    file_content = event.get("payload", {}).get("file_content", {})
+                    if any(key.endswith(".amdgcn") for key in file_content):
+                        compilations_with_amdgcn += 1
+                if event.get("event_type") == "ir_analysis":
+                    payload = event.get("ir_analysis", {})
+                    if "amd_buffer_ops" in payload:
+                        statuses.append(payload["amd_buffer_ops"])
+    return compilations_with_amdgcn, statuses
+
+
 @skip_unless_amd
 class TestAmdBufferOpsE2E(GPUTestBase):
     """AMD buffer-ops derivation on live gfx9xx hardware."""
@@ -54,27 +86,7 @@ class TestAmdBufferOpsE2E(GPUTestBase):
         torch.cuda.synchronize()
 
         tritonparse.parse.utils.unified_parse(source=logs, out=parsed, overwrite=True)
-
-        statuses = []
-        compilations_with_amdgcn = 0
-        for fname in os.listdir(parsed):
-            if not (fname.endswith(".ndjson") or fname.endswith(".ndjson.gz")):
-                continue
-            with open_compressed_file(os.path.join(parsed, fname)) as f:
-                for line in f:
-                    try:
-                        event = json.loads(line.strip())
-                    except (json.JSONDecodeError, AttributeError):
-                        continue
-                    if event.get("event_type") == "compilation":
-                        stages = event.get("payload", {}).get("stages", {})
-                        if "amdgcn" in stages:
-                            compilations_with_amdgcn += 1
-                    if event.get("event_type") == "ir_analysis":
-                        payload = event.get("ir_analysis", {})
-                        if "amd_buffer_ops" in payload:
-                            statuses.append(payload["amd_buffer_ops"])
-        return compilations_with_amdgcn, statuses
+        return _collect_statuses(parsed)
 
     def test_amd_buffer_ops_present(self):
         """Elementwise add on AMD GPU yields a well-formed status payload."""
