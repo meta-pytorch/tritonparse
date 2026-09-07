@@ -835,6 +835,31 @@ flat_atomic_add v1, off, s[4:7], v2
         self.assertIn("amd_buffer_ops", result)
         self.assertTrue(result["amd_buffer_ops"]["enabled"])
 
+    _GCN_REALISTIC_BLOCK = """\
+s_waitcnt vmcnt(0) lgkmcnt(0)
+s_buffer_load_dwordx4 s[0:3], s[4:7], 0
+buffer_load_dword v1, off, s[4:7], 0
+buffer_load_dwordx2 v[2:3], off, s[4:7], 0
+buffer_store_dwordx4 v[1:4], off, s[4:7], 0
+global_load_dwordx4 v[5:8], off, s[8:11], 0
+; spill: buffer_load_dword v9, off, s[12:15], 0
+v_add_u32 v1, v2, v3
+"""
+
+    def test_realistic_gcn_block_counts(self):
+        """Realistic disassembly text: scalar s_ prefix and comment lines
+        count (line-based substring matching), one global op flips the
+        verdict to partial."""
+        result = self._run_pass(self._GCN_REALISTIC_BLOCK)
+        status = result["amd_buffer_ops"]
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["status"], "partial")
+        self.assertEqual(status["buffer_load_count"], 4)
+        self.assertEqual(status["buffer_store_count"], 1)
+        self.assertEqual(status["global_load_count"], 1)
+        self.assertEqual(status["global_store_count"], 0)
+        self.assertTrue(status["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
