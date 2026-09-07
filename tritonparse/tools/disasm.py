@@ -1,5 +1,7 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
+import os
 import re
+import shutil
 import subprocess
 
 # Regex patterns for nvdisasm output
@@ -13,13 +15,21 @@ def path_to_nvdisasm():
 
 
 def is_nvdisasm_available():
+    """Return True only if the nvdisasm binary is actually executable.
+
+    The triton knob can hold a path string even on machines where the
+    tool is absent (e.g. AMD/ROCm hosts that still ship the NVIDIA
+    knob defaults), so a truthy knob alone is not sufficient.
+    """
     try:
-        if path_to_nvdisasm():
-            return True
-        else:
-            return False
+        path = path_to_nvdisasm()
     except RuntimeError:
         return False
+    if not path:
+        return False
+    if os.path.dirname(path):
+        return os.path.isfile(path) and os.access(path, os.X_OK)
+    return shutil.which(path) is not None
 
 
 def extract(file_path):
