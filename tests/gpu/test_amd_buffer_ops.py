@@ -117,10 +117,19 @@ class TestAmdBufferOpsE2E(GPUTestBase):
         self.assertGreater(
             len(statuses), 0, "Expected amd_buffer_ops in ir_analysis events"
         )
+        # The exact counts below are pinned to real gfx950 behavior
+        # observed in CI (dispatch 34171066666): elementwise add
+        # (2 loads + 1 store) lowers to buffer ops only. If a compiler
+        # upgrade changes codegen, this fails loudly on purpose —
+        # update the pins to the new truth.
         for status in statuses:
             self.assertIn(status.get("status"), _AMD_BUFFER_OPS_STATUSES)
-            self.assertIsInstance(status.get("enabled"), bool)
-            self.assertEqual(status["enabled"], status["status"] == "all_buffer")
+            self.assertTrue(status.get("enabled"))
+            self.assertEqual(status["status"], "all_buffer")
+            self.assertEqual(status["buffer_load_count"], 2)
+            self.assertEqual(status["buffer_store_count"], 1)
+            self.assertEqual(status["global_load_count"], 0)
+            self.assertEqual(status["global_store_count"], 0)
             self.assertTrue(status.get("reason"))
             print(f"amd_buffer_ops payload: {status}")
 
