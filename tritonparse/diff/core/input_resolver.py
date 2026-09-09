@@ -5,7 +5,8 @@ Resolve a diff input to a local file, plus a shareable URL when one exists.
 
 OSS accepts local paths only. In fbcode the work is delegated to
 ``tritonparse.diff.fb.input_resolver``, which additionally understands remote
-trace references and can fetch them; that module is not synced to GitHub.
+trace references, can fetch them, and can upload a local trace so the website
+can load it; that module is not synced to GitHub.
 """
 
 from __future__ import annotations
@@ -48,3 +49,16 @@ def resolve_input(source: str) -> ResolvedInput:
 
         return fb_resolve(source)
     return ResolvedInput(local_path=source, display=source)
+
+
+def share_input(resolved: ResolvedInput) -> ResolvedInput:
+    """Publish a local input so the website can fetch it, if possible.
+
+    A no-op in OSS, which has nowhere to publish to: the input is returned
+    unchanged and simply carries no link.
+    """
+    if resolved.json_url is not None or not is_fbcode():
+        return resolved
+    from tritonparse.diff.fb.input_resolver import share_input as fb_share
+
+    return fb_share(resolved)
