@@ -19,6 +19,17 @@ class TestResolveInput(unittest.TestCase):
         self.assertIsNone(resolved.json_url)
 
 
+class TestWantsLinks(unittest.TestCase):
+    """Uploading is gated on a link actually being printed."""
+
+    def test_gating(self) -> None:
+        from tritonparse.diff.cli import _wants_links
+
+        self.assertTrue(_wants_links(no_url=False, quiet=False))
+        self.assertFalse(_wants_links(no_url=True, quiet=False))
+        self.assertFalse(_wants_links(no_url=False, quiet=True))
+
+
 class TestGenerateOutputPath(unittest.TestCase):
     def test_local_input_writes_beside_input(self) -> None:
         from tritonparse.diff.cli import _generate_output_path

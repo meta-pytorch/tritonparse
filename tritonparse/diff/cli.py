@@ -20,7 +20,12 @@ from tritonparse.diff.core.event_matcher import (
     match_events_by_index,
     match_events_by_kernel,
 )
-from tritonparse.diff.core.input_resolver import is_remote, resolve_input, ResolvedInput
+from tritonparse.diff.core.input_resolver import (
+    is_remote,
+    resolve_input,
+    ResolvedInput,
+    share_input,
+)
 from tritonparse.diff.output import (
     append_diff_to_file,
     ConsolidatedDiffWriter,
@@ -125,6 +130,31 @@ def _add_diff_args(parser: argparse.ArgumentParser) -> None:
         default=False,
         help="Run AI analysis to explain the root causes of detected differences.",
     )
+    parser.add_argument(
+        "--no-url",
+        action="store_true",
+        default=False,
+        help="Do not print tritonparse website file-diff links.",
+    )
+    parser.add_argument(
+        "--no-share",
+        action="store_true",
+        default=False,
+        help=(
+            "Do not upload local trace files. They are uploaded by default so "
+            "a file-diff link can be produced; pass this to keep them local "
+            "(links for already-remote inputs still print)."
+        ),
+    )
+    parser.add_argument(
+        "--max-urls",
+        type=int,
+        default=10,
+        help=(
+            "Maximum number of per-kernel file-diff links to print in --trace "
+            "mode (default: 10). Use 0 for no limit."
+        ),
+    )
 
 
 def _parse_event_indices(events_str: str) -> tuple[int, int]:
@@ -172,13 +202,91 @@ def _generate_output_path(resolved: ResolvedInput) -> str:
     return f"{base}_diff{ext}"
 
 
-def _resolve_inputs(input_paths: list[str]) -> list[ResolvedInput]:
-    """Fetch any remote inputs and report what was resolved."""
+def _resolve_inputs(input_paths: list[str], share: bool = False) -> list[ResolvedInput]:
+    """Make every input readable locally, and linkable if asked.
+
+    Args:
+        input_paths: User-supplied trace sources.
+        share: Publish local inputs so they can be linked. Only worth doing
+            when a link will actually be printed.
+    """
     resolved = [resolve_input(path) for path in input_paths]
     for original, item in zip(input_paths, resolved):
         if item.json_url is not None:
             logger.info(f"Resolved {original} -> {item.local_path}")
+    if share:
+        resolved = [share_input(item) for item in resolved]
     return resolved
+
+
+def _wants_links(no_url: bool, quiet: bool) -> bool:
+    """Whether this run will print file-diff links.
+
+    Gates the upload too: sharing a local trace is only justified by the link
+    it produces, so a run that prints nothing must not upload anything.
+    """
+    return not no_url and not quiet
+
+
+def _log_file_diff_urls(urls: list[tuple[str, str]], no_url: bool) -> None:
+    """Print website file-diff links, or explain why there are none.
+
+    Args:
+        urls: (label, url) pairs, already truncated by the caller.
+        no_url: If True, print nothing.
+    """
+    if no_url or not urls:
+        return
+    border = "=" * 80
+    logger.info(f"\n{border}")
+    logger.info("🔗 OPEN FILE DIFF (Interactive Visualization, VPN required):")
+    logger.info(border)
+    for label, url in urls:
+        if label:
+            logger.info(f"{label}:")
+        logger.info(url)
+    logger.info(border)
+
+
+def _trace_diff_urls(
+    result,
+    resolved_a: ResolvedInput,
+    resolved_b: ResolvedInput,
+    max_urls: int,
+) -> list[tuple[str, str]]:
+    """Build one file-diff link per changed matched kernel pair.
+
+    Identical pairs are skipped -- a link to a diff with no differences is
+    noise. Returns an empty list when either input has no shareable URL.
+    """
+    if resolved_a.json_url is None or resolved_b.json_url is None:
+        return []
+
+    from tritonparse.diff.fb.url_builder import build_url_for_kernel_pair
+
+    urls: list[tuple[str, str]] = []
+    for match in result.matched_kernels:
+        if match.status == "identical":
+            continue
+        cd = match.compilation_diff
+        urls.append(
+            (
+                f"{match.kernel_name_a} ({match.status})",
+                build_url_for_kernel_pair(
+                    json_url=resolved_a.json_url,
+                    json_b_url=resolved_b.json_url,
+                    hash_a=match.hash_a,
+                    hash_b=match.hash_b,
+                    ir_stats=cd.ir_stats if cd else None,
+                ),
+            )
+        )
+
+    if max_urls > 0 and len(urls) > max_urls:
+        omitted = len(urls) - max_urls
+        urls = urls[:max_urls]
+        urls.append(("", f"... {omitted} more (use --max-urls 0 to show all)"))
+    return urls
 
 
 def trace_diff_command(
@@ -189,6 +297,9 @@ def trace_diff_command(
     atol: float = 1e-5,
     rtol: float = 1e-3,
     ai: bool = False,
+    no_url: bool = False,
+    max_urls: int = 10,
+    no_share: bool = False,
 ) -> None:
     """Run trace-level diff comparing all kernels across two trace files.
 
@@ -200,6 +311,9 @@ def trace_diff_command(
         atol: Absolute tolerance for tensor comparison.
         rtol: Relative tolerance for tensor comparison.
         ai: If True, run AI analysis on qualifying kernels.
+        no_url: If True, suppress website file-diff links.
+        max_urls: Max per-kernel links to print; 0 means no limit.
+        no_share: If True, do not upload local traces.
     """
     from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
     from tritonparse.diff.output.event_writer import ConsolidatedDiffWriter
@@ -208,7 +322,9 @@ def trace_diff_command(
     if len(input_paths) != 2:
         raise ValueError("--trace requires exactly 2 input files")
 
-    resolved_a, resolved_b = _resolve_inputs(input_paths)
+    resolved_a, resolved_b = _resolve_inputs(
+        input_paths, share=not no_share and _wants_links(no_url, quiet)
+    )
 
     # Load events
     events_a = load_events(resolved_a.local_path)
@@ -229,6 +345,9 @@ def trace_diff_command(
     # Print deterministic diff summary first so user sees results immediately
     if not quiet:
         logger.info(format_trace_summary(result))
+        _log_file_diff_urls(
+            _trace_diff_urls(result, resolved_a, resolved_b, max_urls), no_url
+        )
 
     # Run AI analysis on qualifying kernels after showing the diff
     if ai and result.summary.status != "identical":
@@ -314,6 +433,9 @@ def diff_command(
     rtol: float = 1e-3,
     trace: bool = False,
     ai: bool = False,
+    no_url: bool = False,
+    max_urls: int = 10,
+    no_share: bool = False,
 ) -> None:
     """
     Main function for the diff command.
@@ -331,6 +453,10 @@ def diff_command(
         atol: Absolute tolerance for tensor comparison
         rtol: Relative tolerance for tensor comparison
         trace: If True, compare all kernels across two trace files
+        ai: If True, run AI root-cause analysis
+        no_url: If True, suppress website file-diff links
+        max_urls: Max per-kernel links to print in --trace mode; 0 means no limit
+        no_share: If True, do not upload local traces
     """
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
@@ -349,6 +475,9 @@ def diff_command(
             atol=atol,
             rtol=rtol,
             ai=ai,
+            no_url=no_url,
+            max_urls=max_urls,
+            no_share=no_share,
         )
 
     # Validate input paths
@@ -367,7 +496,9 @@ def diff_command(
         )
 
     # Load events from first file
-    resolved = _resolve_inputs(input_paths)
+    resolved = _resolve_inputs(
+        input_paths, share=not no_share and _wants_links(no_url, quiet)
+    )
     resolved_a = resolved[0]
     input_path_a = resolved_a.display
     all_events_a = load_events(resolved_a.local_path)
@@ -511,6 +642,24 @@ def diff_command(
     # Print deterministic diff results immediately
     if not quiet:
         logger.info(format_summary(result))
+        if resolved_a.json_url is not None and resolved_b.json_url is not None:
+            from tritonparse.diff.fb.url_builder import build_url_for_kernel_pair
+
+            _log_file_diff_urls(
+                [
+                    (
+                        "",
+                        build_url_for_kernel_pair(
+                            json_url=resolved_a.json_url,
+                            json_b_url=resolved_b.json_url,
+                            hash_a=result.hash_a,
+                            hash_b=result.hash_b,
+                            ir_stats=result.ir_stats,
+                        ),
+                    )
+                ],
+                no_url,
+            )
 
     # Run AI analysis after showing deterministic results
     if ai and result.summary.status != "identical":

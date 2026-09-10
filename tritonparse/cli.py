@@ -200,6 +200,9 @@ def main():
             rtol=args.rtol,
             trace=args.trace,
             ai=args.ai,
+            no_url=args.no_url,
+            max_urls=args.max_urls,
+            no_share=args.no_share,
         )
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)
