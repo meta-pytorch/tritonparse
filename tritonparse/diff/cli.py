@@ -20,6 +20,7 @@ from tritonparse.diff.core.event_matcher import (
     match_events_by_index,
     match_events_by_kernel,
 )
+from tritonparse.diff.core.input_resolver import is_remote, resolve_input, ResolvedInput
 from tritonparse.diff.output import (
     append_diff_to_file,
     ConsolidatedDiffWriter,
@@ -33,12 +34,24 @@ from tritonparse.tp_logger import get_logger
 logger = get_logger("diff.cli")
 
 
+def _input_help() -> str:
+    """Help for the positional input, listing only sources this build accepts."""
+    sources = "local ndjson path"
+    if is_fbcode():
+        from tritonparse.diff.fb.remote_input import REMOTE_SOURCE_HELP
+
+        sources += f", {REMOTE_SOURCE_HELP}"
+    return (
+        f"Trace source(s): {sources}. One for single-file mode, two for dual-file mode."
+    )
+
+
 def _add_diff_args(parser: argparse.ArgumentParser) -> None:
     """Add arguments for the diff subcommand."""
     parser.add_argument(
         "input",
         nargs="+",
-        help="Path(s) to ndjson file(s). One file for single-file mode, two for dual-file mode.",
+        help=_input_help(),
     )
     parser.add_argument(
         "--events",
@@ -139,21 +152,33 @@ def _parse_event_indices(events_str: str) -> tuple[int, int]:
         ) from e
 
 
-def _generate_output_path(input_path: str) -> str:
-    """Generate default output path from input path.
+def _generate_output_path(resolved: ResolvedInput) -> str:
+    """Generate default output path for a resolved input.
 
-    Args:
-        input_path: Path to input file
+    Remote inputs live in a temp dir that is deleted on exit, so their output
+    is written to the basename in the current directory instead.
 
     Returns:
         Output path with _diff suffix before extension
     """
+    input_path = resolved.local_path
+    if resolved.json_url is not None:
+        input_path = os.path.basename(input_path)
     base, ext = os.path.splitext(input_path)
     if ext == ".gz":
         # Handle .ndjson.gz
         base2, ext2 = os.path.splitext(base)
         return f"{base2}_diff{ext2}{ext}"
     return f"{base}_diff{ext}"
+
+
+def _resolve_inputs(input_paths: list[str]) -> list[ResolvedInput]:
+    """Fetch any remote inputs and report what was resolved."""
+    resolved = [resolve_input(path) for path in input_paths]
+    for original, item in zip(input_paths, resolved):
+        if item.json_url is not None:
+            logger.info(f"Resolved {original} -> {item.local_path}")
+    return resolved
 
 
 def trace_diff_command(
@@ -168,7 +193,7 @@ def trace_diff_command(
     """Run trace-level diff comparing all kernels across two trace files.
 
     Args:
-        input_paths: Exactly 2 input ndjson file paths.
+        input_paths: Exactly 2 trace sources (local paths or remote refs).
         output: Optional output file path.
         quiet: If True, suppress CLI output.
         tensor_values: If True, compare tensor values.
@@ -183,16 +208,18 @@ def trace_diff_command(
     if len(input_paths) != 2:
         raise ValueError("--trace requires exactly 2 input files")
 
+    resolved_a, resolved_b = _resolve_inputs(input_paths)
+
     # Load events
-    events_a = load_events(input_paths[0])
-    events_b = load_events(input_paths[1])
+    events_a = load_events(resolved_a.local_path)
+    events_b = load_events(resolved_b.local_path)
 
     # Run trace diff
     engine = TraceDiffEngine(
         events_a,
         events_b,
-        trace_path_a=input_paths[0],
-        trace_path_b=input_paths[1],
+        trace_path_a=resolved_a.display,
+        trace_path_b=resolved_b.display,
         tensor_values=tensor_values,
         atol=atol,
         rtol=rtol,
@@ -265,7 +292,7 @@ def trace_diff_command(
             logger.warning(f"AI analysis setup failed: {e}")
 
     # Write output
-    output_path = output or _generate_output_path(input_paths[0])
+    output_path = output or _generate_output_path(resolved_a)
     writer = ConsolidatedDiffWriter()
     writer.add_trace_diff(result, events_a, events_b)
     writer.write(output_path)
@@ -292,7 +319,7 @@ def diff_command(
     Main function for the diff command.
 
     Args:
-        input_paths: List of input ndjson file paths (1 or 2 files)
+        input_paths: Trace sources, 1 or 2 (local paths or remote refs)
         events: Comma-separated event indices to compare (e.g., "0,1")
         kernel: Optional kernel name to filter by
         output: Optional output file path
@@ -330,15 +357,28 @@ def diff_command(
             "At most 2 input files allowed (single-file or dual-file mode)"
         )
 
+    # Checked before resolving: a remote input is staged in a temp dir that
+    # is deleted on exit, so there is nothing durable to append to. Failing
+    # here avoids downloading and diffing multi-megabyte traces first.
+    if in_place and is_remote(input_paths[0]):
+        raise ValueError(
+            "--in-place cannot be used with a remote input: the downloaded "
+            f"copy of {input_paths[0]} is temporary. Use --output."
+        )
+
     # Load events from first file
-    input_path_a = input_paths[0]
-    all_events_a = load_events(input_path_a)
+    resolved = _resolve_inputs(input_paths)
+    resolved_a = resolved[0]
+    input_path_a = resolved_a.display
+    all_events_a = load_events(resolved_a.local_path)
 
     # Handle dual-file mode
     if len(input_paths) == 2:
-        input_path_b = input_paths[1]
-        all_events_b = load_events(input_path_b)
+        resolved_b = resolved[1]
+        input_path_b = resolved_b.display
+        all_events_b = load_events(resolved_b.local_path)
     else:
+        resolved_b = resolved_a
         input_path_b = input_path_a
         all_events_b = all_events_a
 
@@ -496,11 +536,11 @@ def diff_command(
 
     # Write output
     if in_place:
-        append_diff_to_file(input_path_a, diff_event)
+        append_diff_to_file(resolved_a.local_path, diff_event)
         if not quiet:
             logger.info(f"Appended diff event to: {input_path_a}")
     else:
-        output_path = output or _generate_output_path(input_path_a)
+        output_path = output or _generate_output_path(resolved_a)
         writer = ConsolidatedDiffWriter()
         writer.add_diff(result, comp_a, comp_b)
         writer.write(output_path)
