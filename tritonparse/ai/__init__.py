@@ -13,6 +13,7 @@ from tritonparse.ai.client import (
     LLMClient,
     Message,
     MockClient,
+    MuseClient,
     Response,
     ToolCall,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "MockClient",
     "ClaudeCodeClient",
     "CodexClient",
+    "MuseClient",
     # Parsers
     "extract_json",
     "extract_code_block",

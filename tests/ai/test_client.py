@@ -15,6 +15,7 @@ from tritonparse.ai import (
     LLMClient,
     Message,
     MockClient,
+    MuseClient,
     Response,
     ToolCall,
 )
@@ -385,6 +386,215 @@ class TestCodexClient(unittest.TestCase):
         )
 
         self.assertEqual(chunks, ["Stream result"])
+
+
+class TestMuseClient(unittest.TestCase):
+    """Tests for the one-shot Muse CLI client."""
+
+    @staticmethod
+    def _prompt_path(cmd_args):
+        prompt_index = cmd_args.index("--prompt-file") + 1
+        return Path(cmd_args[prompt_index])
+
+    def test_init_default_values(self):
+        client = MuseClient()
+        self.assertIsNone(client.model)
+        self.assertEqual(client.retry_count, 3)
+        self.assertEqual(client.timeout, 600)
+        self.assertIsNone(client.cwd)
+        self.assertEqual(client.approval_mode, "never")
+
+    def test_rejects_zero_retry_count(self):
+        with self.assertRaisesRegex(ValueError, "retry_count"):
+            MuseClient(retry_count=0)
+
+    def test_rejects_invalid_approval_mode(self):
+        with self.assertRaisesRegex(ValueError, "approval_mode"):
+            MuseClient(approval_mode="always")
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_uses_headless_exec_command(self, mock_run):
+        seen_prompts = []
+        prompt_paths = []
+
+        def run_muse(**kwargs):
+            prompt_path = self._prompt_path(kwargs["cmd_args"])
+            prompt_paths.append(prompt_path)
+            seen_prompts.append(prompt_path.read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="  Muse result\n", stderr=""
+            )
+
+        mock_run.side_effect = run_muse
+        model = 'muse-test"; touch /tmp/not-run'
+        client = MuseClient(
+            retry_count=2,
+            timeout=42,
+            model=model,
+            cwd="/tmp/trace dir",
+        )
+
+        response = client.chat(
+            [
+                Message(role="system", content="System\ninstructions 😀"),
+                Message(role="user", content="Analyze this trace"),
+            ]
+        )
+
+        self.assertEqual(response.content, "Muse result")
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        self.assertEqual(kwargs["executable"], "muse")
+        self.assertEqual(kwargs["timeout"], 42)
+        self.assertEqual(kwargs["cwd"], "/tmp/trace dir")
+        self.assertTrue(kwargs["capture_output"])
+        self.assertTrue(kwargs["text"])
+        self.assertFalse(kwargs["check"])
+
+        args = kwargs["cmd_args"]
+        self.assertEqual(args[0], "exec")
+        self.assertIn("--approval-mode", args)
+        self.assertIn("never", args)
+        self.assertIn("--no-session-log", args)
+        self.assertIn(model, args)
+        self.assertNotIn("-", args)
+
+        workspace_index = args.index("--workspace") + 1
+        self.assertEqual(args[workspace_index], "/tmp/trace dir")
+
+        # System and user prompts are merged into the prompt file.
+        self.assertEqual(len(seen_prompts), 1)
+        self.assertIn("System\ninstructions 😀", seen_prompts[0])
+        self.assertIn("Analyze this trace", seen_prompts[0])
+
+        # The prompt file is removed after the call.
+        self.assertEqual(len(prompt_paths), 1)
+        self.assertFalse(prompt_paths[0].exists())
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_omits_model_and_workspace_by_default(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+
+        MuseClient().chat([Message(role="user", content="Analyze")])
+
+        args = mock_run.call_args.kwargs["cmd_args"]
+        self.assertNotIn("--model", args)
+        self.assertNotIn("--workspace", args)
+        self.assertIn("--prompt-file", args)
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_rejects_unsupported_message_shapes(self, mock_run):
+        invalid_messages = [
+            [],
+            [Message(role="system", content="System")],
+            [
+                Message(role="user", content="First"),
+                Message(role="user", content="Second"),
+            ],
+            [
+                Message(role="system", content="First"),
+                Message(role="system", content="Second"),
+                Message(role="user", content="Analyze"),
+            ],
+            [
+                Message(role="assistant", content="Prior response"),
+                Message(role="user", content="Analyze"),
+            ],
+            [
+                Message(role="tool", content="Tool result"),
+                Message(role="user", content="Analyze"),
+            ],
+        ]
+
+        for messages in invalid_messages:
+            with self.subTest(messages=messages):
+                with self.assertRaisesRegex(ValueError, "exactly one user message"):
+                    MuseClient().chat(messages)
+
+        mock_run.assert_not_called()
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_resolves_relative_cwd(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ok", stderr=""
+        )
+        expected_cwd = os.path.abspath("relative/trace/dir")
+
+        MuseClient(cwd="relative/trace/dir").chat(
+            [Message(role="user", content="Analyze")]
+        )
+
+        kwargs = mock_run.call_args.kwargs
+        self.assertEqual(kwargs["cwd"], expected_cwd)
+        args = kwargs["cmd_args"]
+        workspace_index = args.index("--workspace") + 1
+        self.assertEqual(args[workspace_index], expected_cwd)
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_does_not_retry_failure(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="boom"
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            MuseClient(retry_count=3).chat([Message(role="user", content="Analyze")])
+
+        mock_run.assert_called_once()
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_cleans_prompt_file_after_timeout(self, mock_run):
+        prompt_paths = []
+
+        def time_out(**kwargs):
+            prompt_paths.append(self._prompt_path(kwargs["cmd_args"]))
+            raise subprocess.TimeoutExpired(cmd="muse", timeout=10)
+
+        mock_run.side_effect = time_out
+
+        with self.assertRaisesRegex(RuntimeError, "timed out after 10s"):
+            MuseClient(timeout=10).chat([Message(role="user", content="Analyze")])
+
+        self.assertEqual(len(prompt_paths), 1)
+        self.assertFalse(prompt_paths[0].exists())
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_rejects_empty_final_response(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="  \n", stderr=""
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "no final response"):
+            MuseClient().chat([Message(role="user", content="Analyze")])
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_wraps_launch_failure(self, mock_run):
+        mock_run.side_effect = OSError("no such file")
+
+        with self.assertRaisesRegex(RuntimeError, "Failed to launch Muse CLI"):
+            MuseClient().chat([Message(role="user", content="Analyze")])
+
+    @patch("tritonparse.ai.client.TrustedSubprocessWithList.run")
+    def test_chat_stream_yields_final_response(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="Stream result", stderr=""
+        )
+
+        chunks = list(
+            MuseClient().chat_stream([Message(role="user", content="Analyze")])
+        )
+
+        self.assertEqual(chunks, ["Stream result"])
+
+    def test_build_prompt_without_system(self):
+        self.assertEqual(MuseClient._build_prompt("", "Analyze"), "Analyze")
+
+    def test_build_prompt_merges_system_and_user(self):
+        prompt = MuseClient._build_prompt("Be helpful", "Analyze")
+        self.assertIn("Be helpful", prompt)
+        self.assertIn("Analyze", prompt)
+        self.assertLess(prompt.index("Be helpful"), prompt.index("Analyze"))
 
 
 class TestClaudeCodeClient(unittest.TestCase):
