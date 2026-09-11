@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from tritonparse.ai import LLM_PROVIDERS
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
 from tritonparse.compat_builder.ai_fixer import AICompatFixer
@@ -105,6 +106,13 @@ def _add_compat_build_args(parser: argparse.ArgumentParser) -> None:
         type=str,
         default=None,
         help="LLM model for AI fix (default: auto-select)",
+    )
+    parser.add_argument(
+        "--ai-provider",
+        type=str,
+        choices=LLM_PROVIDERS,
+        default="claude",
+        help="LLM provider for AI fix (default: claude)",
     )
 
     # Worktree control
@@ -368,6 +376,7 @@ def _create_ai_fixer_factory(
             executor=ShellExecutor(build_logger),
             bisect_logger=build_logger,
             model=args.ai_model,
+            provider=args.ai_provider,
         )
 
     return factory

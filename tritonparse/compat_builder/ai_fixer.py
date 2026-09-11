@@ -5,7 +5,7 @@ AI-powered Triton/LLVM compatibility fixer.
 
 Two-phase approach (following CUTracer's AIDeadlockAnalyzer pattern):
 - Phase 1 (deterministic): Extract build error + LLVM API change context
-- Phase 2 (AI): Claude modifies Triton code to fix incompatibility
+- Phase 2 (AI): The AI agent modifies Triton code to fix incompatibility
 
 Key difference from CUTracer: This fixer needs WRITE permissions
 (Edit, Write, Bash) to actually modify code, not just analyze it.
@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from tritonparse.ai import ClaudeCodeClient, LLMClient, Message
+from tritonparse.ai import create_llm_client, LLMClient, Message
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
 from tritonparse.compat_builder.context_builder import build_fix_context
@@ -51,24 +51,28 @@ class AICompatFixer:
         model: str | None = None,
         timeout: int | None = None,
         client: LLMClient | None = None,
+        provider: str = "claude",
     ) -> None:
         """Initialize AICompatFixer.
 
         Args:
             triton_dir: Path to Triton repository (compat worktree).
-                Used as cwd for Claude so edits stay in the worktree.
+                Used as cwd for the AI client so edits stay in the worktree.
             executor: ShellExecutor for git commands.
             bisect_logger: BisectLogger for structured logging.
             model: LLM model name/alias. None = auto-select.
             timeout: Timeout in seconds. Default: 1800.
             client: Optional LLMClient override (for testing with MockClient).
+            provider: LLM provider, one of "claude", "codex", or "muse"
+                (ignored if client provided).
         """
         self.triton_dir: Path = Path(triton_dir).resolve()
         self.llvm_dir: Path = self.triton_dir / "llvm-project"
         self.executor: ShellExecutor = executor
         self.bisect_logger: BisectLogger = bisect_logger
 
-        self.client: LLMClient = client or ClaudeCodeClient(
+        self.client: LLMClient = client or create_llm_client(
+            provider,
             allowed_tools=["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
             model=model,
             timeout=timeout or _DEFAULT_TIMEOUT,
@@ -111,7 +115,7 @@ class AICompatFixer:
             executor=self.executor,
         )
 
-        # Phase 2: AI fix (send to Claude)
+        # Phase 2: AI fix (send to the LLM client)
         user_prompt = self._build_user_prompt(incompatible_llvm, context)
         messages = [
             Message(role="system", content=COMPAT_FIX_SYSTEM_PROMPT),

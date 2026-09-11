@@ -11,6 +11,7 @@ import argparse
 import os
 from typing import Optional
 
+from tritonparse.ai import LLM_PROVIDERS
 from tritonparse.diff.core.diff_engine import DiffEngine
 from tritonparse.diff.core.event_matcher import (
     find_launch_for_compilation,
@@ -154,6 +155,19 @@ def _add_diff_args(parser: argparse.ArgumentParser) -> None:
             "Maximum number of per-kernel file-diff links to print in --trace "
             "mode (default: 10). Use 0 for no limit."
         ),
+    )
+    parser.add_argument(
+        "--ai-model",
+        type=str,
+        default=None,
+        help="LLM model for AI analysis (default: auto-select)",
+    )
+    parser.add_argument(
+        "--ai-provider",
+        type=str,
+        choices=LLM_PROVIDERS,
+        default="claude",
+        help="LLM provider for AI analysis (default: claude)",
     )
 
 
@@ -300,6 +314,8 @@ def trace_diff_command(
     no_url: bool = False,
     max_urls: int = 10,
     no_share: bool = False,
+    ai_model: Optional[str] = None,
+    ai_provider: str = "claude",
 ) -> None:
     """Run trace-level diff comparing all kernels across two trace files.
 
@@ -314,6 +330,8 @@ def trace_diff_command(
         no_url: If True, suppress website file-diff links.
         max_urls: Max per-kernel links to print; 0 means no limit.
         no_share: If True, do not upload local traces.
+        ai_model: LLM model for AI analysis (None = auto-select).
+        ai_provider: LLM provider for AI analysis.
     """
     from tritonparse.diff.core.trace_diff_engine import TraceDiffEngine
     from tritonparse.diff.output.event_writer import ConsolidatedDiffWriter
@@ -354,7 +372,7 @@ def trace_diff_command(
         try:
             from tritonparse.diff.fb.ai.diff_analyzer import AIDiffAnalyzer
 
-            analyzer = AIDiffAnalyzer()
+            analyzer = AIDiffAnalyzer(model=ai_model, provider=ai_provider)
             ai_count = 0
 
             for match in result.matched_kernels:
@@ -436,6 +454,8 @@ def diff_command(
     no_url: bool = False,
     max_urls: int = 10,
     no_share: bool = False,
+    ai_model: Optional[str] = None,
+    ai_provider: str = "claude",
 ) -> None:
     """
     Main function for the diff command.
@@ -457,6 +477,8 @@ def diff_command(
         no_url: If True, suppress website file-diff links
         max_urls: Max per-kernel links to print in --trace mode; 0 means no limit
         no_share: If True, do not upload local traces
+        ai_model: LLM model for AI analysis (None = auto-select)
+        ai_provider: LLM provider for AI analysis
     """
     if not skip_logger and is_fbcode():
         from tritonparse.fb.utils import usage_report_logger
@@ -478,6 +500,8 @@ def diff_command(
             no_url=no_url,
             max_urls=max_urls,
             no_share=no_share,
+            ai_model=ai_model,
+            ai_provider=ai_provider,
         )
 
     # Validate input paths
@@ -666,7 +690,7 @@ def diff_command(
         try:
             from tritonparse.diff.fb.ai.diff_analyzer import AIDiffAnalyzer
 
-            analyzer = AIDiffAnalyzer()
+            analyzer = AIDiffAnalyzer(model=ai_model, provider=ai_provider)
             ai_notes = analyzer.analyze(result, comp_a, comp_b)
             result.summary.notes.extend(ai_notes)
             if not quiet:

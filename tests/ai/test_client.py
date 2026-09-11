@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from tritonparse.ai import (
     ClaudeCodeClient,
     CodexClient,
+    create_llm_client,
     LLMClient,
     Message,
     MockClient,
@@ -807,3 +808,57 @@ class TestClaudeCodeClient(unittest.TestCase):
             any("claude_system_" in p for p in unlinked_paths),
             f"Expected claude_system_ temp file to be cleaned up, got: {unlinked_paths}",
         )
+
+
+class TestCreateLLMClient(unittest.TestCase):
+    """Tests for the create_llm_client factory."""
+
+    def test_defaults_to_claude(self):
+        """Test that the default provider is Claude."""
+        client = create_llm_client()
+        self.assertIsInstance(client, ClaudeCodeClient)
+
+    def test_creates_claude_client_with_options(self):
+        """Test Claude client creation with forwarded options."""
+        client = create_llm_client(
+            "claude",
+            model="sonnet",
+            timeout=42,
+            retry_count=2,
+            cwd="/tmp/work",
+            allowed_tools=["Read"],
+        )
+        self.assertIsInstance(client, ClaudeCodeClient)
+        self.assertEqual(client.model, "sonnet")
+        self.assertEqual(client.timeout, 42)
+        self.assertEqual(client.retry_count, 2)
+        self.assertEqual(client.cwd, "/tmp/work")
+        self.assertEqual(client.allowed_tools, ["Read"])
+
+    def test_creates_codex_client(self):
+        """Test Codex client creation with forwarded options."""
+        client = create_llm_client("codex", model="gpt-test", timeout=42, retry_count=2)
+        self.assertIsInstance(client, CodexClient)
+        self.assertEqual(client.model, "gpt-test")
+        self.assertEqual(client.timeout, 42)
+        self.assertEqual(client.retry_count, 2)
+
+    def test_creates_muse_client(self):
+        """Test Muse client creation with forwarded options."""
+        client = create_llm_client("muse", model="muse-test", timeout=42, retry_count=2)
+        self.assertIsInstance(client, MuseClient)
+        self.assertEqual(client.model, "muse-test")
+        self.assertEqual(client.timeout, 42)
+        self.assertEqual(client.retry_count, 2)
+
+    def test_allowed_tools_ignored_by_codex_and_muse(self):
+        """Test that allowed_tools doesn't break non-Claude providers."""
+        codex = create_llm_client("codex", allowed_tools=["Read"])
+        self.assertIsInstance(codex, CodexClient)
+        muse = create_llm_client("muse", allowed_tools=["Read"])
+        self.assertIsInstance(muse, MuseClient)
+
+    def test_rejects_unknown_provider(self):
+        """Test that an unknown provider raises ValueError."""
+        with self.assertRaisesRegex(ValueError, "Unknown LLM provider"):
+            create_llm_client("gemini")

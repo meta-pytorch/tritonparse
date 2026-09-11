@@ -203,6 +203,8 @@ def main():
             no_url=args.no_url,
             max_urls=args.max_urls,
             no_share=args.no_share,
+            ai_model=args.ai_model,
+            ai_provider=args.ai_provider,
         )
     elif args.func == "bisect":
         _validate_bisect_args(args, bisect_parser)

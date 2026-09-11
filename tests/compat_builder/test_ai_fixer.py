@@ -9,7 +9,7 @@ import unittest
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
-from tritonparse.ai import MockClient
+from tritonparse.ai import ClaudeCodeClient, MockClient, MuseClient
 from tritonparse.compat_builder.ai_fixer import AICompatFixer
 
 
@@ -200,3 +200,26 @@ class AICompatFixerTest(unittest.TestCase):
         user_msg = client.last_messages[1].content
         self.assertIn("compat fix:", user_msg)
         self.assertIn("abc123def456"[:12], user_msg)
+
+    def _make_default_fixer(self, **kwargs) -> AICompatFixer:
+        """Create a fixer without an explicit client (uses the factory)."""
+        # pyre-ignore[6]: _FakeExecutor is not ShellExecutor
+        return AICompatFixer(
+            triton_dir="/fake/triton",
+            executor=_FakeExecutor(),
+            bisect_logger=MagicMock(),
+            **kwargs,
+        )
+
+    def test_defaults_to_claude_client(self) -> None:
+        fixer = self._make_default_fixer()
+        self.assertIsInstance(fixer.client, ClaudeCodeClient)
+
+    def test_provider_selects_muse_client(self) -> None:
+        fixer = self._make_default_fixer(provider="muse")
+        self.assertIsInstance(fixer.client, MuseClient)
+
+    def test_explicit_client_wins_over_provider(self) -> None:
+        client = MockClient(responses=["done"])
+        fixer = self._make_default_fixer(client=client, provider="muse")
+        self.assertIs(fixer.client, client)

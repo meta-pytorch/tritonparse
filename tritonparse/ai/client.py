@@ -855,3 +855,59 @@ class ClaudeCodeClient(LLMClient):
         except JSONDecodeError:
             # Non-JSON output, return as-is
             return Response(content=stdout.strip())
+
+
+LLM_PROVIDERS: Tuple[str, ...] = ("claude", "codex", "muse")
+
+
+def create_llm_client(
+    provider: str = "claude",
+    *,
+    model: Optional[str] = None,
+    timeout: int = 600,
+    retry_count: int = 3,
+    cwd: Optional[str] = None,
+    allowed_tools: Optional[List[str]] = None,
+) -> LLMClient:
+    """Create an LLM client for the given provider.
+
+    Args:
+        provider: One of "claude", "codex", or "muse".
+        model: Model name or alias, or None to let the CLI auto-select.
+        timeout: Timeout in seconds for CLI calls.
+        retry_count: Number of retry attempts on failure.
+        cwd: Working directory for CLI execution.
+        allowed_tools: Tools the agent may use. Only used by the Claude
+            provider; ignored by the Codex and Muse providers.
+
+    Returns:
+        An LLMClient for the requested provider.
+
+    Raises:
+        ValueError: If the provider is unknown.
+    """
+    if provider == "claude":
+        return ClaudeCodeClient(
+            allowed_tools=allowed_tools,
+            retry_count=retry_count,
+            timeout=timeout,
+            model=model,
+            cwd=cwd,
+        )
+    if provider == "codex":
+        return CodexClient(
+            retry_count=retry_count,
+            timeout=timeout,
+            model=model,
+            cwd=cwd,
+        )
+    if provider == "muse":
+        return MuseClient(
+            retry_count=retry_count,
+            timeout=timeout,
+            model=model,
+            cwd=cwd,
+        )
+    raise ValueError(
+        f"Unknown LLM provider: {provider!r}. Expected one of {LLM_PROVIDERS}"
+    )

@@ -206,6 +206,26 @@ class DefaultArgValuesTest(unittest.TestCase):
         args = _parse(["--triton-dir", "/fake", "--llvm-bump-commit", "abc", "--no-ai"])
         self.assertFalse(args.use_ai)
 
+    def test_ai_provider_defaults_to_claude(self) -> None:
+        args = _parse(["--triton-dir", "/fake", "--llvm-bump-commit", "abc"])
+        self.assertEqual(args.ai_provider, "claude")
+
+    def test_ai_provider_explicit(self) -> None:
+        args = _parse(
+            [
+                "--triton-dir",
+                "/fake",
+                "--llvm-bump-commit",
+                "abc",
+                "--ai-provider",
+                "muse",
+                "--ai-model",
+                "muse-test",
+            ]
+        )
+        self.assertEqual(args.ai_provider, "muse")
+        self.assertEqual(args.ai_model, "muse-test")
+
     def test_default_output_csv(self) -> None:
         args = _parse(["--triton-dir", "/fake", "--llvm-bump-commit", "abc"])
         self.assertEqual(args.output_csv, "./commits.csv")

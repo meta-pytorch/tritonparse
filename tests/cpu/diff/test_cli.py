@@ -2,6 +2,7 @@
 
 """Tests for diff CLI commands (single-file, dual-file, and trace modes)."""
 
+import argparse
 import json
 import os
 import tempfile
@@ -9,7 +10,7 @@ import unittest
 from io import StringIO
 from unittest.mock import patch
 
-from tritonparse.diff.cli import _parse_event_indices, diff_command
+from tritonparse.diff.cli import _add_diff_args, _parse_event_indices, diff_command
 
 from .test_fixtures import COMP_EVENT_A, COMP_EVENT_B, create_compilation_event
 
@@ -97,6 +98,29 @@ class TestDiffCLI(unittest.TestCase):
                 skip_logger=True,
             )
         self.assertIn("Event index 10 out of range", str(ctx.exception))
+
+    def test_ai_arg_defaults(self) -> None:
+        """Test --ai/--ai-model/--ai-provider defaults."""
+        parser = argparse.ArgumentParser()
+        _add_diff_args(parser)
+        args = parser.parse_args([self.temp_path])
+        self.assertFalse(args.ai)
+        self.assertIsNone(args.ai_model)
+        self.assertEqual(args.ai_provider, "claude")
+
+    @patch("tritonparse.diff.fb.ai.diff_analyzer.AIDiffAnalyzer")
+    def test_ai_forwards_provider_and_model(self, mock_analyzer_cls) -> None:
+        """Test that ai_model/ai_provider reach AIDiffAnalyzer."""
+        with patch("sys.stdout", new_callable=StringIO):
+            diff_command(
+                input_paths=[self.temp_path],
+                events="0,1",
+                skip_logger=True,
+                ai=True,
+                ai_model="muse-test",
+                ai_provider="muse",
+            )
+        mock_analyzer_cls.assert_called_once_with(model="muse-test", provider="muse")
 
 
 class TestDiffCLIDualFile(unittest.TestCase):
