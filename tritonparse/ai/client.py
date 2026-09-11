@@ -15,6 +15,8 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +41,13 @@ except ModuleNotFoundError as error:  # pragma: no cover - OSS source fallback
             # The executable is fixed by the caller and dynamic values remain
             # separate argv entries, so the OSS fallback never invokes a shell.
             return subprocess.run([executable, *cmd_args], **kwargs)  # noqa: P204
+
+        @staticmethod
+        def Popen(
+            *, executable: str, cmd_args: List[str], **kwargs: Any
+        ) -> "subprocess.Popen[Any]":
+            # Same argv-list guarantee as run() above.
+            return subprocess.Popen([executable, *cmd_args], **kwargs)  # noqa: P204
 
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -408,9 +417,9 @@ class MuseClient(LLMClient):
     """LLM client using the Muse CLI's non-interactive ``exec`` mode.
 
     The client is one-shot: each :meth:`chat` call runs a single ``muse exec``
-    turn and captures the final agent message from stdout. The system message
-    (if any) is prepended to the user message in a prompt file, because
-    ``muse exec`` has no ``--system-prompt`` flag.
+    turn and captures the final agent message from the ``--json`` event stream
+    on stdout. The system message (if any) is prepended to the user message in
+    a prompt file, because ``muse exec`` has no ``--system-prompt`` flag.
 
     Attributes:
         retry_count: Number of attempts on failure. Failures are currently
@@ -482,15 +491,17 @@ class MuseClient(LLMClient):
                 raise RuntimeError(f"Failed to launch Muse CLI: {error}") from error
 
             if result.returncode == 0:
-                content = result.stdout.strip()
+                content, session_id, model_id = self._parse_json_events(result.stdout)
                 if not content:
                     raise RuntimeError("Muse CLI returned no final response")
                 return Response(
                     content=content,
+                    session_id=session_id,
                     raw={
                         "returncode": result.returncode,
                         "stdout": result.stdout,
                         "stderr": result.stderr,
+                        "model_id": model_id,
                     },
                 )
 
@@ -507,13 +518,130 @@ class MuseClient(LLMClient):
         messages: List[Message],
         temperature: float = 0.0,
     ) -> Iterator[str]:
-        """Yield the final response as one chunk.
+        """Stream response deltas from ``muse exec --json``.
 
-        One-shot reasoning only today. A future consumer that needs progress
-        events can add ``muse exec --json`` delta parsing without changing
-        the synchronous ``chat`` contract.
+        A watchdog enforces the overall timeout even mid-stream, and the
+        subprocess is always reaped — including when the caller abandons
+        the iterator early.
+
+        Args:
+            messages: List of messages
+            temperature: Temperature parameter (ignored)
+
+        Yields:
+            Text chunks from ``run.output.delta`` events as they arrive.
         """
-        yield self.chat(messages, temperature).content
+        del temperature
+        system_prompt, user_prompt = _extract_single_turn_prompts(messages)
+        prompt = self._build_prompt(system_prompt, user_prompt)
+
+        fd, prompt_path = tempfile.mkstemp(suffix=".md", prefix="muse_prompt_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as prompt_file:
+                prompt_file.write(prompt)
+            try:
+                process = TrustedSubprocessWithList.Popen(
+                    executable="muse",
+                    cmd_args=self._build_args(prompt_path),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    cwd=self.cwd,
+                )
+            except OSError as error:
+                raise RuntimeError(f"Failed to launch Muse CLI: {error}") from error
+
+            # Drain stderr on a thread so a full pipe can never deadlock
+            # the stdout read loop below.
+            stderr_box: List[str] = []
+
+            def _drain_stderr() -> None:
+                try:
+                    if process.stderr is not None:
+                        stderr_box.append(process.stderr.read())
+                except (OSError, ValueError):
+                    pass
+
+            drainer = threading.Thread(target=_drain_stderr, daemon=True)
+            drainer.start()
+
+            # Watchdog: kill the process at the overall deadline, since the
+            # blocking stdout read below cannot honor wait()'s timeout.
+            deadline = time.monotonic() + self.timeout
+            timed_out: List[bool] = []
+
+            def _on_deadline() -> None:
+                if process.poll() is None:
+                    timed_out.append(True)
+                    process.kill()
+
+            watchdog = threading.Timer(
+                max(0.0, deadline - time.monotonic()), _on_deadline
+            )
+            watchdog.daemon = True
+            watchdog.start()
+
+            terminal_event_seen = False
+            terminal_state: Optional[str] = None
+            terminal_detail = ""
+            try:
+                stdout = process.stdout
+                if stdout is None:
+                    raise RuntimeError("Muse CLI produced no output stream")
+                for line in stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = loads(line)
+                    except JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    payload_type = event.get("payload_type", "")
+                    payload = event.get("payload") or {}
+                    if payload_type == "run.output.delta":
+                        text = payload.get("text")
+                        if text:
+                            yield text
+                    elif payload_type.startswith("run.terminal."):
+                        terminal_event_seen = True
+                        terminal_state = payload.get("terminal")
+                        terminal_detail = (
+                            payload.get("reason") or payload.get("text") or ""
+                        )
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.wait()
+                raise RuntimeError(
+                    f"Muse CLI timed out after {self.timeout}s"
+                ) from error
+            finally:
+                watchdog.cancel()
+                if process.poll() is None:
+                    # Abandoned iterator or wait() never reached: reap.
+                    process.kill()
+                    process.wait()
+                drainer.join(timeout=10)
+
+            if timed_out:
+                raise RuntimeError(f"Muse CLI timed out after {self.timeout}s")
+            if terminal_event_seen and terminal_state != "completed":
+                raise RuntimeError(
+                    f"Muse run ended with terminal state {terminal_state!r}: "
+                    f"{terminal_detail or 'no detail'}"
+                )
+            if process.returncode != 0:
+                raise RuntimeError(
+                    "Muse CLI failed: " + _format_cli_failure("", "".join(stderr_box))
+                )
+        finally:
+            try:
+                os.unlink(prompt_path)
+            except FileNotFoundError:
+                pass
 
     def _run_once(self, prompt: str) -> "subprocess.CompletedProcess[Any]":
         fd, prompt_path = tempfile.mkstemp(suffix=".md", prefix="muse_prompt_")
@@ -538,6 +666,7 @@ class MuseClient(LLMClient):
     def _build_args(self, prompt_path: str) -> List[str]:
         args = [
             "exec",
+            "--json",
             "--approval-mode",
             self.approval_mode,
             "--no-session-log",
@@ -548,6 +677,66 @@ class MuseClient(LLMClient):
             args.extend(["--model", self.model])
         args.extend(["--prompt-file", prompt_path])
         return args
+
+    @staticmethod
+    def _parse_json_events(
+        stdout: str,
+    ) -> Tuple[str, Optional[str], Optional[str]]:
+        """Extract the final text, session id, and model id from --json output.
+
+        Prefers the terminal event's text; falls back to concatenated output
+        deltas when no terminal event is present. Blank and non-JSON lines
+        are skipped.
+
+        Returns:
+            Tuple of (content, session_id, model_id). session_id and model_id
+            are None when the corresponding events are absent.
+
+        Raises:
+            RuntimeError: If the run ended in a non-completed terminal state.
+        """
+        deltas: List[str] = []
+        terminal_text = ""
+        terminal_event_seen = False
+        terminal_state: Optional[str] = None
+        terminal_reason: Optional[str] = None
+        session_id: Optional[str] = None
+        model_id: Optional[str] = None
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = loads(line)
+            except JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            payload_type = event.get("payload_type", "")
+            payload = event.get("payload") or {}
+            if payload_type == "run.output.delta":
+                text = payload.get("text")
+                if text:
+                    deltas.append(text)
+            elif payload_type == "run.model.configured":
+                model_id = payload.get("model_id") or model_id
+            elif payload_type.startswith("run.terminal."):
+                terminal_event_seen = True
+                terminal_state = payload.get("terminal")
+                terminal_text = payload.get("text") or ""
+                terminal_reason = payload.get("reason")
+                stream = event.get("stream") or {}
+                session_id = stream.get("id") or session_id
+
+        if terminal_event_seen and terminal_state != "completed":
+            detail = terminal_reason or terminal_text or "no detail"
+            raise RuntimeError(
+                f"Muse run ended with terminal state {terminal_state!r}: {detail}"
+            )
+
+        content = terminal_text or "".join(deltas)
+        return content, session_id, model_id
 
     @staticmethod
     def _build_prompt(system_prompt: str, user_prompt: str) -> str:
