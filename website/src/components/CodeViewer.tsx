@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   oneLight,
@@ -6,6 +6,10 @@ import {
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SourceMapping } from "../utils/dataLoader";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
+import {
+  HIGHLIGHT_LINES_EVENT,
+  type HighlightLinesEventDetail,
+} from "./highlightEvents";
 import "./CodeViewer.css";
 
 // Import language support
@@ -25,6 +29,8 @@ SyntaxHighlighter.registerLanguage('python', python);
 
 const LARGE_FILE_THRESHOLD = 10000000;
 const EXTREMELY_LARGE_FILE_THRESHOLD = 10000000;
+
+const EMPTY_HIGHLIGHTED_LINES: number[] = [];
 
 // Global scroll position storage to persist across re-renders
 const scrollPositionStore = new Map<string, number>();
@@ -173,6 +179,106 @@ const splitIntoLines = (code: string): string[] => {
   return code.split('\n');
 };
 
+interface OverviewRulerProps {
+  viewerId?: string;
+  lineCount: number;
+  startingLineNumber: number;
+  initialHighlightedLines: number[];
+}
+
+/**
+ * A lightweight overview of highlighted logical lines in the full file.
+ * Highlight updates are delivered separately from the code viewer props so
+ * changing a mapping does not re-render a large syntax-highlighted document.
+ */
+const OverviewRuler: React.FC<OverviewRulerProps> = ({
+  viewerId,
+  lineCount,
+  startingLineNumber,
+  initialHighlightedLines,
+}) => {
+  const [eventHighlightedLines, setEventHighlightedLines] = useState<
+    number[] | null
+  >(null);
+  const highlightedLines = eventHighlightedLines ?? initialHighlightedLines;
+
+  useEffect(() => {
+    if (!viewerId) return;
+
+    const handleHighlightLines = (event: Event) => {
+      const detail = (event as CustomEvent<HighlightLinesEventDetail>).detail;
+      if (detail.viewerId === viewerId) {
+        setEventHighlightedLines(detail.lineNumbers);
+      }
+    };
+
+    window.addEventListener(HIGHLIGHT_LINES_EVENT, handleHighlightLines);
+    return () => {
+      window.removeEventListener(HIGHLIGHT_LINES_EVENT, handleHighlightLines);
+    };
+  }, [viewerId]);
+
+  const lastLineNumber = startingLineNumber + lineCount - 1;
+  const visibleMarkers = useMemo(
+    () => Array.from(new Set(highlightedLines))
+      .filter(line => line >= startingLineNumber && line <= lastLineNumber)
+      .sort((a, b) => a - b),
+    [highlightedLines, startingLineNumber, lastLineNumber]
+  );
+
+  const scrollToLine = useCallback((lineNumber: number) => {
+    if (!viewerId) return;
+
+    const container = document.querySelector(
+      `[data-viewer-id="${viewerId}"]`
+    ) as HTMLElement | null;
+    if (!container) return;
+
+    const target = container.querySelector(
+      `[data-line-number="${lineNumber}"]`
+    ) as HTMLElement | null;
+    if (target) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const centeredTop = container.scrollTop + targetRect.top -
+        containerRect.top - container.clientHeight / 2;
+      container.scrollTo({ top: Math.max(0, centeredTop), behavior: "smooth" });
+      return;
+    }
+
+    // A virtualized viewer may not have the requested line in the DOM yet.
+    const fraction = lineCount <= 1
+      ? 0
+      : (lineNumber - startingLineNumber) / (lineCount - 1);
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    container.scrollTo({ top: fraction * maxScrollTop, behavior: "smooth" });
+  }, [viewerId, lineCount, startingLineNumber]);
+
+  if (!viewerId) return null;
+
+  return (
+    <div className="code-overview-ruler" aria-label="Highlighted lines overview">
+      {visibleMarkers.map(lineNumber => {
+        const rawPosition = lineCount <= 1
+          ? 0
+          : ((lineNumber - startingLineNumber) / (lineCount - 1)) * 100;
+        const position = Math.min(98, Math.max(2, rawPosition));
+        return (
+          <button
+            key={lineNumber}
+            type="button"
+            className="code-overview-marker"
+            style={{ top: `${position}%` }}
+            aria-label={`Scroll to highlighted line ${lineNumber}`}
+            title={`Line ${lineNumber}`}
+            onClick={() => scrollToLine(lineNumber)}
+          />
+        );
+      })}
+    </div>
+  );
+};
+
 /**
  * Creates a debounced function that delays invoking func until after wait milliseconds
  * @param func The function to debounce
@@ -205,6 +311,7 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
   initialScrollToLine,
   functionStartLine,
   functionEndLine,
+  startingLineNumber = 1,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lines = splitIntoLines(code);
@@ -266,7 +373,7 @@ const BasicCodeViewer: React.FC<CodeViewerProps> = ({
       }}>
         <code>
           {lines.map((line, index) => {
-            const lineNumber = index + 1;
+            const lineNumber = index + startingLineNumber;
             const isHighlighted = highlightedLines.includes(lineNumber);
 
             // Check if line is in function range
@@ -718,14 +825,34 @@ const CodeViewer: React.FC<CodeViewerProps> = (props) => {
     );
   }
 
-  // Use optimized viewer for large files
+  // Keep the ruler outside the scroll container so it remains visible while
+  // the code moves underneath it.
+  let viewer: React.ReactNode;
   if (props.code.length > EXTREMELY_LARGE_FILE_THRESHOLD) {
-    return <BasicCodeViewer {...props} />;
+    viewer = <BasicCodeViewer {...props} height="100%" />;
   } else if (props.code.length > LARGE_FILE_THRESHOLD) {
-    return <LargeFileViewer {...props} />;
+    viewer = <LargeFileViewer {...props} height="100%" />;
   } else {
-    return <StandardCodeViewer {...props} />;
+    viewer = <StandardCodeViewer {...props} height="100%" />;
   }
+
+  return (
+    <div
+      className="code-viewer-overview-wrapper"
+      style={{ height: props.height || "100%" }}
+    >
+      {viewer}
+      <OverviewRuler
+        key={props.viewerId}
+        viewerId={props.viewerId}
+        lineCount={splitIntoLines(props.code).length}
+        startingLineNumber={props.startingLineNumber || 1}
+        initialHighlightedLines={
+          props.highlightedLines ?? EMPTY_HIGHLIGHTED_LINES
+        }
+      />
+    </div>
+  );
 };
 
 // Use React.memo to prevent unnecessary re-renders

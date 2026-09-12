@@ -4,6 +4,7 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
+import { notifyCodeViewerHighlights } from "./highlightEvents";
 import {
     IRFile,
     IRStageDescriptor,
@@ -173,6 +174,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
 
             // Update ref (does not trigger re-render)
             highlightedLinesRef.current[viewerId] = lineNumbers;
+            notifyCodeViewerHighlights(viewerId, lineNumbers);
 
             // Smart scrolling: only scroll when necessary, only scroll container
             if (lineNumbers.length > 0) {
