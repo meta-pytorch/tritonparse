@@ -7,6 +7,7 @@ import {
 import type { SourceMapping } from "../utils/dataLoader";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
 import {
+  getCodeViewerHighlights,
   HIGHLIGHT_LINES_EVENT,
   type HighlightLinesEventDetail,
 } from "./highlightEvents";
@@ -179,6 +180,15 @@ const splitIntoLines = (code: string): string[] => {
   return code.split('\n');
 };
 
+/** Count logical lines without allocating an array for the full document. */
+const countLines = (code: string): number => {
+  let lineCount = 1;
+  for (let index = 0; index < code.length; index += 1) {
+    if (code.charCodeAt(index) === 10) lineCount += 1;
+  }
+  return lineCount;
+};
+
 interface OverviewRulerProps {
   viewerId?: string;
   lineCount: number;
@@ -199,7 +209,7 @@ const OverviewRuler: React.FC<OverviewRulerProps> = ({
 }) => {
   const [eventHighlightedLines, setEventHighlightedLines] = useState<
     number[] | null
-  >(null);
+  >(() => viewerId ? getCodeViewerHighlights(viewerId) ?? null : null);
   const highlightedLines = eventHighlightedLines ?? initialHighlightedLines;
 
   useEffect(() => {
@@ -785,6 +795,28 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
  * Automatically chooses between standard, optimized, or basic viewer based on code size.
  */
 const CodeViewer: React.FC<CodeViewerProps> = (props) => {
+  const lineCount = useMemo(() => countLines(props.code), [props.code]);
+
+  // Restore retained classes when a viewer (notably the optional Python panel)
+  // mounts after its latest highlight event was published.
+  useEffect(() => {
+    const viewerId = props.viewerId;
+    if (!viewerId) return;
+
+    const frame = requestAnimationFrame(() => {
+      const container = document.querySelector(
+        `[data-viewer-id="${viewerId}"]`
+      );
+      const retainedLines = getCodeViewerHighlights(viewerId);
+      retainedLines?.forEach(lineNumber => {
+        container?.querySelector(`[data-line-number="${lineNumber}"]`)
+          ?.classList.add('highlighted-line');
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [props.viewerId, props.code]);
+
   // Add inline style for highlighted lines to ensure they're visible
   useEffect(() => {
     if (props.highlightedLines && props.highlightedLines.length > 0) {
@@ -845,8 +877,8 @@ const CodeViewer: React.FC<CodeViewerProps> = (props) => {
       <OverviewRuler
         key={props.viewerId}
         viewerId={props.viewerId}
-        lineCount={splitIntoLines(props.code).length}
-        startingLineNumber={props.startingLineNumber || 1}
+        lineCount={lineCount}
+        startingLineNumber={props.startingLineNumber ?? 1}
         initialHighlightedLines={
           props.highlightedLines ?? EMPTY_HIGHLIGHTED_LINES
         }
