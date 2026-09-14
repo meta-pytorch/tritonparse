@@ -19,11 +19,16 @@ SyntaxHighlighter.registerLanguage('c', c);
 SyntaxHighlighter.registerLanguage('python', python);
 /**
  * Thresholds for file size optimization:
- * - LARGE_FILE_THRESHOLD: Files larger than this will use virtualized rendering with syntax highlighting
- * - EXTREMELY_LARGE_FILE_THRESHOLD: Files larger than this will use basic rendering without syntax highlighting
+ * - LARGE_FILE_THRESHOLD: Files larger than this use virtualized rendering
+ *   (only visible lines + buffer are mounted) with syntax highlighting.
+ *   Typical IR files are 200KB-1MB; mounting those as full DOM costs seconds
+ *   (measured), so the cutoff sits well below real IR sizes. Small snippets
+ *   keep the simpler full-DOM StandardCodeViewer.
+ * - EXTREMELY_LARGE_FILE_THRESHOLD: Files larger than this use basic
+ *   rendering without syntax highlighting.
  */
 
-const LARGE_FILE_THRESHOLD = 10000000;
+const LARGE_FILE_THRESHOLD = 100000;
 const EXTREMELY_LARGE_FILE_THRESHOLD = 10000000;
 
 // Global scroll position storage to persist across re-renders
@@ -499,8 +504,11 @@ const LargeFileViewer: React.FC<CodeViewerProps> = ({
             startingLineNumber={lineNumberOffset}
             wrapLines
             lineProps={(lineNumber) => {
-              // Adjust line number based on visible range
-              const actualLine = lineNumber + visibleRange.start;
+              // lineNumber already includes startingLineNumber (verified in
+              // react-syntax-highlighter's highlight.js: lineNumber =
+              // newTree.length + startingLineNumber), so it is the absolute
+              // line number — do NOT add visibleRange.start again.
+              const actualLine = lineNumber;
               const isHighlighted = highlightedLines.includes(actualLine);
 
               // Check if line is in function range

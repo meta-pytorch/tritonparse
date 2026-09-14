@@ -44,6 +44,7 @@ interface MonacoDiffEditor {
   setModel?: (model: unknown) => void;
   dispose?: () => void;
   getDomNode?: () => HTMLElement | undefined;
+  layout?: (dimension?: { width: number; height: number }) => void;
   onDidUpdateDiff?: (callback: () => void) => void;
 }
 
@@ -105,7 +106,11 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
       // keep view lean
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      automaticLayout: true,
+      // No automaticLayout: its ResizeObserver layouts on every size change
+      // including the transition to/from 0x0 when the tab is hidden, which
+      // burned ~5s per tab switch on large models (measured via LoAF). The
+      // effect below lays out only when the container has a real size.
+      automaticLayout: false,
     };
     return opts;
   // Depend on individual fields: callers pass a fresh object literal each
@@ -113,6 +118,29 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
   }, [options?.onlyChanged, options?.context, options?.wordWrap]);
 
   const editorRef = useRef<MonacoDiffEditor | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Manual layout on container resize (replaces automaticLayout): the tab
+  // keep-alive hides this view with display:none, and laying out a 0-size
+  // editor is both useless and expensive, so zero-size notifications are
+  // skipped. Dimensions are passed explicitly from the observed container:
+  // a bare layout() measures Monaco's own root element, which can never
+  // re-grow once it has collapsed (Monaco clamps to a 5px minimum), so
+  // self-measurement leaves a blank 5px-tall editor after un-hiding.
+  // Layout runs synchronously in the observer (which the browser already
+  // throttles to frame boundaries) — never behind rAF, which does not fire
+  // reliably in background/headless pages.
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      try { editorRef.current?.layout?.({ width: rect.width, height: rect.height }); } catch { /* editor may be disposed */ }
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
 
   // Keep both panes in sync when options change
   useEffect(() => {
@@ -187,9 +215,11 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
   return (
     <div className="w-full border border-gray-200 rounded bg-white">
       <div
+        ref={containerRef}
         className="w-full resize-y overflow-auto"
         style={{ height: `${containerHeight}px`, minHeight: 240 }}
-        // Browser native resize-y changes element height; Monaco autoLayout observes size
+        // Browser native resize-y changes element height; the ResizeObserver
+        // effect above relays non-zero sizes to the editor (no autoLayout).
         onMouseUp={() => {
           // Capture final height after drag (optional state sync)
           try {
@@ -239,10 +269,10 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
             setTimeout(() => applyWrap(), 100);
             setTimeout(() => applyWrap(), 300);
 
-            // Re-apply on diff/layout/model changes
+            // Re-apply on diff/model changes. Deliberately NOT on layout
+            // changes: applyWrap itself calls layout(), so a layout listener
+            // would be a feedback loop.
             try { diffEditor.onDidUpdateDiff?.(() => applyWrap()); } catch { /* ignore */ }
-            try { diffEditor.getOriginalEditor?.()?.onDidLayoutChange?.(() => applyWrap()); } catch { /* ignore */ }
-            try { diffEditor.getModifiedEditor?.()?.onDidLayoutChange?.(() => applyWrap()); } catch { /* ignore */ }
             try { diffEditor.getOriginalEditor?.()?.onDidChangeModel?.(() => applyWrap()); } catch { /* ignore */ }
             try { diffEditor.getModifiedEditor?.()?.onDidChangeModel?.(() => applyWrap()); } catch { /* ignore */ }
           } catch {

@@ -48,6 +48,14 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   // Track active tab (overview or code comparison)
   const [activeTab, setActiveTab] = useState<string>(() => initialView === "file_diff" ? "file_diff" : "overview");
+  // Keep-alive: main tabs that have been mounted at least once stay mounted
+  // and are hidden with display:none instead of unmounting. Mounting and
+  // unmounting the Monaco diff editor and the full-DOM code viewers costs
+  // seconds per switch (measured); hiding is free. Only the initial tab is
+  // mounted eagerly; the rest mount on first visit.
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(
+    () => new Set([initialView === "file_diff" ? "file_diff" : "overview"])
+  );
   // Track which IR file is selected for viewing
   const [selectedIR, setSelectedIR] = useState<string | null>(null);
   // Track which kernel is currently selected
@@ -397,6 +405,18 @@ function App() {
     }
   }, [activeTab, sess]);
 
+  // Keep-alive bookkeeping: remember main tabs once visited so they stay
+  // mounted while hidden. Transient states (single-IR, preview, welcome)
+  // keep their exclusive rendering and are unaffected. React's documented
+  // "adjust state during render" pattern (also used in FileDiffView and
+  // TruncatedValue); the guard makes it fire at most once per new tab.
+  if (
+    (activeTab === "overview" || activeTab === "comparison" || activeTab === "file_diff" || activeTab === "ir_analysis") &&
+    !visitedTabs.has(activeTab)
+  ) {
+    setVisitedTabs(new Set(visitedTabs).add(activeTab));
+  }
+
   // Show loading indicator while data is being fetched
   if (loading) {
     return (
@@ -512,44 +532,52 @@ function App() {
         </div>
       );
     } else {
-      // Show either overview, IR code, IR analysis, or file diff based on active tab
-      if (activeTab === "overview") {
-        return (
-          <KernelOverview
-            kernels={kernels}
-            onViewIR={handleViewSingleIR}
-            selectedKernel={selectedKernel}
-            onSelectKernel={handleSelectKernel}
-          />
-        );
-      }
-      if (activeTab === "ir_analysis") {
-        return (
-          <IRAnalysis
-            kernels={kernels}
-            selectedKernel={selectedKernel}
-          />
-        );
-      }
-      if (activeTab === "comparison") {
-        return (
-          <CodeView
-            key={`codeview-main-${selectedKernel}`}
-            kernels={kernels}
-            selectedKernel={selectedKernel}
-          />
-        );
-      }
-      if (activeTab === "file_diff") {
-        return (
-          <FileDiffView
-            kernelsLeft={kernels}
-            selectedLeftIndex={Math.max(0, selectedKernel)}
-            leftLoadedUrl={loadedUrl}
-          />
-        );
-      }
-      return null;
+      // Show either overview, IR code, IR analysis, or file diff based on active tab.
+      // Visited tabs stay mounted and inactive ones are hidden with display:none,
+      // so switching tabs never pays unmount/remount (measured in seconds for
+      // the Monaco diff editor and the full-DOM code viewers). Unvisited tabs
+      // render nothing until first visit.
+      const show = (tab: string) => (activeTab === tab ? undefined : "none");
+      return (
+        <>
+          {visitedTabs.has("overview") && (
+            <div style={{ display: show("overview") }}>
+              <KernelOverview
+                kernels={kernels}
+                onViewIR={handleViewSingleIR}
+                selectedKernel={selectedKernel}
+                onSelectKernel={handleSelectKernel}
+              />
+            </div>
+          )}
+          {visitedTabs.has("ir_analysis") && (
+            <div style={{ display: show("ir_analysis") }}>
+              <IRAnalysis
+                kernels={kernels}
+                selectedKernel={selectedKernel}
+              />
+            </div>
+          )}
+          {visitedTabs.has("comparison") && (
+            <div style={{ display: show("comparison") }}>
+              <CodeView
+                key={`codeview-main-${selectedKernel}`}
+                kernels={kernels}
+                selectedKernel={selectedKernel}
+              />
+            </div>
+          )}
+          {visitedTabs.has("file_diff") && (
+            <div style={{ display: show("file_diff") }}>
+              <FileDiffView
+                kernelsLeft={kernels}
+                selectedLeftIndex={Math.max(0, selectedKernel)}
+                leftLoadedUrl={loadedUrl}
+              />
+            </div>
+          )}
+        </>
+      );
     }
   };
 
