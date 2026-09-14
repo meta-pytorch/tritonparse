@@ -14,6 +14,14 @@ from tritonparse.diff.cli import _add_diff_args, _parse_event_indices, diff_comm
 
 from .test_fixtures import COMP_EVENT_A, COMP_EVENT_B, create_compilation_event
 
+try:
+    import tritonparse.diff.fb.ai.diff_analyzer  # noqa: F401
+
+    HAS_FB_AI_ANALYZER = True
+except ImportError:
+    # tritonparse.diff.fb is fb-only and never synced to OSS/GitHub.
+    HAS_FB_AI_ANALYZER = False
+
 
 class TestDiffCLI(unittest.TestCase):
     """Tests for diff CLI commands."""
@@ -108,6 +116,7 @@ class TestDiffCLI(unittest.TestCase):
         self.assertIsNone(args.ai_model)
         self.assertEqual(args.ai_provider, "claude")
 
+    @unittest.skipUnless(HAS_FB_AI_ANALYZER, "requires fb-only AI diff analyzer")
     @patch("tritonparse.diff.fb.ai.diff_analyzer.AIDiffAnalyzer")
     def test_ai_forwards_provider_and_model(self, mock_analyzer_cls) -> None:
         """Test that ai_model/ai_provider reach AIDiffAnalyzer."""
