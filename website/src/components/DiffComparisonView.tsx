@@ -2,8 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DiffEditor } from "@monaco-editor/react";
 
 interface DiffOptions {
-  ignoreWhitespace?: boolean;
-  wordLevel?: boolean; // kept for future, Monaco uses its own algorithm
   context?: number; // lines of context when hiding unchanged regions
   wordWrap?: "off" | "on";
   onlyChanged?: boolean;
@@ -65,38 +63,44 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
   options,
 }) => {
   const monacoOptions = useMemo(() => {
-    const hideUnchanged = options?.onlyChanged
-      ? {
-          enabled: true,
-          revealLineCount: Math.max(0, options?.context ?? 3),
-        }
-      : undefined;
+    // Always pass a full object: updateOptions({hideUnchangedRegions: undefined})
+    // does not reliably reset a previously enabled value.
+    const hideUnchanged = {
+      enabled: options?.onlyChanged ?? false,
+      revealLineCount: Math.max(0, options?.context ?? 3),
+    };
+    const wrap = options?.wordWrap ?? "on";
+    const wrapping = wrap === "on";
 
     const opts: MonacoEditorOptions = {
       readOnly: true,
       renderSideBySide: true,
       renderOverviewRuler: true,
       renderIndicators: true,
-      // Enable diff-editor level word wrap (VSCode has a separate setting for this)
-      diffWordWrap: "on",
-      wordWrap: options?.wordWrap ?? "on",
+      // Diff-editor level wrap plus both per-side overrides must all follow
+      // the user option, otherwise Wrap=off has no visible effect.
+      diffWordWrap: wrap,
+      wordWrap: wrap,
       // Force both sides to honor wrap regardless of per-side defaults
-      wordWrapOverride1: "on",
-      wordWrapOverride2: "on",
+      wordWrapOverride1: wrap,
+      wordWrapOverride2: wrap,
       wordWrapMinified: true,
       wrappingStrategy: "advanced",
       // Ensure even original (left) honors wrapping consistently
       originalEditable: false,
-      ignoreTrimWhitespace: options?.ignoreWhitespace ?? true,
+      // Always ignore leading/trailing whitespace (the Monaco default):
+      // it is never a meaningful IR difference, so no toggle is offered.
+      ignoreTrimWhitespace: true,
       // Monaco types may vary by version; these options are valid at runtime
       hideUnchangedRegions: hideUnchanged,
       // Prefer advanced algorithm if available
       diffAlgorithm: "advanced",
-      // Hide horizontal scrollbar when wrapping
+      // Only hide the horizontal scrollbar when wrapping; with Wrap=off the
+      // user needs it to reach content past the viewport edge.
       scrollbar: {
         vertical: 'auto',
-        horizontal: 'hidden',
-        horizontalScrollbarSize: 0,
+        horizontal: wrapping ? 'hidden' : 'auto',
+        horizontalScrollbarSize: wrapping ? 0 : 10,
       },
       // keep view lean
       minimap: { enabled: false },
@@ -104,7 +108,9 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
       automaticLayout: true,
     };
     return opts;
-  }, [options]);
+  // Depend on individual fields: callers pass a fresh object literal each
+  // render, and [options] would rebuild (and re-apply) options every time.
+  }, [options?.onlyChanged, options?.context, options?.wordWrap]);
 
   const editorRef = useRef<MonacoDiffEditor | null>(null);
 
@@ -114,9 +120,10 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
     if (!editor) return;
     try {
       const wrap = options?.wordWrap ?? "on";
+      const wrapping = wrap === "on";
       const original = editor.getOriginalEditor?.();
       const modified = editor.getModifiedEditor?.();
-      const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', scrollbar: { horizontal: 'hidden', horizontalScrollbarSize: 0 } };
+      const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', scrollbar: { horizontal: wrapping ? 'hidden' : 'auto', horizontalScrollbarSize: wrapping ? 0 : 10 } };
       original?.updateOptions?.(shared);
       modified?.updateOptions?.(shared);
     } catch { /* Monaco may throw if editor is disposed */ }
@@ -211,9 +218,10 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
             const applyWrap = () => {
               try {
                 const wrap = options?.wordWrap ?? "on";
+                const wrapping = wrap === "on";
                 const original = diffEditor.getOriginalEditor?.();
                 const modified = diffEditor.getModifiedEditor?.();
-                const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', wrappingIndent: 'same', scrollbar: { horizontal: 'hidden', horizontalScrollbarSize: 0 } };
+                const shared = { wordWrap: wrap, wordWrapMinified: true, wrappingStrategy: 'advanced', wrappingIndent: 'same', scrollbar: { horizontal: wrapping ? 'hidden' : 'auto', horizontalScrollbarSize: wrapping ? 0 : 10 } };
                 original?.updateOptions?.(shared);
                 modified?.updateOptions?.(shared);
                 // Force layout after changing wrap
