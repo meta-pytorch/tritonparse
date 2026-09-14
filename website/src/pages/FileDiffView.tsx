@@ -20,8 +20,12 @@ const PARAM_KERNEL_HASH_A = "kernel_hash_a";
 const PARAM_KERNEL_HASH_B = "kernel_hash_b";
 const PARAM_MODE = "mode";
 const PARAM_IR = "ir";
-const PARAM_IGNORE_WS = "ignore_ws";
-const PARAM_WORD_LEVEL = "word_level";
+// NOTE: legacy shared links may still carry ignore_ws=0; it is intentionally
+// no longer read. Leading/trailing whitespace is always ignored now (matching
+// the Monaco default), so the toggle was removed.
+// NOTE: legacy shared links may still carry word_level=1; it is intentionally
+// no longer read. Monaco has no word-vs-line diff mode (intra-line
+// highlighting is always on), so the option was dead.
 const PARAM_CONTEXT = "context";
 const PARAM_WRAP = "wrap";
 const PARAM_ONLY_CHANGED = "only_changed";
@@ -97,12 +101,6 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   );
 
   // Diff options (lazy init from URL params)
-  const [ignoreWs, setIgnoreWs] = useState<boolean>(() =>
-    initialParams.get(PARAM_IGNORE_WS) !== "0"
-  );
-  const [wordLevel, setWordLevel] = useState<boolean>(() =>
-    initialParams.get(PARAM_WORD_LEVEL) === "1"
-  );
   const [contextLines, setContextLines] = useState<number>(() => {
     const ctx = parseInt(initialParams.get(PARAM_CONTEXT) || "");
     return !Number.isNaN(ctx) ? ctx : 3;
@@ -267,15 +265,13 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     if (mode === "single" && effectiveIrType) params.set(PARAM_IR, effectiveIrType);
     else params.delete(PARAM_IR);
     // options
-    params.set(PARAM_IGNORE_WS, ignoreWs ? "1" : "0");
-    params.set(PARAM_WORD_LEVEL, wordLevel ? "1" : "0");
     params.set(PARAM_CONTEXT, String(contextLines));
     params.set(PARAM_WRAP, wordWrap);
     params.set(PARAM_ONLY_CHANGED, onlyChanged ? "1" : "0");
     const newUrl = new URL(window.location.href);
     newUrl.search = params.toString();
     return newUrl.toString();
-  }, [leftArrayResolved, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, ignoreWs, wordLevel, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl]);
+  }, [leftArrayResolved, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl]);
 
   // Update URL on state changes (File Diff owns its params)
   const syncUrl = useCallback(() => {
@@ -328,8 +324,6 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             height="calc(100vh - 14rem)"
             language={effectiveIrType === "python" ? "python" : "plaintext"}
             options={{
-              ignoreWhitespace: ignoreWs,
-              wordLevel,
               context: contextLines,
               wordWrap,
               onlyChanged,
@@ -374,8 +368,6 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
                       height="calc(100vh - 14rem)"
                       language={t === "python" ? "python" : "plaintext"}
                       options={{
-                        ignoreWhitespace: ignoreWs,
-                        wordLevel,
                         context: contextLines,
                         wordWrap,
                         onlyChanged,
@@ -645,20 +637,12 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             <label className="block text-sm font-medium text-gray-700 mb-1">Diff Options</label>
             <div className="flex flex-wrap gap-2">
               <label className="inline-flex items-center gap-1 text-sm">
-                <input type="checkbox" checked={ignoreWs} onChange={(e) => setIgnoreWs(e.target.checked)} />
-                Ignore whitespace
-              </label>
-              <label className="inline-flex items-center gap-1 text-sm">
                 <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
                 Only changes
               </label>
-              <label className="inline-flex items-center gap-1 text-sm">
-                <input type="checkbox" checked={wordLevel} onChange={(e) => setWordLevel(e.target.checked)} />
-                Word-level
-              </label>
-              <label className="inline-flex items-center gap-1 text-sm">
+              <label className={`inline-flex items-center gap-1 text-sm ${onlyChanged ? "" : "opacity-50"}`} title={onlyChanged ? "Unchanged lines shown around each change" : "Enable Only changes to set context lines"}>
                 <span>Context</span>
-                <input type="number" className="w-16 border border-gray-300 rounded px-2 py-1" value={contextLines} onChange={(e) => setContextLines(parseInt(e.target.value) || 0)} />
+                <input type="number" className="w-16 border border-gray-300 rounded px-2 py-1 disabled:bg-gray-100" value={contextLines} disabled={!onlyChanged} onChange={(e) => setContextLines(parseInt(e.target.value) || 0)} />
               </label>
               <label className="inline-flex items-center gap-1 text-sm">
                 <span>Wrap</span>

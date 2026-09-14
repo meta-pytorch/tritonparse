@@ -14,8 +14,6 @@ interface SideState {
 interface DiffOptionsState {
   mode: 'single' | 'all';
   irType: string;
-  ignoreWs: boolean;
-  wordLevel: boolean;
   contextLines: number;
   wordWrap: 'off' | 'on';
   onlyChanged: boolean;
@@ -60,8 +58,6 @@ const defaultSide: SideState = { sourceType: null, url: null, kernels: [], selec
 const defaultOptions: DiffOptionsState = {
   mode: 'single',
   irType: 'ttgir',
-  ignoreWs: true,
-  wordLevel: true,
   contextLines: 3,
   wordWrap: 'on',
   onlyChanged: false,
