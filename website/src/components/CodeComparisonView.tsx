@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Panel, Group, Separator } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
-import { notifyCodeViewerHighlights } from "./highlightEvents";
+import { notifyCodeViewerHighlights, EMPTY_HIGHLIGHTED_LINES } from "./highlightEvents";
 import {
     IRFile,
     IRStageDescriptor,
@@ -549,7 +549,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                             code={leftPanel_data.content}
                             language={leftPanel_data.displayLanguage}
                             height="100%"
-                            highlightedLines={[]}
+                            highlightedLines={EMPTY_HIGHLIGHTED_LINES}
                             onLineClick={handleLeftLineClick}
                             viewerId="left"
                             sourceMapping={leftPanel_data.sourceMapping}
@@ -589,7 +589,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                             code={rightPanel_data.content}
                             language={rightPanel_data.displayLanguage}
                             height="100%"
-                            highlightedLines={[]}
+                            highlightedLines={EMPTY_HIGHLIGHTED_LINES}
                             onLineClick={handleRightLineClick}
                             viewerId="right"
                             sourceMapping={rightPanel_data.sourceMapping}
@@ -634,7 +634,7 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                                     code={pythonInfo.code}
                                     language="python"
                                     height="100%"
-                                    highlightedLines={[]}
+                                    highlightedLines={EMPTY_HIGHLIGHTED_LINES}
                                     onLineClick={handlePythonLineClick}
                                     viewerId="python"
                                     sourceMapping={pythonMapping}

@@ -7,6 +7,8 @@ export interface HighlightLinesEventDetail {
 
 const currentHighlights = new Map<string, number[]>();
 
+export const EMPTY_HIGHLIGHTED_LINES: number[] = [];
+
 export const getCodeViewerHighlights = (
   viewerId: string
 ): number[] | undefined => currentHighlights.get(viewerId);

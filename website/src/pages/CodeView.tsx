@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { ProcessedKernel, getIRType, getDefaultPanels, IRStageDescriptor } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
 import { getDisplayLanguage } from "../utils/irLanguage";
@@ -50,6 +50,56 @@ const CodeViewInner: React.FC<{
   const [showPythonSource, setShowPythonSource] = useState<boolean>(true);
 
   const hasPythonSource = !!kernel?.pythonSourceInfo?.code;
+
+  // Memoized panel descriptors: CodeComparisonView is memo'd, so these must
+  // keep referential identity across unrelated parent renders (e.g. tab
+  // switches). Fresh object literals here re-rendered all viewers and
+  // re-tokenized every row (~6s measured) on each switch.
+  const leftPanel = useMemo(() => ({
+    code: {
+      content: kernel.irFiles[leftIR],
+      source_mapping: kernel.sourceMappings?.[getIRType(leftIR)] || {}
+    },
+    language: mapLanguageToHighlighter(leftIR, kernel?.ir_stages),
+    title: leftIR
+  }), [kernel, leftIR]);
+  const rightPanel = useMemo(() => ({
+    code: {
+      content: kernel.irFiles[rightIR],
+      source_mapping: kernel.sourceMappings?.[getIRType(rightIR)] || {}
+    },
+    language: mapLanguageToHighlighter(rightIR, kernel?.ir_stages),
+    title: rightIR
+  }), [kernel, rightIR]);
+
+  // Deferred mount for large comparisons: syntax highlighting + full-DOM
+  // mount block the main thread for seconds and are synchronous, so a plain
+  // loading flag set in the same commit would never paint. Instead, paint a
+  // placeholder first and mount the heavy view after a short delay. Small
+  // files mount immediately with no placeholder flash. The spinner is a
+  // compositor-driven CSS animation, so it keeps spinning while the main
+  // thread is blocked.
+  const comparisonKey = `${leftIR}\n${rightIR}`;
+  const [mountedKey, setMountedKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (mountedKey === comparisonKey) return;
+    const size =
+      (kernel.irFiles[leftIR]?.length ?? 0) +
+      (kernel.irFiles[rightIR]?.length ?? 0);
+    // Small files mount on the next task with no visible flash; large files
+    // wait for the placeholder to paint first. Deferred via timeout (never
+    // synchronously) so this effect doesn't cascade renders.
+    const timer = setTimeout(
+      () => setMountedKey(comparisonKey),
+      size <= 100000 ? 0 : 50
+    );
+    return () => clearTimeout(timer);
+  }, [comparisonKey, mountedKey, kernel, leftIR, rightIR]);
+  const comparisonReady = mountedKey === comparisonKey;
+  const comparisonKB = Math.round(
+    ((kernel.irFiles[leftIR]?.length ?? 0) +
+      (kernel.irFiles[rightIR]?.length ?? 0)) / 1024
+  );
 
   return (
     <div className="p-6">
@@ -160,30 +210,26 @@ const CodeViewInner: React.FC<{
 
       {/* Side-by-side comparison of selected IR files */}
       {leftIR && rightIR ? (
+        comparisonReady ? (
         <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-auto resize-y min-h-48 shadow-sm border border-gray-200">
           <CodeComparisonView
-            leftPanel={{
-              code: {
-                content: kernel.irFiles[leftIR],
-                source_mapping: kernel.sourceMappings?.[getIRType(leftIR)] || {}
-              },
-              language: mapLanguageToHighlighter(leftIR, kernel?.ir_stages),
-              title: leftIR
-            }}
-            rightPanel={{
-              code: {
-                content: kernel.irFiles[rightIR],
-                source_mapping: kernel.sourceMappings?.[getIRType(rightIR)] || {}
-              },
-              language: mapLanguageToHighlighter(rightIR, kernel?.ir_stages),
-              title: rightIR
-            }}
+            leftPanel={leftPanel}
+            rightPanel={rightPanel}
             py_code_info={kernel.pythonSourceInfo}
             showPythonSource={showPythonSource && hasPythonSource}
             pythonMapping={kernel.sourceMappings?.["python"] || {}}
             irStages={kernel.ir_stages}
           />
         </div>
+        ) : (
+        <div className="h-[calc(100vh-20rem)] bg-white rounded-lg shadow-sm border border-gray-200 flex items-center justify-center">
+          <div className="text-center text-gray-600">
+            <div className="mx-auto mb-3 h-8 w-8 rounded-full border-4 border-gray-200 border-t-blue-600 animate-spin" />
+            <div className="font-medium">Highlighting {comparisonKB} KB of IR — one-time cost</div>
+            <div className="text-sm text-gray-400 mt-1">The view may freeze briefly while large files load</div>
+          </div>
+        </div>
+        )
       ) : (
         <div className="p-8 text-center text-gray-600">
           Select IR files to compare

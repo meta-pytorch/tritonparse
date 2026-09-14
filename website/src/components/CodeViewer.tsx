@@ -7,6 +7,7 @@ import {
 import type { SourceMapping } from "../utils/dataLoader";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
 import {
+  EMPTY_HIGHLIGHTED_LINES,
   getCodeViewerHighlights,
   HIGHLIGHT_LINES_EVENT,
   type HighlightLinesEventDetail,
@@ -24,19 +25,18 @@ SyntaxHighlighter.registerLanguage('c', c);
 SyntaxHighlighter.registerLanguage('python', python);
 /**
  * Thresholds for file size optimization:
- * - LARGE_FILE_THRESHOLD: Files larger than this use virtualized rendering
- *   (only visible lines + buffer are mounted) with syntax highlighting.
- *   Typical IR files are 200KB-1MB; mounting those as full DOM costs seconds
- *   (measured), so the cutoff sits well below real IR sizes. Small snippets
- *   keep the simpler full-DOM StandardCodeViewer.
- * - EXTREMELY_LARGE_FILE_THRESHOLD: Files larger than this use basic
- *   rendering without syntax highlighting.
+ * - LARGE_FILE_THRESHOLD: Files larger than this will use virtualized rendering with syntax highlighting
+ * - EXTREMELY_LARGE_FILE_THRESHOLD: Files larger than this will use basic rendering without syntax highlighting
+ *
+ * NOTE: keep LARGE_FILE_THRESHOLD at 10MB. Highlight clearing and scroll
+ * positioning use direct DOM queries that assume every line is mounted;
+ * virtualizing normal-size IR files breaks both (stale highlight stacking,
+ * janky scrolling). Render-skipping (e.g. content-visibility) is not a safe
+ * substitute either: programmatic far jumps to mapped lines need exact layout.
  */
 
-const LARGE_FILE_THRESHOLD = 100000;
+const LARGE_FILE_THRESHOLD = 10000000;
 const EXTREMELY_LARGE_FILE_THRESHOLD = 10000000;
-
-const EMPTY_HIGHLIGHTED_LINES: number[] = [];
 
 // Global scroll position storage to persist across re-renders
 const scrollPositionStore = new Map<string, number>();
