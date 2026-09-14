@@ -1,9 +1,10 @@
 // (c) Meta Platforms, Inc. and affiliates.
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import CodeViewer from "./CodeViewer";
 import CopyCodeButton from "./CopyCodeButton";
+import { notifyCodeViewerHighlights } from "./highlightEvents";
 import {
     IRFile,
     IRStageDescriptor,
@@ -146,16 +147,22 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         viewerId: 'left' | 'right' | 'python',
         lineNumbers: number[]
     ) => {
+        const oldLines = highlightedLinesRef.current[viewerId];
+
+        // Store and publish the latest mapping even when its viewer is hidden.
+        // A remounted viewer can then initialize from the retained ref value.
+        highlightedLinesRef.current[viewerId] = lineNumbers;
+        notifyCodeViewerHighlights(viewerId, lineNumbers);
+
         // Use requestAnimationFrame to ensure CodeViewer components have rendered
         requestAnimationFrame(() => {
             const container = document.querySelector(`[data-viewer-id="${viewerId}"]`) as HTMLElement;
             if (!container) {
-                // CodeViewer not yet rendered, skip update
+                // The state above is retained for a viewer that mounts later.
                 return;
             }
 
             // Remove old highlights
-            const oldLines = highlightedLinesRef.current[viewerId];
             oldLines.forEach(lineNum => {
                 const element = container.querySelector(
                     `[data-line-number="${lineNum}"]`
@@ -170,9 +177,6 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
                 );
                 element?.classList.add('highlighted-line');
             });
-
-            // Update ref (does not trigger re-render)
-            highlightedLinesRef.current[viewerId] = lineNumbers;
 
             // Smart scrolling: only scroll when necessary, only scroll container
             if (lineNumbers.length > 0) {
@@ -225,6 +229,23 @@ const CodeComparisonView: React.FC<CodeComparisonViewProps> = ({
         function_start_line: py_code_info?.function_start_line,
         function_end_line: py_code_info?.function_end_line,
     }), [py_code_info]);
+
+    // Panel IDs are stable while their documents can change. Clear the retained
+    // mapping whenever the underlying code or mapping changes so a new document
+    // never inherits markers or highlighted lines from the previous one.
+    useEffect(() => {
+        updateHighlights('left', []);
+        updateHighlights('right', []);
+        updateHighlights('python', []);
+    }, [
+        leftPanel_data.content,
+        leftPanel_data.sourceMapping,
+        rightPanel_data.content,
+        rightPanel_data.sourceMapping,
+        pythonInfo.code,
+        pythonMapping,
+        updateHighlights,
+    ]);
 
     // ==================== Pure Utility Functions ====================
 

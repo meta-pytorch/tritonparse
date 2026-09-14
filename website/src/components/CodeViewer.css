@@ -1,3 +1,46 @@
+.code-viewer-overview-wrapper {
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.code-overview-ruler {
+    position: absolute;
+    top: 4px;
+    right: 3px;
+    bottom: 4px;
+    width: 10px;
+    z-index: 10;
+    border-radius: 5px;
+    background: rgba(100, 116, 139, 0.14);
+    box-shadow: inset 0 0 0 1px rgba(100, 116, 139, 0.2);
+    pointer-events: none;
+}
+
+.code-overview-marker {
+    position: absolute;
+    left: 1px;
+    width: 8px;
+    height: 5px;
+    padding: 0;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 2px;
+    background: #f59e0b;
+    box-shadow: 0 0 0 1px rgba(146, 64, 14, 0.45);
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.code-overview-marker:hover,
+.code-overview-marker:focus-visible {
+    left: 0;
+    width: 10px;
+    background: #d97706;
+    outline: 2px solid #2563eb;
+    outline-offset: 1px;
+}
+
 /* Alias name badge */
 .alias-badge {
     display: inline-block;
