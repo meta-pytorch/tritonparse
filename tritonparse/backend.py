@@ -230,9 +230,14 @@ class CompilationPipelineAdapter(ABC):
         self._derived_artifact_registry = DerivedArtifactRegistry()
 
         # Register common parsers (shared across all backends)
-        from tritonparse.parse.ir_parser import _parse_generic_loc, _parse_none
+        from tritonparse.parse.ir_parser import (
+            _parse_generic_loc,
+            _parse_llvm_dbg,
+            _parse_none,
+        )
 
         self.register_backend_parser("generic_loc", _parse_generic_loc)
+        self.register_backend_parser("llvm_dbg", _parse_llvm_dbg)
         self.register_backend_parser("none", _parse_none)
 
         # Register common analyzers (shared across all backends)
@@ -531,7 +536,7 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
                 "ttgir", ".ttgir", "TTGIR", 20, True, True, "generic_loc", "mlir"
             ),
             IRStageDescriptor(
-                "llir", ".llir", "LLIR", 30, True, True, "generic_loc", "llvm"
+                "llir", ".llir", "LLIR", 30, True, True, "llvm_dbg", "llvm"
             ),
             IRStageDescriptor("ptx", ".ptx", "PTX", 40, True, True, "ptx_loc", "ptx"),
             IRStageDescriptor(
@@ -579,7 +584,7 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
                 "ttgir", ".ttgir", "TTGIR", 20, True, True, "generic_loc", "mlir"
             ),
             IRStageDescriptor(
-                "llir", ".llir", "LLIR", 30, True, True, "generic_loc", "llvm"
+                "llir", ".llir", "LLIR", 30, True, True, "llvm_dbg", "llvm"
             ),
             IRStageDescriptor(
                 "amdgcn", ".amdgcn", "AMDGCN", 40, True, True, "amdgcn_loc", "asm"

@@ -5,6 +5,7 @@ import unittest
 
 from tests.test_utils import get_sass_test_file
 from tritonparse.parse.ir_parser import (
+    extract_llvm_dbg_mappings,
     extract_loc_definitions,
     extract_sass_mappings,
     extract_sass_pc_mappings,
@@ -330,6 +331,117 @@ module {
         self.assertEqual(first_mapping["column"], 0)
 
         print("✓ SASS integration tests passed")
+
+
+class TestLLVMDebugMappings(unittest.TestCase):
+    """Tests for LLIR source mapping from LLVM debug metadata.
+
+    LLVM IR carries `!dbg !N` / `!DILocation` instead of MLIR `#loc`, so the
+    generic MLIR parser finds nothing in a .llir file.
+    """
+
+    # Condensed from a real Triton `tl.sum` kernel: `!19` is inside standard.py
+    # and inlined two levels deep into the user's kernel at line 210.
+    LLIR = """\
+define ptx_kernel void @k_reduce(ptr addrspace(1) %0) !dbg !4 {
+  %5 = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x(), !dbg !11
+  %6 = and i32 %5, 127, !dbg !11
+  %7 = fadd float %6, %6, !dbg !19
+  ret void, !dbg !24
+}
+!0 = distinct !DICompileUnit(language: DW_LANG_C, file: !1, producer: "triton")
+!1 = !DIFile(filename: "kernel.py", directory: "/work")
+!4 = distinct !DISubprogram(name: "k_reduce", scope: !1, file: !1, line: 207, unit: !0)
+!11 = !DILocation(line: 208, column: 12, scope: !4)
+!14 = !DILocation(line: 313, column: 12, scope: !15, inlinedAt: !17)
+!15 = distinct !DILexicalBlockFile(scope: !4, file: !16, discriminator: 0)
+!16 = !DIFile(filename: "standard.py", directory: "/lib/triton/language")
+!17 = !DILocation(line: 210, column: 9, scope: !18)
+!18 = distinct !DILexicalBlockFile(scope: !4, file: !1, discriminator: 0)
+!19 = !DILocation(line: 273, column: 12, scope: !15, inlinedAt: !14)
+!24 = !DILocation(line: 214, column: 5, scope: !4)
+"""
+
+    def test_direct_location(self):
+        """A plain !DILocation maps to its own file and line."""
+        m = extract_llvm_dbg_mappings(self.LLIR)
+        # lines 2 and 3 both carry !dbg !11
+        self.assertEqual(m["2"]["line"], 208)
+        self.assertEqual(m["2"]["column"], 12)
+        self.assertEqual(m["2"]["file"], "/work/kernel.py")
+        self.assertEqual(m["2"]["llir_line"], 2)
+        self.assertNotIn("is_callsite", m["2"])
+
+    def test_inlined_location_records_immediate_caller_and_root(self):
+        """callsite_caller is the IMMEDIATE caller, matching the MLIR parser.
+
+        extract_loc_definitions lets a consumer walk an inline chain one frame
+        at a time (a callsite's caller may itself be a callsite). Flattening to
+        the root here would drop the middle frame, so the root is exposed
+        separately via inlined_at_file / inlined_at_line.
+        """
+        m = extract_llvm_dbg_mappings(self.LLIR)
+        e = m["4"]  # the !dbg !19 line, inlined two levels: !19 -> !14 -> !17
+        # callee: where the instruction actually came from
+        self.assertEqual(e["line"], 273)
+        self.assertEqual(e["file"], "/lib/triton/language/standard.py")
+        self.assertTrue(e["is_callsite"])
+        self.assertEqual(e["callsite_callee"], "19")
+        # immediate caller, NOT the root -- !14 is the middle frame
+        self.assertEqual(e["callsite_caller"], "14")
+        # root of the chain, which is the line in the user's kernel
+        self.assertEqual(e["inlined_at_line"], 210)
+        self.assertEqual(e["inlined_at_file"], "/work/kernel.py")
+
+    def test_dbg_on_subprogram_maps_to_def_line(self):
+        """`!dbg !4` on a `define` line points at a DISubprogram, not a location.
+
+        The DISubprogram carries the kernel's file and def line, so map it
+        rather than dropping the line a reader is most likely to click. Mirrors
+        the `kind: "loc_def"` entries extract_loc_definitions emits.
+        """
+        m = extract_llvm_dbg_mappings(self.LLIR)
+        e = m["1"]
+        self.assertEqual(e["kind"], "subprogram")
+        self.assertEqual(e["file"], "/work/kernel.py")
+        self.assertEqual(e["line"], 207)
+        self.assertNotIn("is_callsite", e)
+
+    def test_scope_without_file_walks_up_to_parent(self):
+        """`file:` is optional on DILexicalBlock; the file comes from the parent."""
+        llir = """\
+define void @k() {
+  %1 = add i32 0, 0, !dbg !11
+}
+!1  = !DIFile(filename: "kernel.py", directory: "/work")
+!4  = distinct !DISubprogram(name: "k", scope: !1, file: !1, line: 3, unit: !0)
+!9  = distinct !DILexicalBlock(scope: !4, line: 7, column: 3)
+!11 = !DILocation(line: 8, column: 4, scope: !9)
+"""
+        m = extract_llvm_dbg_mappings(llir)
+        self.assertEqual(m["2"]["file"], "/work/kernel.py")
+        self.assertEqual(m["2"]["line"], 8)
+
+    def test_unresolvable_scope_is_skipped_not_emitted_with_empty_file(self):
+        """An unresolvable scope must drop the entry, not emit file="".
+
+        create_ir_mapping joins on f"{file}:{line}:{column}", so an empty file
+        yields ":8:4" and would false-match any other stage entry that also
+        failed to resolve a file at the same line and column.
+        """
+        llir = """\
+define void @k() {
+  %1 = add i32 0, 0, !dbg !11
+}
+!11 = !DILocation(line: 8, column: 4, scope: !99)
+"""
+        m = extract_llvm_dbg_mappings(llir)
+        self.assertEqual(m, {})
+        self.assertFalse(any(v.get("file") == "" for v in m.values()))
+
+    def test_empty_and_non_llvm_input(self):
+        self.assertEqual(extract_llvm_dbg_mappings(""), {})
+        self.assertEqual(extract_llvm_dbg_mappings("module { %0 = tt.load }"), {})
 
 
 if __name__ == "__main__":

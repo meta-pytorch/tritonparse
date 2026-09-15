@@ -861,5 +861,119 @@ v_add_u32 v1, v2, v3
         self.assertTrue(status["reason"])
 
 
+class TestStageParserContract(unittest.TestCase):
+    """Guards for the bug class that left LLIR silently unmapped.
+
+    LLIR was declared `supports_source_mapping=True` with
+    `parser_id="generic_loc"` -- an MLIR parser -- on both the NVIDIA and AMD
+    adapters. It matched nothing in a .llir file, so the stage advertised a
+    capability it never delivered and nothing failed. These two tests make that
+    shape detectable: the first at declaration time, the second at runtime.
+    """
+
+    # A mappable stage's parser must suit the IR's own syntax. `syntax_id`
+    # already records the format, so a mismatch is visible in the descriptor
+    # without running anything.
+    #
+    # Deliberately EXHAUSTIVE: a mappable stage whose syntax_id is absent here
+    # fails. Leaving it permissive would reproduce the original bug's failure
+    # mode -- a new backend could add a stage with an unrecognised syntax and
+    # the wrong parser, and this test would stay green. Adding a backend
+    # therefore requires one deliberate line below.
+    ALLOWED_PARSERS = {
+        "mlir": {"generic_loc"},
+        "llvm": {"llvm_dbg"},
+        "ptx": {"ptx_loc"},
+        # both are legitimate: NVIDIA SASS and AMD GCN are different assemblies
+        "asm": {"sass_loc", "amdgcn_loc"},
+    }
+
+    def _adapters(self):
+        from tritonparse import backend as backend_mod
+
+        seen = []
+        for name, obj in vars(backend_mod).items():
+            if (
+                isinstance(obj, type)
+                and name.endswith("Adapter")
+                and obj is not backend_mod.CompilationPipelineAdapter
+            ):
+                try:
+                    seen.append((name, obj()))
+                except Exception:  # adapters needing a live backend
+                    continue
+        self.assertTrue(seen, "no adapters discovered")
+        return seen
+
+    def test_parser_id_matches_syntax_id_for_mappable_stages(self):
+        """Catches `generic_loc` on a non-MLIR stage, which is the original bug."""
+        bad = []
+        for adapter_name, adapter in self._adapters():
+            for stage in adapter.list_ir_stages():
+                if not stage.supports_source_mapping:
+                    continue
+                allowed = self.ALLOWED_PARSERS.get(stage.syntax_id)
+                if allowed is None:
+                    bad.append(
+                        f"{adapter_name}.{stage.name}: syntax_id="
+                        f"{stage.syntax_id!r} is not in ALLOWED_PARSERS. Add it "
+                        f"with the parser_id(s) valid for that syntax, so a new "
+                        f"backend cannot ship a mappable stage with a parser "
+                        f"that does not understand its format."
+                    )
+                elif stage.parser_id not in allowed:
+                    bad.append(
+                        f"{adapter_name}.{stage.name}: parser_id="
+                        f"{stage.parser_id!r} but syntax_id={stage.syntax_id!r} "
+                        f"expects one of {sorted(allowed)}"
+                    )
+        self.assertEqual(bad, [], "parser/syntax mismatch on a mappable stage")
+
+    def test_mappable_stages_actually_produce_mappings(self):
+        """A registered parser that silently matches nothing must fail loudly.
+
+        Runs every mappable stage's own parser over the checked-in example
+        trace, which inlines `file_content` for each stage, and requires a
+        non-empty result. Catches a parser that is wired up correctly but does
+        not understand the format it was given.
+        """
+        import json
+
+        log = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "example_output",
+            "logs",
+            "dedicated_log_triton_trace_findhao_.ndjson",
+        )
+        if not os.path.exists(log):
+            self.skipTest("example trace not available")
+
+        adapter = NvidiaTritonAdapter()
+        by_stage = {s.name: s for s in adapter.list_ir_stages()}
+        checked = set()
+        with open(log) as fh:
+            for line in fh:
+                event = json.loads(line)
+                if event.get("event_type") != "compilation":
+                    continue
+                for fname, content in event["payload"]["file_content"].items():
+                    stage = by_stage.get(fname.rsplit(".", 1)[-1])
+                    if stage is None or not stage.supports_source_mapping:
+                        continue
+                    parser = adapter.get_parser(stage.parser_id)
+                    self.assertIsNotNone(
+                        parser, f"{stage.name}: parser {stage.parser_id} missing"
+                    )
+                    result = parser(content, None, stage.name)
+                    self.assertTrue(
+                        result,
+                        f"{stage.name} declares supports_source_mapping=True but "
+                        f"parser {stage.parser_id!r} produced no mappings",
+                    )
+                    checked.add(stage.name)
+        self.assertIn("llir", checked, "llir not exercised by this fixture")
+        self.assertGreaterEqual(len(checked), 3, f"only checked {checked}")
+
+
 if __name__ == "__main__":
     unittest.main()
