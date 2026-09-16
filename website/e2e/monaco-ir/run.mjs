@@ -516,6 +516,43 @@ async function main() {
       await clickLine(1, [1]);
     });
 
+    await step("single wrap toggle round-trip, mapping exact while wrapped", async () => {
+      await selectByKeyboard("on");
+      // State -> React effects -> wrapper updateOptions flush async; poll.
+      await waitForFunction(
+        s,
+        `() => {
+          const D = window.__TRITONPARSE_DEBUG;
+          return D.panels['single-viewer'].editor.getOption(D.monaco.editor.EditorOption.wordWrap) === 'on';
+        }`,
+        { timeoutMs: 10000 }
+      );
+      console.log("  ok wrap option applied");
+      const wrapped = await evaluate(s, `() => {
+        const D = window.__TRITONPARSE_DEBUG;
+        const ed = D.panels['single-viewer'].editor;
+        return {
+          noOverflow: ed.getScrollWidth() <= ed.getLayoutInfo().width,
+          url: window.location.search,
+        };
+      }`);
+      if (!wrapped.noOverflow) throw new Error("horizontal overflow with wrap on");
+      console.log("  ok no horizontal overflow while wrapped");
+      if (!wrapped.url.includes("wrap=on")) throw new Error(`wrap param not persisted: ${wrapped.url}`);
+      console.log("  ok wrap=on persisted in URL");
+      await clickLine(2, [2, 4]);
+      await selectByKeyboard("off");
+      await waitForFunction(
+        s,
+        `() => {
+          const D = window.__TRITONPARSE_DEBUG;
+          return D.panels['single-viewer'].editor.getOption(D.monaco.editor.EditorOption.wordWrap) === 'off';
+        }`,
+        { timeoutMs: 10000 }
+      );
+      console.log("  ok wrap option restored");
+    });
+
     await step("diagnostic warning for dropped lines is visible", async () => {
       const hit = consoleWarnings.find(
         (w) => w.includes("dropped 3 invalid / 1 out-of-range") && w.includes("e2e_kernel.ttgir")
@@ -2209,6 +2246,40 @@ async function main() {
       await clickCmpLine("left", 6);
       await waitCmpSets([6], [4], [460]);
       await shot("e2e-comparison-product.png");
+    });
+
+    await step("comparison wrap toggle round-trip on all panels", async () => {
+      await selectByKeyboard("on");
+      // State -> React effects -> wrapper updateOptions flush async; poll.
+      await waitForFunction(
+        s,
+        `() => {
+          const D = window.__TRITONPARSE_DEBUG;
+          const P = D.panels;
+          const W = D.monaco.editor.EditorOption.wordWrap;
+          return P.left.editor.getOption(W) === 'on' &&
+            P.right.editor.getOption(W) === 'on' &&
+            P.python.editor.getOption(W) === 'on';
+        }`,
+        { timeoutMs: 10000 }
+      );
+      console.log("  ok wrap on all panels");
+      await clickCmpLine("python", 1);
+      await waitCmpSets([6], [4], [459]);
+      await selectByKeyboard("off");
+      await waitForFunction(
+        s,
+        `() => {
+          const D = window.__TRITONPARSE_DEBUG;
+          const P = D.panels;
+          const W = D.monaco.editor.EditorOption.wordWrap;
+          return P.left.editor.getOption(W) === 'off' &&
+            P.right.editor.getOption(W) === 'off' &&
+            P.python.editor.getOption(W) === 'off';
+        }`,
+        { timeoutMs: 10000 }
+      );
+      console.log("  ok wrap off all panels");
     });
 
     await step("IR dropdown switch clears all panels (F5)", async () => {
