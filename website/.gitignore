@@ -1,0 +1,4 @@
+# Committed e2e fixtures are tiny synthetic traces (KB, fixed expectations).
+# The tritonparse root ignores *.ndjson/*.ndjson.gz to keep real (MB/GB)
+# traces out; re-include only this directory (narrow, nothing else leaks in).
+!e2e/monaco-ir/fixtures/*.ndjson
