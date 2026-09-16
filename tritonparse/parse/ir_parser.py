@@ -21,6 +21,46 @@ CODE_LOC_PATTERN = re.compile(r".*loc\(#loc(\d*)\)\s*$")
 # this pattern is used in the first function arguments line.
 DIRECT_FILE_PATTERN = re.compile(r'.*loc\("([^"]+)":(\d+):(\d+)\)')
 
+# LLVM IR debug metadata (LLIR).  Unlike MLIR's `#loc`, LLVM records source
+# locations as `!dbg !N` references into `!N = !DILocation(...)` nodes.
+# Example:
+#   %5 = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x(), !dbg !11
+#   !11 = !DILocation(line: 208, column: 12, scope: !4)
+# `scope` resolves to a DIFile through DISubprogram/DILexicalBlockFile, and
+# `inlinedAt` chains an inlined frame to its call site -- `tl.sum` nests two
+# deep (standard.py -> standard.py -> the user's kernel).
+LLVM_DIFILE_PATTERN = re.compile(
+    r'^!(\d+)\s*=\s*!DIFile\(filename:\s*"([^"]*)",\s*directory:\s*"([^"]*)"',
+    re.MULTILINE,
+)
+LLVM_DISCOPE_PATTERN = re.compile(
+    r"^!(\d+)\s*=\s*(?:distinct\s+)?"
+    r"!DI(?:Subprogram|LexicalBlockFile|LexicalBlock)\(.*?\bfile:\s*!(\d+)",
+    re.MULTILINE,
+)
+# `file:` is optional on DILexicalBlock/DILexicalBlockFile -- such a scope
+# inherits its file from the parent `scope:`, so resolution has to walk up
+# rather than do a single lookup.
+LLVM_DISCOPE_PARENT_PATTERN = re.compile(
+    r"^!(\d+)\s*=\s*(?:distinct\s+)?"
+    r"!DI(?:LexicalBlockFile|LexicalBlock)\(.*?\bscope:\s*!(\d+)",
+    re.MULTILINE,
+)
+# `!dbg` on a `define` line points at the DISubprogram, not a DILocation.
+# It carries the kernel's own file and def line.
+LLVM_DISUBPROGRAM_PATTERN = re.compile(
+    r"^!(\d+)\s*=\s*(?:distinct\s+)?!DISubprogram\((?=.*?\bfile:\s*!(\d+))"
+    r"(?=.*?\bline:\s*(\d+))",
+    re.MULTILINE,
+)
+LLVM_DILOCATION_PATTERN = re.compile(
+    r"^!(\d+)\s*=\s*!DILocation\(line:\s*(\d+)"
+    r"(?:,\s*column:\s*(\d+))?,\s*scope:\s*!(\d+)"
+    r"(?:,\s*inlinedAt:\s*!(\d+))?",
+    re.MULTILINE,
+)
+LLVM_DBG_REF_PATTERN = re.compile(r"!dbg\s+!(\d+)")
+
 # the definition of the PTX loc directive.
 # Example: .loc 1 0 50 // abcdef.py:0:50
 PTX_LOC_PATTERN = re.compile(
@@ -358,6 +398,164 @@ def extract_sass_pc_mappings(sass_content: str) -> Dict[int, Dict[str, Any]]:
     return mappings
 
 
+def extract_llvm_dbg_mappings(llir_content: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Extract source mappings from LLVM IR debug metadata.
+
+    LLVM IR does not use MLIR's ``#loc`` directives, so ``extract_loc_definitions``
+    finds nothing in a ``.llir`` file.  Locations live in metadata instead::
+
+        %5 = ... , !dbg !11
+        !11 = !DILocation(line: 208, column: 12, scope: !4)
+        !4  = distinct !DISubprogram(name: "k_reduce", file: !1, ...)
+        !1  = !DIFile(filename: "kernel.py", directory: "/path")
+
+    ``inlinedAt`` marks a location inside an inlined callee and points at the
+    call site.  Following tritonparse's existing callsite convention (see
+    ``extract_loc_definitions``), the entry's ``file``/``line`` describe the
+    **callee** -- the code actually emitted -- ``callsite_caller`` is the
+    *immediate* caller so the chain can be walked one frame at a time, and
+    ``inlined_at_file``/``inlined_at_line`` give the root of the chain, which
+    is the line in the user's kernel.
+
+    NOTE: nothing consumes ``inlined_at_*`` yet.  ``create_python_mapping``
+    keys purely on ``info["line"]``, so an inlined LLIR line currently lands on
+    the library file and does not reach the user's kernel in the UI -- the same
+    behaviour TTIR/TTGIR already have.  Closing that gap means emitting
+    ``inlined_at_*`` from the MLIR and SASS paths too and teaching
+    ``create_python_mapping`` to prefer it; doing it for LLIR alone would make
+    LLIR behave differently from every other stage.  Deliberately left as a
+    separate change -- not an oversight.  A follow-up extends ``inlined_at_*``
+    to the MLIR and SASS paths and teaches ``create_python_mapping`` to prefer
+    it, which closes the gap for every stage at once.
+
+    Args:
+        llir_content: The contents of the ``.llir`` file.
+
+    Returns:
+        Dictionary mapping LLIR line numbers (as strings) to source locations.
+    """
+    if not llir_content:
+        return {}
+
+    files = {
+        m.group(1): os.path.join(m.group(3), m.group(2))
+        for m in LLVM_DIFILE_PATTERN.finditer(llir_content)
+    }
+    scope_to_file = {
+        m.group(1): m.group(2) for m in LLVM_DISCOPE_PATTERN.finditer(llir_content)
+    }
+    scope_to_parent = {
+        m.group(1): m.group(2)
+        for m in LLVM_DISCOPE_PARENT_PATTERN.finditer(llir_content)
+    }
+    subprograms = {
+        m.group(1): {"file": m.group(2), "line": int(m.group(3))}
+        for m in LLVM_DISUBPROGRAM_PATTERN.finditer(llir_content)
+    }
+    locations = {
+        m.group(1): {
+            "line": int(m.group(2)),
+            "column": int(m.group(3) or 0),
+            "scope": m.group(4),
+            "inlined_at": m.group(5),
+        }
+        for m in LLVM_DILOCATION_PATTERN.finditer(llir_content)
+    }
+    if not locations:
+        logger.debug("No !DILocation metadata found in LLIR")
+        return {}
+    logger.debug(f"Found {len(locations)} !DILocation nodes")
+
+    def file_of_scope(scope_id: Optional[str]) -> Optional[str]:
+        """Resolve a scope to a file, walking up `scope:` when `file:` is absent."""
+        seen = set()
+        while scope_id is not None and scope_id not in seen:
+            seen.add(scope_id)
+            file_id = scope_to_file.get(scope_id)
+            if file_id is not None and file_id in files:
+                return files[file_id]
+            scope_id = scope_to_parent.get(scope_id)
+        return None
+
+    def file_of(loc: Dict[str, Any]) -> Optional[str]:
+        return file_of_scope(loc["scope"])
+
+    def root_of(loc_id: str):
+        """Walk `inlinedAt` to the outermost call site (the user's kernel)."""
+        cur = locations.get(loc_id)
+        cur_id = loc_id
+        depth = 0
+        while cur and cur["inlined_at"] and depth < 32:
+            nxt = locations.get(cur["inlined_at"])
+            if nxt is None:
+                break
+            cur_id, cur, depth = cur["inlined_at"], nxt, depth + 1
+        return cur_id, cur
+
+    mappings: Dict[str, Dict[str, Any]] = {}
+    for lineno, text in enumerate(llir_content.split("\n"), 1):
+        m = LLVM_DBG_REF_PATTERN.search(text)
+        if not m:
+            continue
+        loc_id = m.group(1)
+        loc = locations.get(loc_id)
+        if loc is None:
+            # `!dbg` on a `define` line points at the DISubprogram rather than a
+            # DILocation.  Map it to the kernel's def line, mirroring the
+            # `kind: "loc_def"` entries extract_loc_definitions emits.
+            sub = subprograms.get(loc_id)
+            if sub is None:
+                continue
+            sub_file = files.get(sub["file"])
+            if sub_file is None:
+                continue
+            mappings[str(lineno)] = {
+                "file": sub_file,
+                "line": sub["line"],
+                "column": 0,
+                "llir_line": lineno,
+                "kind": "subprogram",
+            }
+            continue
+
+        loc_file = file_of(loc)
+        if loc_file is None:
+            # The cross-stage join key is f"{file}:{line}:{column}"
+            # (parse/mapper.py::create_ir_mapping), so emitting file="" here
+            # would produce ":line:col" and false-match any other stage entry
+            # that also failed to resolve.  Drop the entry instead.
+            logger.debug(
+                f"LLIR line {lineno}: scope !{loc['scope']} resolves to no DIFile; "
+                "skipping"
+            )
+            continue
+
+        entry = {
+            "file": loc_file,
+            "line": loc["line"],
+            "column": loc["column"],
+            "llir_line": lineno,
+        }
+        if loc["inlined_at"]:
+            _, root = root_of(loc_id)
+            entry["is_callsite"] = True
+            entry["callsite_callee"] = loc_id
+            # The IMMEDIATE caller, matching extract_loc_definitions, where a
+            # callsite's caller may itself be a callsite so consumers can walk
+            # the chain one frame at a time.  The root is below.
+            entry["callsite_caller"] = loc["inlined_at"]
+            if root is not None:
+                root_file = file_of(root)
+                if root_file is not None:
+                    entry["inlined_at_file"] = root_file
+                    entry["inlined_at_line"] = root["line"]
+        mappings[str(lineno)] = entry
+
+    logger.debug(f"Mapped {len(mappings)} LLIR lines from debug metadata")
+    return mappings
+
+
 def extract_code_locations(ir_content: str) -> Dict[int, str]:
     """
     Extracts code location mappings from the given IR content.
@@ -606,6 +804,26 @@ def _parse_generic_loc(
             mappings[str(def_ln)] = entry
 
     return mappings
+
+
+def _parse_llvm_dbg(
+    ir_content: str,
+    other_mappings: Optional[List[Any]] = None,
+    ir_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Parser for LLVM IR (LLIR), which carries source locations in debug metadata
+    rather than MLIR ``#loc`` directives.
+
+    Args:
+        ir_content: The LLIR content
+        other_mappings: Other mappings (not used; LLVM DIFile nodes are absolute)
+        ir_type: The IR type (not used, kept for signature consistency)
+
+    Returns:
+        Dictionary mapping line numbers to source locations
+    """
+    return extract_llvm_dbg_mappings(ir_content)
 
 
 def _parse_ptx_loc(
