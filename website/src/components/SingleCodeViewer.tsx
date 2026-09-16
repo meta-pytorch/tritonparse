@@ -1,7 +1,6 @@
-import React, { useState } from "react";
-import CodeViewer from "./CodeViewer";
+import React from "react";
 import SingleMonacoViewer from "./SingleMonacoViewer";
-import { IRFile, IRStageDescriptor, getGroupingAnchor } from "../utils/dataLoader";
+import { IRFile, IRStageDescriptor } from "../utils/dataLoader";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import CopyCodeButton from "./CopyCodeButton";
 import { ArrowLeftIcon } from "./icons";
@@ -13,7 +12,6 @@ interface SingleCodeViewerProps {
   irFile?: IRFile; // IR file object containing content and source mappings
   irContent?: string; // Direct code content as string (alternative to irFile)
   title: string; // Title to display for the code view
-  language?: string; // Language for syntax highlighting
   onBack: () => void; // Callback function when back button is clicked
   irStages?: IRStageDescriptor[];
   sourceId?: string; // Stable data-source identity for the doc token
@@ -28,64 +26,14 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
   irFile,
   irContent,
   title,
-  language = "plaintext",
   onBack,
   irStages,
   sourceId,
   kernelId,
 }) => {
-  // Track highlighted lines for self-referential mapping
-  const [highlightedLines, setHighlightedLines] = useState<number[]>([]);
-
   // Determine content to display (either from direct content or from IRFile)
   const codeContent = irContent || (irFile ? irFile.content : "");
   const displayLanguage = getDisplayLanguage(title, irStages);
-
-  // Get source mapping if available
-  const sourceMapping = irFile?.source_mapping;
-
-  /**
-   * Handle line click within a single file view
-   * Can be used to highlight related lines within the same file
-   */
-  const handleLineClick = (lineNumber: number) => {
-    setHighlightedLines([lineNumber]);
-
-    if (sourceMapping) {
-      const lineKey = lineNumber.toString();
-      const clickedMapping = sourceMapping[lineKey] as Record<string, unknown> | undefined;
-      const anchorStage = getGroupingAnchor(irStages);
-      const anchorProperty = `${anchorStage}_line`;
-
-      if (clickedMapping && clickedMapping[anchorProperty] != null) {
-        const anchorValue = clickedMapping[anchorProperty];
-        const relatedLines = Object.entries(sourceMapping)
-          .filter(
-            ([key, mapping]) =>
-              (mapping as Record<string, unknown>)[anchorProperty] === anchorValue &&
-              parseInt(lineKey, 10) !== parseInt(key, 10)
-          )
-          .map(([line]) => parseInt(line, 10));
-
-        if (relatedLines.length > 0) {
-          setHighlightedLines([lineNumber, ...relatedLines]);
-        }
-      }
-    }
-  };
-
-  /**
-   * Handle finding mapped lines
-   */
-  const handleMappedLinesFound = (mappedLines: number[]) => {
-    if (mappedLines.length > 0) {
-      setHighlightedLines(prev => {
-        // Filter out any duplicates
-        const combined = [...prev, ...mappedLines];
-        return Array.from(new Set(combined));
-      });
-    }
-  };
 
   return (
     <div className="p-6">
@@ -121,29 +69,14 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
         </div>
         {/* Code content area with fixed height */}
         <div className="h-[calc(100vh-12rem)]">
-          {new URLSearchParams(window.location.search).get("renderer") !== "prism" ? (
-            <SingleMonacoViewer
-              irFile={irFile}
-              irContent={irContent}
-              title={title}
-              irStages={irStages}
-              sourceId={sourceId}
-              kernelId={kernelId}
-            />
-          ) : (
-            <CodeViewer
-              code={codeContent}
-              language={language}
-              height="100%"
-              theme="light"
-              fontSize={16}
-              highlightedLines={highlightedLines}
-              onLineClick={handleLineClick}
-              sourceMapping={sourceMapping}
-              onMappedLinesFound={handleMappedLinesFound}
-              viewerId="single-viewer"
-            />
-          )}
+          <SingleMonacoViewer
+            irFile={irFile}
+            irContent={irContent}
+            title={title}
+            irStages={irStages}
+            sourceId={sourceId}
+            kernelId={kernelId}
+          />
         </div>
       </div>
     </div>
