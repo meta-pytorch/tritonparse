@@ -64,11 +64,17 @@ export interface MonacoCodePanelProps {
   onLineClick?: (absoluteLine: number) => void;
   /** Fired once the editor instance is ready (rulers use it to scroll). */
   onMount?: (viewerId: string, editor: IStandaloneCodeEditor) => void;
+  /**
+   * Optional read-only identity string exposed on the debug panel entry
+   * (I013.2). The owner passes its doc identity (e.g. Single's kernelKey)
+   * so e2e can assert identity behavior; tests only read it.
+   */
+  debugIdentity?: string;
 }
 
 interface DebugPanels {
   __TRITONPARSE_DEBUG?: {
-    panels?: Record<string, { editor: IStandaloneCodeEditor; getHighlights: () => number[] }>;
+    panels?: Record<string, { editor: IStandaloneCodeEditor; getHighlights: () => number[]; identity?: string }>;
   };
 }
 
@@ -85,6 +91,7 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
   fontSize = 14,
   onLineClick,
   onMount,
+  debugIdentity,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Ready chain (R1): onMount must setEditor (state, not just a ref) so the
@@ -412,6 +419,7 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
     w.__TRITONPARSE_DEBUG.panels[viewerId] = {
       editor,
       getHighlights: () => linesRef.current,
+      ...(debugIdentity !== undefined ? { identity: debugIdentity } : {}),
     };
     return () => {
       const panels = (window as unknown as DebugPanels).__TRITONPARSE_DEBUG?.panels;
@@ -419,7 +427,7 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
         delete panels[viewerId];
       }
     };
-  }, [editor, viewerId]);
+  }, [editor, viewerId, debugIdentity]);
 
   return (
     <div
