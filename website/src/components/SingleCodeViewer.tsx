@@ -16,6 +16,8 @@ interface SingleCodeViewerProps {
   language?: string; // Language for syntax highlighting
   onBack: () => void; // Callback function when back button is clicked
   irStages?: IRStageDescriptor[];
+  sourceId?: string; // Stable data-source identity for the doc token
+  kernelId?: string | number; // Kernel hash or index within the source
 }
 
 /**

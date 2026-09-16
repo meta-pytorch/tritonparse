@@ -1,12 +1,13 @@
 /**
- * Single IR view on the Monaco panel (design §4.9, Phase 0 spike).
+ * Single IR view on the Monaco panel (design §4.9, Phase 3 formal wiring).
  *
  * Owns the Single highlight truth source as { doc, lines } (§4.2.1): the doc
- * token covers file/content/mapping/stages identity, the parent guards every
- * render (mismatch => []), and a doc change clears the truth source so stale
- * highlights can neither render nor reveal on the new document (F18).
- * Click mapping reuses the anchor-grouping semantics; output always flows
- * through normalizeHighlightLines before setHighlights (§4.4.1).
+ * token covers a source-qualified kernelKey plus file/content/mapping/stages
+ * identity, the parent guards every render (mismatch => []), and a doc change
+ * clears the truth source so stale highlights can neither render nor reveal
+ * on the new document (F18). Click mapping reuses the anchor-grouping
+ * semantics; output always flows through normalizeHighlightLines before
+ * setHighlights (§4.4.1).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MonacoCodePanel from "./MonacoCodePanel";
@@ -24,6 +25,7 @@ import {
   type PanelDiagnostics,
   type PanelHighlight,
 } from "./monaco/highlightMath";
+import { buildKernelKey } from "./monaco/comparisonMapping";
 
 interface SingleMonacoViewerProps {
   irFile?: IRFile;
@@ -31,6 +33,10 @@ interface SingleMonacoViewerProps {
   /** Filename: doubles as doc identity and language source (no App change). */
   title: string;
   irStages?: IRStageDescriptor[];
+  /** Stable data-source identity; falls back for direct-content usage. */
+  sourceId?: string;
+  /** Kernel hash or index within the source; never a global identity. */
+  kernelId?: string | number;
 }
 
 const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
@@ -38,20 +44,29 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
   irContent,
   title,
   irStages,
+  sourceId,
+  kernelId,
 }) => {
   const codeContent = irContent || (irFile ? irFile.content : "");
   const sourceMapping = irFile?.source_mapping;
   const monacoLanguage = mapFileToMonacoLanguage(title, irStages);
 
-  // Single renders one kernel of one loaded trace: token deps are file /
-  // mapping / stages / content references. The comparison view additionally
-  // folds a source-qualified kernelKey in (Phase 2, §4.2.1).
-  // Deps are identity inputs, intentionally unread: any reference change
-  // rebuilds the token. The token stays opaque (no fields, no retention).
+  // Source-qualified kernel identity (§4.2.1/R4): the hash/index only
+  // identifies a kernel within one source. Same construction as comparison.
+  const kernelKey = useMemo(
+    () => buildKernelKey(sourceId ?? "local-data", kernelId ?? title),
+    [sourceId, kernelId, title]
+  );
+
+  // Single renders one kernel of one loaded trace: token deps are the
+  // source-qualified kernelKey plus file / mapping / stages / content
+  // references. Deps are identity inputs, intentionally unread: any
+  // reference change rebuilds the token. The token stays opaque (no
+  // fields, no retention).
   const currentDoc: DocToken = useMemo(
     () => ({}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [title, sourceMapping, irStages, codeContent]
+    [kernelKey, title, sourceMapping, irStages, codeContent]
   );
 
   const [highlight, setHighlight] = useState<PanelHighlight>(() => ({
