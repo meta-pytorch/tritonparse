@@ -391,7 +391,7 @@ async function main() {
     }
 
     const appUrl =
-      `${args.baseUrl}/?json_url=${encodeURIComponent(fixtureUrl)}&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?json_url=${encodeURIComponent(fixtureUrl)}&debug=1`;
     await step("load fixture trace", async () => {
       await s.send("Page.navigate", { url: appUrl });
       await waitForFunction(
@@ -466,6 +466,88 @@ async function main() {
       await shot("e2e-single-llir.png");
     });
 
+    // ---- Single same-mount identity (F18 source/stability, Phase 3) ----
+    // Sibling trace: same filenames, different content/mappings/hash, kernel
+    // index 0 like single-basic (F18 counterexample-2 shape: same index,
+    // different source must not inherit highlights).
+    const singleBUrl = `http://127.0.0.1:${fixturePort}/single-basic-b.ndjson`;
+
+    async function singleIdentityState() {
+      return evaluate(s, `() => {
+        const p = window.__TRITONPARSE_DEBUG.panels['single-viewer'];
+        const ruler = document.querySelector('[data-testid="overview-ruler"]');
+        return {
+          editorId: p.editor.getId(),
+          head: p.editor.getModel().getValue().split("\\n")[0],
+          highlights: p.getHighlights(),
+          decorations: p.editor.getModel().getAllDecorations()
+            .filter((d) => d.options.className === "mp-highlighted-line")
+            .map((d) => [d.range.startLineNumber, d.range.endLineNumber]),
+          markers: ruler ? ruler.querySelectorAll('[data-testid^="overview-marker-"]').length : -1,
+          badge: document.querySelector('[data-testid="mp-diagnostics-badge"]')?.textContent.trim() ?? null,
+        };
+      }`);
+    }
+
+    await step("same-mount rerender retains single highlights (F18 stability)", async () => {
+      // Back on llir from the previous step; reopen ttgir and highlight.
+      await clickText("button", "Back");
+      await waitForFunction(
+        s,
+        `() => [...document.querySelectorAll('h3')].some((h) => h.textContent.trim() === 'e2e_kernel.ttgir')`,
+        { timeoutMs: 30000 }
+      );
+      await clickText("h3", "e2e_kernel.ttgir");
+      await waitForFunction(
+        s,
+        `() => !!window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor`,
+        { timeoutMs: 60000 }
+      );
+      await clickLine(2, [2, 4]);
+      const before = await singleIdentityState();
+      // Toggle the Load-from-URL input twice: App-level state flips force a
+      // same-mount rerender of Single with an unchanged document.
+      await clickText("button", "Load from URL");
+      await waitForFunction(s, `() => !!document.querySelector('input[type="url"]')`, { timeoutMs: 10000 });
+      await clickText("button", "Load from URL");
+      await waitForFunction(s, `() => !document.querySelector('input[type="url"]')`, { timeoutMs: 10000 });
+      const st = await singleIdentityState();
+      assertEqual(st.editorId, before.editorId, "same editor across rerenders");
+      assertEqual(st.highlights, before.highlights, "highlights retained across rerenders");
+      assertEqual(st.decorations, before.decorations, "decorations retained across rerenders");
+      assertEqual(st.markers, before.markers, "markers retained across rerenders");
+    });
+
+    await step("source switch loads new doc with no stale highlights (F18 source)", async () => {
+      // Still on ttgir single with [2,4] highlighted. Load the sibling trace
+      // through the real header flow (the loading gate remounts Single, so
+      // this locks the end state, not the token path; same-mount stability
+      // is covered by the previous step).
+      await clickText("button", "Load from URL");
+      await waitForFunction(s, `() => !!document.querySelector('input[type="url"]')`, { timeoutMs: 10000 });
+      const box = await rectOf('input[type="url"]');
+      await mouseClick(s, box.x, box.y);
+      await typeText(s, singleBUrl);
+      await clickText("button", "Load");
+      await waitForFunction(
+        s,
+        `() => {
+          const p = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer'];
+          if (!p) return false;
+          return p.editor.getModel().getValue().startsWith("// TRACE-B") &&
+            p.getHighlights().length === 0 ? true : false;
+        }`,
+        { timeoutMs: 60000 }
+      );
+      const st = await singleIdentityState();
+      if (!st.head.startsWith("// TRACE-B")) throw new Error(`sibling content not showing: ${st.head.slice(0, 60)}`);
+      assertEqual(st.highlights, [], "no stale highlights after source switch");
+      assertEqual(st.decorations, [], "no stale decorations after source switch");
+      assertEqual(st.markers, 0, "no stale markers after source switch");
+      assertEqual(st.badge, null, "no stale badge after source switch");
+      await shot("e2e-single-source-switch.png");
+    });
+
     await step("back removes debug hook (F10)", async () => {
       await clickText("button", "Back");
       await waitForFunction(
@@ -479,7 +561,7 @@ async function main() {
     // ---- Single ruler suite (F14/F20): 6001-line overflow set ----
     const rulerFixtureUrl = `http://127.0.0.1:${fixturePort}/ruler-6001.ndjson`;
     const rulerUrl =
-      `${args.baseUrl}/?json_url=${encodeURIComponent(rulerFixtureUrl)}&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?json_url=${encodeURIComponent(rulerFixtureUrl)}&debug=1`;
 
     const singleState = () =>
       evaluate(s, `() => {
@@ -738,6 +820,9 @@ async function main() {
       `${args.baseUrl}/?view=file_diff&json_url=${encodeURIComponent(fixtureUrl)}` +
       `&json_b_url=${encodeURIComponent(fixtureBUrl)}&ir=ttgir&wrap=on&debug=1`;
 
+    // File Diff models are pathless DiffEditor models (inmemory://...), while
+    // comparison/single panels use file:///tritonparse/... URIs. Phase 3
+    // keeps comparison monaco-mounted, so filediff counts scope to inmemory.
     const filediffState = () =>
       evaluate(s, `() => {
         const D = window.__TRITONPARSE_DEBUG;
@@ -745,7 +830,7 @@ async function main() {
         const E = D.monaco.editor.EditorOption;
         const o = de.getOriginalEditor(), m = de.getModifiedEditor();
         return {
-          models: D.getModels(),
+          models: D.getModels().filter((u) => u.startsWith("inmemory://")),
           origH: o.getLayoutInfo().height, modH: m.getLayoutInfo().height,
           origW: o.getLayoutInfo().width,
           origWrap: o.getOption(E.wrappingInfo).isViewportWrapping,
@@ -761,7 +846,7 @@ async function main() {
         `() => {
           const D = window.__TRITONPARSE_DEBUG;
           if (!D?.panels?.filediff?.diffEditor) return false;
-          if (D.getModels().length !== 2) return false;
+          if (D.getModels().filter((u) => u.startsWith("inmemory://")).length !== 2) return false;
           const label = [...document.querySelectorAll('div')].find((d) => d.textContent.startsWith('IR Type:'));
           return label && label.textContent.includes(${JSON.stringify(ir)}) ? true : false;
         }`,
@@ -1186,7 +1271,18 @@ async function main() {
         `() => new URLSearchParams(window.location.search).get('view') === 'ir_code_comparison'`,
         { timeoutMs: 30000 }
       );
-      await waitCounts(0, 0);
+      // Phase 3: comparison mounts monaco by default, so the assertion is
+      // filediff-scoped (diff widgets gone + no inmemory:// filediff models)
+      // instead of global zero.
+      await waitForFunction(
+        s,
+        `() => {
+          const D = window.__TRITONPARSE_DEBUG;
+          const fdModels = D.getModels().filter((u) => u.startsWith("inmemory://")).length;
+          return fdModels === 0 && D.monaco.editor.getDiffEditors().length === 0 ? true : false;
+        }`,
+        { timeoutMs: 60000 }
+      );
       if (consoleErrors.length !== errorsBefore) {
         throw new Error(`console errors on preview unmount: ${JSON.stringify(consoleErrors.slice(errorsBefore))}`);
       }
@@ -1217,7 +1313,7 @@ async function main() {
 
     // ---- Comparison fixture suite (Phase 2): F1/F2/F3/F4/F6/F7/F13/F15/F18/F19 ----
     const cmpFixtureUrl =
-      `${args.baseUrl}/?view=comparison_fixture&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?view=comparison_fixture&debug=1`;
 
     const cmpState = () =>
       evaluate(s, `() => {
@@ -1781,7 +1877,39 @@ async function main() {
     // ---- Comparison product suite (Phase 2): trace pipeline + tabs ----
     const cmpFixtureTrace = `http://127.0.0.1:${fixturePort}/comparison-basic.ndjson`;
     const cmpProductUrl =
-      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(cmpFixtureTrace)}&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(cmpFixtureTrace)}&debug=1`;
+
+    // Phase 3: monaco is the default branch. This step trips loudly if the
+    // default is misconfigured back to prism (no forced flag anywhere).
+    await step("default URL renders monaco comparison without renderer flag", async () => {
+      await s.send("Page.navigate", { url: cmpProductUrl });
+      await waitCmpEditors();
+      const branch = await evaluate(s, `() => ({
+        monacoRows: document.querySelectorAll(".view-lines .view-line").length,
+        legacyRows: document.querySelectorAll("[data-line-number]").length,
+      })`);
+      if (!(branch.monacoRows > 0 && branch.legacyRows === 0)) {
+        throw new Error(`default branch is not monaco: ${JSON.stringify(branch)}`);
+      }
+      console.log(`  ok default branch monaco rows=${branch.monacoRows}, legacy rows=0`);
+    });
+
+    await step("prism escape hatch still renders legacy comparison", async () => {
+      await s.send("Page.navigate", { url: `${cmpProductUrl}&renderer=prism` });
+      await waitForFunction(
+        s,
+        `() => document.querySelectorAll("[data-line-number]").length > 100 ? true : false`,
+        { timeoutMs: 60000 }
+      );
+      const branch = await evaluate(s, `() => ({
+        panels: Object.keys(window.__TRITONPARSE_DEBUG?.panels ?? {}).length,
+        legacyRows: document.querySelectorAll("[data-line-number]").length,
+      })`);
+      if (!(branch.panels === 0 && branch.legacyRows > 100)) {
+        throw new Error(`prism escape did not render legacy: ${JSON.stringify(branch)}`);
+      }
+      console.log(`  ok prism escape legacy rows=${branch.legacyRows}, monaco panels=0`);
+    });
 
     await step("product comparison mounts from trace, click maps all panels (F1)", async () => {
       await s.send("Page.navigate", { url: cmpProductUrl });
@@ -2027,7 +2155,7 @@ async function main() {
     // ---- Comparison invalid python values (I008/F19): real trace pipeline --
     const invFixtureTrace = `http://127.0.0.1:${fixturePort}/comparison-invalid.ndjson`;
     const invProductUrl =
-      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(invFixtureTrace)}&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(invFixtureTrace)}&debug=1`;
 
     await step("invalid python values never forge highlights, badge visible (I008/F19)", async () => {
       await s.send("Page.navigate", { url: invProductUrl });
@@ -2078,10 +2206,10 @@ async function main() {
     // omitted lacks source_mappings.python, explicit-empty sets it to {}).
     const omitTrace = `http://127.0.0.1:${fixturePort}/comparison-omitted-python.ndjson`;
     const omitUrl =
-      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(omitTrace)}&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(omitTrace)}&debug=1`;
     const emptyTrace = `http://127.0.0.1:${fixturePort}/comparison-empty-python.ndjson`;
     const emptyUrl =
-      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(emptyTrace)}&renderer=monaco&debug=1`;
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(emptyTrace)}&debug=1`;
 
     const waitTwoPanels = () =>
       waitForFunction(
