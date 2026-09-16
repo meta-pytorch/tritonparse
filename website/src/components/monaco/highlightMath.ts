@@ -17,6 +17,29 @@ export interface HighlightDoc {
   lineCount: number;
 }
 
+/**
+ * Opaque document token (§4.2.1): reference equality means same document.
+ * Constructed by the parent with useMemo over the identity inputs; never
+ * compared by field, never hashed.
+ */
+export type DocToken = object;
+
+/** One panel's highlight truth entry: normalized absolute lines + its doc. */
+export interface PanelHighlight {
+  doc: DocToken;
+  lines: number[];
+}
+
+/** Normalizer diagnostics attached to the same doc as the highlight entry. */
+export interface PanelDiagnostics {
+  doc: DocToken;
+  droppedInvalid: number;
+  droppedOutOfRange: number;
+}
+
+/** Initial entry token: distinct from every real doc so the guard yields []. */
+export const EMPTY_DOC: DocToken = {};
+
 export interface NormalizedLines {
   /** Legal set: finite integers, in range, deduplicated, ascending. */
   lines: number[];
