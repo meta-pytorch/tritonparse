@@ -241,7 +241,10 @@ function killProcAndCleanTmp(proc, userDataDir) {
 }
 
 function rendererParam(renderer) {
-  return renderer === "monaco" ? "&renderer=monaco" : "";
+  // Phase 3: monaco is the default; legacy comparison/single are reachable
+  // only via the explicit prism escape hatch. Monaco legs keep the explicit
+  // flag (calibrated method); legacy legs must pass renderer=prism.
+  return renderer === "monaco" ? "&renderer=monaco" : "&renderer=prism";
 }
 
 function summarize(samples) {
