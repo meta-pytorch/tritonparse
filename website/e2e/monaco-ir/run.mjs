@@ -2073,6 +2073,121 @@ async function main() {
       assertEqual(st.badges.python, null, "no badge for 460");
     });
 
+    // ---- Omitted python mapping keeps tab highlights (I012) ----
+    // Fixtures adapted from the Codex round-8 repro (12-line dual IR;
+    // omitted lacks source_mappings.python, explicit-empty sets it to {}).
+    const omitTrace = `http://127.0.0.1:${fixturePort}/comparison-omitted-python.ndjson`;
+    const omitUrl =
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(omitTrace)}&renderer=monaco&debug=1`;
+    const emptyTrace = `http://127.0.0.1:${fixturePort}/comparison-empty-python.ndjson`;
+    const emptyUrl =
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(emptyTrace)}&renderer=monaco&debug=1`;
+
+    const waitTwoPanels = () =>
+      waitForFunction(
+        s,
+        `() => {
+          const P = window.__TRITONPARSE_DEBUG?.panels;
+          return P?.left?.editor && P?.right?.editor && !P?.python ? true : false;
+        }`,
+        { timeoutMs: 60000 }
+      );
+
+    async function waitTwoSets(left, right) {
+      await waitForFunction(
+        s,
+        `() => {
+          const P = window.__TRITONPARSE_DEBUG.panels;
+          const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+          return eq(P.left.getHighlights(), ${JSON.stringify(left)}) &&
+            eq(P.right.getHighlights(), ${JSON.stringify(right)}) ? true : false;
+        }`,
+        { timeoutMs: 15000 }
+      );
+    }
+
+    async function tabCycle() {
+      await clickText("button", "Kernel Overview");
+      // Visited tabs stay mounted with display:none, so the overview text is
+      // in the DOM forever after the first visit: require the overview's own
+      // heading to be VISIBLE, not merely present.
+      await waitForFunction(s, `() => [...document.querySelectorAll('h2')].some((h) => h.textContent.trim().startsWith('Kernel Details') && h.getBoundingClientRect().height > 0)`, { timeoutMs: 30000 });
+      await clickText("button", "IR Code");
+      await waitTwoPanels();
+    }
+
+    function assertTwoRetained(before, st, label) {
+      assertEqual(
+        [st.panels.left.highlights, st.panels.right.highlights],
+        [before.panels.left.highlights, before.panels.right.highlights],
+        `highlights retained ${label}`
+      );
+      assertEqual(
+        [st.panels.left.decorations, st.panels.right.decorations],
+        [before.panels.left.decorations, before.panels.right.decorations],
+        `decorations retained ${label}`
+      );
+      assertEqual(
+        [st.markers.left, st.markers.right],
+        [before.markers.left, before.markers.right],
+        `ruler markers retained ${label}`
+      );
+      assertEqual(
+        [st.panels.left.editorId, st.panels.right.editorId],
+        [before.panels.left.editorId, before.panels.right.editorId],
+        `editors retained ${label}`
+      );
+      assertEqual(
+        [st.panels.left.modelUri, st.panels.right.modelUri],
+        [before.panels.left.modelUri, before.panels.right.modelUri],
+        `models retained ${label}`
+      );
+      assertEqual(
+        [st.panels.left.scrollTop, st.panels.right.scrollTop],
+        [before.panels.left.scrollTop, before.panels.right.scrollTop],
+        `scroll retained ${label}`
+      );
+    }
+
+    await step("omitted python mapping keeps tab highlights (I012)", async () => {
+      await s.send("Page.navigate", { url: omitUrl });
+      await waitTwoPanels();
+      for (const line of [2, 3]) {
+        await clickCmpLine("right", line);
+        await waitTwoSets([], [line]);
+        const before = await cmpState();
+        assertEqual(before.panels.right.decorations, [[line, line]], `right decorations line ${line}`);
+        assertEqual(before.markers.right, 1, `right ruler marker line ${line}`);
+        await tabCycle();
+        const st = await cmpState();
+        assertTwoRetained(before, st, `omitted line ${line}`);
+      }
+      await shot("e2e-comparison-omitted-python.png");
+    });
+
+    await step("explicit empty python mapping control (I012)", async () => {
+      await s.send("Page.navigate", { url: emptyUrl });
+      await waitTwoPanels();
+      await clickCmpLine("right", 2);
+      await waitTwoSets([], [2]);
+      const before = await cmpState();
+      await tabCycle();
+      const st = await cmpState();
+      assertTwoRetained(before, st, "explicit-empty line 2");
+    });
+
+    await step("real IR switch still clears highlights (I012/F18)", async () => {
+      await selectByKeyboard("cmp_kernel.ttgir");
+      await waitTwoSets([], []);
+      const st = await cmpState();
+      assertEqual(
+        [st.panels.left.decorations, st.panels.right.decorations],
+        [[], []],
+        "decorations cleared after real switch"
+      );
+      assertEqual([st.markers.left, st.markers.right], [0, 0], "markers cleared after real switch");
+    });
+
     await step("no console errors across all suites (F10/F17)", async () => {
       if (consoleErrors.length > 0) {
         throw new Error(`console errors: ${JSON.stringify(consoleErrors)}`);
