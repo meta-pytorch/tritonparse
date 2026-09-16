@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test:unit": "node --test \"e2e/monaco-ir/unit/*.test.ts\"",
     "test:e2e-monaco": "node e2e/monaco-ir/run.mjs",
+    "test:perf": "node e2e/monaco-ir/perf.mjs",
     "test:worker": "node e2e/monaco-ir/worker-probe.mjs"
   },
   "dependencies": {
