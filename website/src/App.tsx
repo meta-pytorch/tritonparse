@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import "./App.css";
 import {
   loadLogData,
@@ -13,6 +13,7 @@ import CodeView from "./pages/CodeView";
 import FileDiffView from "./pages/FileDiffView";
 import SingleCodeViewer from "./components/SingleCodeViewer";
 import ComparisonFixture from "./components/ComparisonFixture";
+import SingleFixture from "./components/SingleFixture";
 import KernelOverview from "./pages/KernelOverview";
 import IRAnalysis from "./pages/IRAnalysis";
 import DataSourceSelector from "./components/DataSourceSelector";
@@ -67,6 +68,20 @@ function App() {
   const [showWelcome, setShowWelcome] = useState<boolean>(() => !initialJsonUrl && initialView !== "file_diff");
   // Track the loaded data source URL
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  // Stable identity of the currently loaded data source (§4.2.1/R4): set
+  // once per completed load, reused across ordinary rerenders. Shape
+  // `<kind>:<locator>#<loadSeq>` — never derived from the page URL slot, so
+  // two local files, URL->local switches, and repeated URL loads each get a
+  // distinct identity (I013). Only load-completion handlers bump the
+  // sequence; render never mints IDs. The pre-load sentinel "no-source" is
+  // exempt from the shape: nothing parses this string (buildKernelKey only
+  // JSON-wraps it).
+  const [sourceIdentity, setSourceIdentity] = useState<string>("no-source");
+  const loadSeqRef = useRef(0);
+  const nextSourceIdentity = useCallback((kind: string, locator: string) => {
+    loadSeqRef.current += 1;
+    return `${kind}:${locator}#${loadSeqRef.current}`;
+  }, []);
   // Track if URL input is shown
   const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
 
@@ -89,6 +104,7 @@ function App() {
         setDataLoaded(true);
         setShowWelcome(false); // Hide welcome screen when data is loaded
         setLoadedUrl(null); // Data came from iframe, not URL
+        setSourceIdentity(nextSourceIdentity("iframe", "parent-window"));
       } else {
         setError("No kernels found in the received data.");
       }
@@ -99,7 +115,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [nextSourceIdentity]);
 
   // Set up iframe messaging for communication with parent window
   useIframeMessaging({
@@ -139,6 +155,7 @@ function App() {
       setDataLoaded(true);
       setShowWelcome(false);
       setLoadedUrl(url);
+      setSourceIdentity(nextSourceIdentity("url", url));
 
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.set("json_url", url);
@@ -160,7 +177,7 @@ function App() {
       console.warn("No kernels found in the URL data");
       setError("No kernels found in the URL data. Please check the file format.");
     }
-  }, []);
+  }, [nextSourceIdentity]);
 
   /**
    * Handles loading data from a custom URL (user-triggered, wraps with loading/error state)
@@ -211,6 +228,7 @@ function App() {
           setDataLoaded(true);
           setShowWelcome(false);
           setLoadedUrl(initialJsonUrl);
+          setSourceIdentity(nextSourceIdentity("url", initialJsonUrl));
 
           const newUrl = new URL(window.location.href);
           newUrl.searchParams.set("json_url", initialJsonUrl);
@@ -289,6 +307,13 @@ function App() {
 
         setDataLoaded(true);
         setShowWelcome(false);
+        // Covers bundled-example URL strings and local File objects; the
+        // page URL slot is intentionally not read here (I013).
+        setSourceIdentity(
+          typeof source === "string"
+            ? nextSourceIdentity("url", source)
+            : nextSourceIdentity("local", source.name)
+        );
       } else {
         console.warn("No kernels found in the processed data");
         const errorMsg = typeof source === 'string'
@@ -425,6 +450,13 @@ function App() {
     return <ComparisonFixture />;
   }
 
+  // Committed e2e fixture page (Phase 3, I013): mounts the real Single
+  // viewer with synthetic props and swap buttons. Only reachable through
+  // the explicit ?view=single_fixture URL; normal flows never render it.
+  if (initialParams.get("view") === "single_fixture") {
+    return <SingleFixture />;
+  }
+
   // Show loading indicator while data is being fetched
   if (loading) {
     return (
@@ -469,10 +501,7 @@ function App() {
           language={mapLanguageToHighlighter(selectedIR, kernel?.ir_stages)}
           onBack={handleBackFromIRView}
           irStages={kernel?.ir_stages}
-          sourceId={
-            new URLSearchParams(window.location.search).get("json_url") ??
-            "local-data"
-          }
+          sourceId={sourceIdentity}
           kernelId={kernel.metadata?.hash ?? selectedKernel}
         />
       );
@@ -577,6 +606,7 @@ function App() {
                 key={`codeview-main-${selectedKernel}`}
                 kernels={kernels}
                 selectedKernel={selectedKernel}
+                sourceId={sourceIdentity}
               />
             </div>
           )}
