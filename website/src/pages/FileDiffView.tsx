@@ -293,14 +293,13 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     return () => clearTimeout(id);
   }, [syncUrl]);
 
-  // When navigating away, temporarily hide diff editors to avoid Monaco dispose race
-  const [hideDiff, setHideDiff] = useState<boolean>(false);
-  const resetKey = `${mode}-${effectiveIrType}-${leftIdx}-${rightIdx}`;
-  const [prevResetKey, setPrevResetKey] = useState(resetKey);
-  if (resetKey !== prevResetKey) {
-    setPrevResetKey(resetKey);
-    setHideDiff(false);
-  }
+  // NOTE: an earlier revision hid the diff editors on preview navigation
+  // ("hideDiff") to dodge the Monaco dispose race. That race is fixed at its
+  // root (detach-then-dispose in DiffComparisonView), and tab switches never
+  // unmount this view (App keep-alive hides with display:none), so the extra
+  // unmount was pure cost — and the flag was never restored when the reset
+  // key was unchanged, leaving a blank diff after a preview round-trip.
+  // The preview buttons below navigate directly; nothing unmounts.
 
   const renderSingle = () => {
     const leftContent = getContentByIRType(leftKernel, effectiveIrType);
@@ -316,20 +315,18 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
             {missingRight && <span>Right: Not available</span>}
           </div>
         </div>
-        {!hideDiff && (
-          <DiffComparisonView
-            key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
-            leftContent={leftContent}
-            rightContent={rightContent}
-            height="calc(100vh - 14rem)"
-            language={effectiveIrType === "python" ? "python" : "plaintext"}
-            options={{
-              context: contextLines,
-              wordWrap,
-              onlyChanged,
-            }}
-          />
-        )}
+        <DiffComparisonView
+          key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
+          leftContent={leftContent}
+          rightContent={rightContent}
+          height="calc(100vh - 14rem)"
+          language={effectiveIrType === "python" ? "python" : "plaintext"}
+          options={{
+            context: contextLines,
+            wordWrap,
+            onlyChanged,
+          }}
+        />
       </div>
     );
   };
@@ -360,20 +357,18 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               </button>
               {isOpen && (
                 <div className="px-2 pb-2">
-                  {!hideDiff && (
-                    <DiffComparisonView
-                      key={`all-${t}-${leftIdx}-${rightIdx}`}
-                      leftContent={leftContent}
-                      rightContent={rightContent}
-                      height="calc(100vh - 14rem)"
-                      language={t === "python" ? "python" : "plaintext"}
-                      options={{
-                        context: contextLines,
-                        wordWrap,
-                        onlyChanged,
-                      }}
-                    />
-                  )}
+                  <DiffComparisonView
+                    key={`all-${t}-${leftIdx}-${rightIdx}`}
+                    leftContent={leftContent}
+                    rightContent={rightContent}
+                    height="calc(100vh - 14rem)"
+                    language={t === "python" ? "python" : "plaintext"}
+                    options={{
+                      context: contextLines,
+                      wordWrap,
+                      onlyChanged,
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -508,14 +503,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               <button
                 className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
                 disabled={leftArrayResolved.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoOverview('left'), 0); }}
+                onClick={() => { setTimeout(() => sess.gotoOverview('left'), 0); }}
               >
                 Left → Kernel Overview
               </button>
               <button
                 className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
                 disabled={leftArrayResolved.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoIRCode('left'), 0); }}
+                onClick={() => { setTimeout(() => sess.gotoIRCode('left'), 0); }}
               >
                 Left → IR Code
               </button>
@@ -562,14 +557,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
               <button
                 className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
                 disabled={kernelsRight.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoOverview('right'), 0); }}
+                onClick={() => { setTimeout(() => sess.gotoOverview('right'), 0); }}
               >
                 Right → Kernel Overview
               </button>
               <button
                 className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded border"
                 disabled={kernelsRight.length === 0}
-                onClick={() => { setHideDiff(true); setTimeout(() => sess.gotoIRCode('right'), 0); }}
+                onClick={() => { setTimeout(() => sess.gotoIRCode('right'), 0); }}
               >
                 Right → IR Code
               </button>
