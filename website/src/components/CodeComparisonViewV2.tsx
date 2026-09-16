@@ -114,6 +114,9 @@ interface PythonInfo {
 
 type PanelId = "left" | "right" | "python";
 
+/** Scroll-tip auto-hide delay (module scope: fixed constant, not per-render state). */
+const SCROLL_TIP_DURATION_MS = 6000;
+
 /**
  * Normalize one panel's raw mapping candidates and report diagnostics.
  * The single normalized output drives decorations, ruler, reveal and the
@@ -532,7 +535,12 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
     irStages
   );
 
-  // ==================== Scroll Tip State ====================
+  // ==================== Scroll Tip Toast ====================
+  // Overlay toast: auto-hides after a few seconds without taking layout
+  // space. Fixed positioning never fires the panel ResizeObserver, so the
+  // reveal animation is unaffected (unlike the old in-flow banner).
+  // Auto-hide does not persist: the tip teaches again on the next visit;
+  // only a manual dismiss persists.
 
   const [showScrollTip, setShowScrollTip] = useState(() => {
     if (typeof window !== "undefined") {
@@ -541,12 +549,21 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
     return true;
   });
 
-  const handleDismissScrollTip = useCallback(() => {
+  const handleDismissScrollTip = useCallback((persist: boolean) => {
     setShowScrollTip(false);
-    if (typeof window !== "undefined") {
+    if (persist && typeof window !== "undefined") {
       localStorage.setItem("tritonparse_hideScrollTip", "true");
     }
   }, []);
+
+  useEffect(() => {
+    if (!showScrollTip) return;
+    const timer = window.setTimeout(
+      () => handleDismissScrollTip(false),
+      SCROLL_TIP_DURATION_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [showScrollTip, handleDismissScrollTip]);
 
   // ==================== Render ====================
 
@@ -572,16 +589,25 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {showScrollTip && (
         <div
+          data-testid="scroll-tip-toast"
+          role="status"
           style={{
+            position: "fixed",
+            top: "12px",
+            left: "50%",
+            transform: "translateX(-50%)",
             backgroundColor: "#e7f3ff",
-            borderBottom: "1px solid #b3d7ff",
-            padding: "6px 16px",
+            border: "1px solid #b3d7ff",
+            borderRadius: "8px",
+            boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
+            padding: "8px 16px",
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
+            gap: "12px",
             fontSize: "13px",
             color: "#0066cc",
-            flexShrink: 0,
+            zIndex: 100,
+            maxWidth: "90vw",
           }}
         >
           <span>
@@ -603,7 +629,8 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
             + Mouse Wheel to scroll horizontally.
           </span>
           <button
-            onClick={handleDismissScrollTip}
+            data-testid="scroll-tip-dismiss"
+            onClick={() => handleDismissScrollTip(true)}
             style={{
               background: "none",
               border: "none",
@@ -611,6 +638,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
               fontSize: "16px",
               color: "#666",
               padding: "0 4px",
+              flexShrink: 0,
             }}
             title="Dismiss tip"
             aria-label="Dismiss tip"

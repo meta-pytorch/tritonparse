@@ -174,6 +174,12 @@ async function main() {
     const s = await connectPageTarget(pageTarget);
     await s.send("Page.enable");
     await s.send("Runtime.enable");
+    // Hide the scroll-tip toast for deterministic screenshots: every suite
+    // below runs with the tip dismissed; the dedicated toast step near the
+    // end removes this script and verifies auto-dismiss on fresh pages.
+    const { identifier: tipPreseedId } = await s.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `try { localStorage.setItem('tritonparse_hideScrollTip', 'true'); } catch {}`,
+    });
     s.on("Runtime.consoleAPICalled", (p) => {
       const text = (p.args ?? []).map((a) => a.value ?? a.description ?? "").join(" ");
       if (p.type === "error") consoleErrors.push(text.slice(0, 300));
@@ -2642,6 +2648,53 @@ async function main() {
         "decorations cleared after real switch"
       );
       assertEqual([st.markers.left, st.markers.right], [0, 0], "markers cleared after real switch");
+    });
+
+    await step("scroll tip toast auto-hides, manual dismiss persists", async () => {
+      await s.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: tipPreseedId });
+      // The preseed set the flag on earlier same-origin navigations; clear
+      // it so this fresh load behaves like a first visit.
+      await evaluate(s, `() => localStorage.removeItem('tritonparse_hideScrollTip')`);
+      await s.send("Page.navigate", { url: cmpProductUrl });
+      await waitCmpEditors();
+      await waitForFunction(
+        s,
+        `() => {
+          const el = document.querySelector('[data-testid="scroll-tip-toast"]');
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 ? true : false;
+        }`,
+        { timeoutMs: 10000 }
+      );
+      console.log("  ok toast shown on fresh page");
+      await shot("e2e-toast-visible.png");
+      // Auto-hide without persistence: gone after the timeout, and a fresh
+      // load shows it again.
+      await waitForFunction(
+        s,
+        `() => !document.querySelector('[data-testid="scroll-tip-toast"]') ? true : false`,
+        { timeoutMs: 15000 }
+      );
+      console.log("  ok toast auto-hidden");
+      await s.send("Page.navigate", { url: cmpProductUrl });
+      await waitCmpEditors();
+      await waitForFunction(
+        s,
+        `() => !!document.querySelector('[data-testid="scroll-tip-toast"]') ? true : false`,
+        { timeoutMs: 10000 }
+      );
+      console.log("  ok toast shown again (auto-hide not persisted)");
+      // Manual dismiss persists.
+      const dismiss = await rectOf('[data-testid="scroll-tip-dismiss"]');
+      await mouseClick(s, dismiss.x, dismiss.y);
+      await waitForFunction(
+        s,
+        `() => !document.querySelector('[data-testid="scroll-tip-toast"]') ? true : false`,
+        { timeoutMs: 10000 }
+      );
+      const persisted = await evaluate(s, `() => localStorage.getItem('tritonparse_hideScrollTip')`);
+      assertEqual(persisted, "true", "manual dismiss persisted");
     });
 
     await step("no console errors across all suites (F10/F17)", async () => {
