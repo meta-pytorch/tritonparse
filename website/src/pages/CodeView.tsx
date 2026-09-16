@@ -12,6 +12,8 @@ import { ArrowsRightLeftIcon } from "../components/icons";
 interface CodeViewProps {
   kernels: ProcessedKernel[]; // Array of processed kernel data
   selectedKernel?: number; // Index of the currently selected kernel
+  /** Actual load-source identity; main path passes App state (I013). */
+  sourceId?: string;
 }
 
 /**
@@ -41,7 +43,8 @@ const CodeViewInner: React.FC<{
   irFiles: string[];
   defaultIRFiles: { left: string; right: string };
   selectedKernel: number;
-}> = ({ kernel, irFiles, defaultIRFiles, selectedKernel }) => {
+  sourceId?: string;
+}> = ({ kernel, irFiles, defaultIRFiles, selectedKernel, sourceId }) => {
   // States to track selected IR files for left and right panels
   // Initialize with defaults - component remounts when kernel changes
   const [leftIR, setLeftIR] = useState<string>(defaultIRFiles.left);
@@ -191,7 +194,12 @@ const CodeViewInner: React.FC<{
               showPythonSource={showPythonSource && hasPythonSource}
               pythonMapping={kernel.sourceMappings?.["python"]}
               irStages={kernel.ir_stages}
+              // Main path passes the actual load-source identity (I013);
+              // the File Diff preview call site passes nothing and keeps the
+              // legacy page-param derivation (documented boundary: preview
+              // data comes from the File Diff session, not the main load).
               sourceId={
+                sourceId ??
                 new URLSearchParams(window.location.search).get("json_url") ??
                 "local-data"
               }
@@ -221,7 +229,7 @@ const CodeViewInner: React.FC<{
  * CodeView component that shows a side-by-side comparison of different IR files
  * from the same kernel (typically TTGIR and PTX)
  */
-const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
+const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0, sourceId }) => {
   // Compute derived values (may be undefined if no valid kernel)
   const kernel = kernels && kernels.length > 0 && selectedKernel >= 0
     ? kernels[selectedKernel]
@@ -275,6 +283,7 @@ const CodeView: React.FC<CodeViewProps> = ({ kernels, selectedKernel = 0 }) => {
       irFiles={irFiles}
       defaultIRFiles={defaultIRFiles}
       selectedKernel={selectedKernel}
+      sourceId={sourceId}
     />
   );
 };
