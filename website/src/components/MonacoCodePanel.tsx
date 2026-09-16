@@ -44,6 +44,19 @@ export interface MonacoCodePanelProps {
   entryDoc: object;
   /** Current document token (reveal-once judgement + assertion). */
   docToken: object;
+  /**
+   * Absolute [start, end] function range (inclusive), already intersected
+   * with the document by the parent (§4.4.1). Undefined/empty => no range
+   * decorations. Only the comparison python panel passes this (§4.5).
+   */
+  functionRange?: { start: number; end: number };
+  /**
+   * Absolute first-positioning target, consumed once per docToken (§4.10):
+   * skipped when a same-token highlight is present (highlight reveal wins)
+   * or the user already scrolled. Only the comparison python panel passes
+   * this (full-file => function_start_line, snippet => start_line).
+   */
+  initialLine?: number;
   /** Editor font size. Default 14. */
   fontSize?: number;
   /** Fired with the absolute line number on text click (§4.3). */

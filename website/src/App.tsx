@@ -12,6 +12,7 @@ import { useIframeMessaging } from "./hooks/useIframeMessaging";
 import CodeView from "./pages/CodeView";
 import FileDiffView from "./pages/FileDiffView";
 import SingleCodeViewer from "./components/SingleCodeViewer";
+import ComparisonFixture from "./components/ComparisonFixture";
 import KernelOverview from "./pages/KernelOverview";
 import IRAnalysis from "./pages/IRAnalysis";
 import DataSourceSelector from "./components/DataSourceSelector";
@@ -415,6 +416,13 @@ function App() {
     !visitedTabs.has(activeTab)
   ) {
     setVisitedTabs(new Set(visitedTabs).add(activeTab));
+  }
+
+  // Committed e2e fixture page (Phase 2): mounts the real comparison V2
+  // with synthetic props and swap buttons. Only reachable through the
+  // explicit ?view=comparison_fixture URL; normal flows never render it.
+  if (initialParams.get("view") === "comparison_fixture") {
+    return <ComparisonFixture />;
   }
 
   // Show loading indicator while data is being fetched
