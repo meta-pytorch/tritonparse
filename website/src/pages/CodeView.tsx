@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { ProcessedKernel, getIRType, getDefaultPanels, IRStageDescriptor } from "../utils/dataLoader";
 import CodeComparisonView from "../components/CodeComparisonView";
+import CodeComparisonViewV2 from "../components/CodeComparisonViewV2";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
 import { ArrowsRightLeftIcon } from "../components/icons";
@@ -212,14 +213,30 @@ const CodeViewInner: React.FC<{
       {leftIR && rightIR ? (
         comparisonReady ? (
         <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-auto resize-y min-h-48 shadow-sm border border-gray-200">
-          <CodeComparisonView
-            leftPanel={leftPanel}
-            rightPanel={rightPanel}
-            py_code_info={kernel.pythonSourceInfo}
-            showPythonSource={showPythonSource && hasPythonSource}
-            pythonMapping={kernel.sourceMappings?.["python"] || {}}
-            irStages={kernel.ir_stages}
-          />
+          {new URLSearchParams(window.location.search).get("renderer") === "monaco" ? (
+            <CodeComparisonViewV2
+              leftPanel={leftPanel}
+              rightPanel={rightPanel}
+              py_code_info={kernel.pythonSourceInfo}
+              showPythonSource={showPythonSource && hasPythonSource}
+              pythonMapping={kernel.sourceMappings?.["python"] || {}}
+              irStages={kernel.ir_stages}
+              sourceId={
+                new URLSearchParams(window.location.search).get("json_url") ??
+                "local-data"
+              }
+              kernelId={kernel.metadata?.hash ?? selectedKernel}
+            />
+          ) : (
+            <CodeComparisonView
+              leftPanel={leftPanel}
+              rightPanel={rightPanel}
+              py_code_info={kernel.pythonSourceInfo}
+              showPythonSource={showPythonSource && hasPythonSource}
+              pythonMapping={kernel.sourceMappings?.["python"] || {}}
+              irStages={kernel.ir_stages}
+            />
+          )}
         </div>
         ) : (
         <div className="h-[calc(100vh-20rem)] bg-white rounded-lg shadow-sm border border-gray-200 flex items-center justify-center">
