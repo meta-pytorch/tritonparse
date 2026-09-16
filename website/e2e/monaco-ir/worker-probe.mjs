@@ -442,7 +442,18 @@ async function main() {
     await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length > 0`, { timeoutMs: 15000 });
     console.log("  ok only-changes hides rows");
     // I005: the codicon font must load (data URI on standalone delivery).
-    await waitForFunction(s, `() => document.fonts.check('16px codicon') ? true : false`, { timeoutMs: 30000 });
+    // I007: check() alone can pass from fallback coverage; also verify a
+    // registered FontFace with family codicon reached status loaded.
+    await waitForFunction(s, `() => {
+      try {
+        if (!document.fonts.check('16px codicon')) return false;
+        for (const face of document.fonts) {
+          const family = String(face.family || "").replace(/["']/g, "");
+          if (family === "codicon" && face.status === "loaded") return true;
+        }
+        return false;
+      } catch { return false; }
+    }`, { timeoutMs: 30000 });
     console.log("  ok codicon font loaded");
     await clickText("label", "Only changes");
     await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length === 0`, { timeoutMs: 15000 });
