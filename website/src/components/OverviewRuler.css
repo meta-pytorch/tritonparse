@@ -1,49 +1,26 @@
-/* Standalone overview ruler (moved from CodeViewer.css, pixel-identical:
-   absolute overlay strip inside the relative wrapper). */
+/* Standalone overview ruler (§4.8/R9): the strip owns its own 14px flex
+   column beside the editor instead of overlaying it, so it can neither
+   cover the native overview ruler/scrollbar nor intercept their pointer
+   events. */
 
 .code-overview-ruler {
-    position: absolute;
-    top: 4px;
-    right: 3px;
-    bottom: 4px;
-    width: 10px;
-    z-index: 10;
-    border-radius: 5px;
-    background: rgba(100, 116, 139, 0.14);
-    box-shadow: inset 0 0 0 1px rgba(100, 116, 139, 0.2);
-    pointer-events: none;
-}
-
-/* Monaco side placement (§4.8/R9): the strip owns its own 14px flex column
-   beside the editor instead of overlaying it, so it can neither cover the
-   native overview ruler/scrollbar nor intercept their pointer events. Only
-   the retained legacy renderer keeps the overlay geometry above. */
-.code-overview-ruler--side {
     position: relative;
-    top: auto;
-    right: auto;
-    bottom: auto;
     flex: 0 0 14px;
     align-self: stretch;
     width: 14px;
     margin: 4px 4px 4px 0;
+    border-radius: 5px;
+    background: rgba(100, 116, 139, 0.14);
+    box-shadow: inset 0 0 0 1px rgba(100, 116, 139, 0.2);
+    pointer-events: none;
     /* Above the diagnostics badge (z-20): the overflow popup extends left
        over the editor and its header buttons must stay clickable. */
     z-index: 30;
 }
 
-.code-overview-ruler--side .code-overview-marker {
-    left: 3px;
-}
-
-.code-overview-ruler--side .code-overview-marker:hover,
-.code-overview-ruler--side .code-overview-marker:focus-visible {
-    left: 2px;
-}
-
 .code-overview-marker {
     position: absolute;
-    left: 1px;
+    left: 3px;
     width: 8px;
     height: 5px;
     padding: 0;
@@ -58,7 +35,7 @@
 
 .code-overview-marker:hover,
 .code-overview-marker:focus-visible {
-    left: 0;
+    left: 2px;
     width: 10px;
     background: #d97706;
     outline: 2px solid #2563eb;

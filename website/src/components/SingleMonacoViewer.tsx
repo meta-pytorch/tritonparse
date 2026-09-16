@@ -1,5 +1,5 @@
 /**
- * Single IR view on the Monaco panel (design §4.9, Phase 3 formal wiring).
+ * Single IR view on the Monaco panel (design §4.9).
  *
  * Owns the Single highlight truth source as { doc, lines } (§4.2.1): the doc
  * token covers a source-qualified kernelKey plus file/content/mapping/stages
@@ -171,7 +171,6 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
         startingLineNumber={1}
         highlightedLines={effectiveLines}
         onMarkerClick={handleMarkerClick}
-        layout="side"
       />
       {showDiagnostics && (
         <div
