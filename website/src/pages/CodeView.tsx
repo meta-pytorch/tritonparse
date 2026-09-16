@@ -73,10 +73,6 @@ const CodeViewInner: React.FC<{
     title: rightIR
   }), [kernel, rightIR]);
 
-  // O2 resolved DELETE: the hot-open gates passed (case30 ≤2s, 100k ≤5s),
-  // so the deferred-mount placeholder is removed and the comparison mounts
-  // immediately. First-frame evidence is the content-first-frame time.
-
   return (
     <div className="p-6">
       <h1 className="text-2xl font-bold text-gray-800 mb-4">
@@ -193,7 +189,7 @@ const CodeViewInner: React.FC<{
               rightPanel={rightPanel}
               py_code_info={kernel.pythonSourceInfo}
               showPythonSource={showPythonSource && hasPythonSource}
-              pythonMapping={kernel.sourceMappings?.["python"] || {}}
+              pythonMapping={kernel.sourceMappings?.["python"]}
               irStages={kernel.ir_stages}
               sourceId={
                 new URLSearchParams(window.location.search).get("json_url") ??
@@ -207,7 +203,7 @@ const CodeViewInner: React.FC<{
               rightPanel={rightPanel}
               py_code_info={kernel.pythonSourceInfo}
               showPythonSource={showPythonSource && hasPythonSource}
-              pythonMapping={kernel.sourceMappings?.["python"] || {}}
+              pythonMapping={kernel.sourceMappings?.["python"]}
               irStages={kernel.ir_stages}
             />
           )}
