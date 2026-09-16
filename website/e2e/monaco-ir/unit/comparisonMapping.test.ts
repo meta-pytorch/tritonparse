@@ -1,5 +1,5 @@
 /**
- * Unit layer (§6.3.1) for the comparison mapping math (Phase 2).
+ * Unit layer (§6.3.1) for the comparison mapping math.
  * Run: npm run test:unit (plain node --test with type stripping, no build).
  *
  * Pins the legacy semantics ported from CodeComparisonView (stage discovery,
@@ -160,7 +160,7 @@ test("python lines pass out-of-range candidates to the normalizer (§4.4.1)", ()
   assert.equal(normalized.droppedOutOfRange, 1);
 });
 
-test("python lines never coerce illegal types; strict-int strings only (I008)", () => {
+test("python lines never coerce illegal types; strict-int strings only", () => {
   const info = { code: "a\nb\n", file_path: "m.py", start_line: 1 };
   const doc = { offset: 1, lineCount: 2 };
   const solve = (line: unknown) => {

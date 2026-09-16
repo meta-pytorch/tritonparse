@@ -49,7 +49,7 @@ test("unknown syntax_id falls back to plaintext, never an unregistered id", () =
   );
 });
 
-test("I002: prototype-named syntax_ids fall back to plaintext with warning", () => {
+test("prototype-named syntax_ids fall back to plaintext with warning", () => {
   // Exact counterexamples from rounds/002-codex.md (candidate 0513e65f).
   const registered = new Set(Object.values(MONACO_LANGUAGE_IDS));
   const warnings: string[] = [];

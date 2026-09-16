@@ -1,11 +1,11 @@
 /**
  * Read-only single-file Monaco panel for the IR views (design §4.1, §4.10).
  *
- * Phase 0 spike subset: mount/lifecycle, decorations from a parent-guarded
- * highlight set, click-to-map input chain (§4.3), offset conversions (§4.4),
- * manual layout (§3.3) and the read-only debug hook (§6.3.3). Phase 2 adds
- * the function-range decorations (§4.5) and once-per-token initial
- * positioning (§4.10/R5) used by the comparison python panel.
+ * Covers mount/lifecycle, decorations from a parent-guarded highlight set,
+ * click-to-map input chain (§4.3), offset conversions (§4.4), manual layout
+ * (§3.3), the read-only debug hook (§6.3.3), function-range decorations
+ * (§4.5), and once-per-token initial positioning (§4.10/R5) used by the
+ * comparison python panel.
  *
  * Ownership contract (§3.3/R1): the @monaco-editor/react wrapper owns the
  * editor and the model. This file never calls editor.dispose(),
@@ -66,7 +66,7 @@ export interface MonacoCodePanelProps {
   onMount?: (viewerId: string, editor: IStandaloneCodeEditor) => void;
   /**
    * Optional read-only identity string exposed on the debug panel entry
-   * (I013.2). The owner passes its doc identity (e.g. Single's kernelKey)
+   * The owner passes its doc identity (e.g. Single's kernelKey)
    * so e2e can assert identity behavior; tests only read it.
    */
   debugIdentity?: string;

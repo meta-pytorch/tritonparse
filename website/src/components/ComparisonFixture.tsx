@@ -1,5 +1,5 @@
 /**
- * Committed fixture page for the comparison view (Phase 2 e2e).
+ * Committed fixture page for the comparison view (e2e only).
  *
  * Rendered when `?view=comparison_fixture` (see App.tsx); never used by the
  * normal product flows. Mounts the real CodeComparisonViewV2 once and swaps

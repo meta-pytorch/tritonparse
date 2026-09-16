@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Worker + delivery probe for the Monaco IR migration (Phase 1).
+ * Worker + delivery probe for the Monaco IR views.
  *
  * Usage:
  *   node e2e/monaco-ir/worker-probe.mjs --base-url URL --artifact-dir DIR [--chrome PATH]
@@ -294,7 +294,7 @@ async function main() {
     // ---- Single: no diff worker traffic expected ----
     console.log("STEP single without diff worker");
     await s.send("Page.navigate", {
-      url: `${baseUrl}/?json_url=${encodeURIComponent(singleUrl)}&renderer=monaco&debug=1`,
+      url: `${baseUrl}/?json_url=${encodeURIComponent(singleUrl)}&debug=1`,
     });
     await waitForFunction(
       s,
@@ -441,8 +441,8 @@ async function main() {
     await clickText("label", "Only changes");
     await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length > 0`, { timeoutMs: 15000 });
     console.log("  ok only-changes hides rows");
-    // I005: the codicon font must load (data URI on standalone delivery).
-    // I007: check() alone can pass from fallback coverage; also verify a
+    // The codicon font must load (data URI on standalone delivery).
+    // check() alone can pass from fallback coverage; also verify a
     // registered FontFace with family codicon reached status loaded.
     await waitForFunction(s, `() => {
       try {
@@ -511,7 +511,7 @@ async function main() {
     }
     // AMD/CDN/worker-file requests are banned everywhere; font files may load
     // same-origin on dev/preview, but the standalone delivery (no adjacent
-    // assets) must be fully self-contained via the inlined data URI (I005).
+    // assets) must be fully self-contained via the inlined data URI.
     const badRequests = requests.filter((r) =>
       /jsdelivr\.net|unpkg\.com|\/monaco-tmp\/|\/vs\/loader\.js|\/vs\/editor\/editor\.main|(?:json|ts|css|html)\.worker/i.test(r.url));
     assertEqual(badRequests, [], "amd/cdn/worker requests");

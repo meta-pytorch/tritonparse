@@ -1,5 +1,5 @@
 /**
- * Committed fixture page for the Single view (Phase 3 e2e, I013).
+ * Committed fixture page for the Single view (e2e only).
  *
  * Rendered when `?view=single_fixture` (see App.tsx); never used by the
  * normal product flows. Mounts the real SingleMonacoViewer once and swaps
