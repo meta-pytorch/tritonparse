@@ -322,23 +322,59 @@ async function main() {
       });
     }
 
+    /** Resolve a verified CONTENT_TEXT click point for a panel line (I011).
+     *
+     * Editor existence, non-empty model, rendered rows, width and even
+     * document navigation-complete do NOT imply the line layout backing
+     * hit-testing is ready: fixed-x single-shot clicks intermittently land
+     * on CONTENT_EMPTY. Coordinates derive from the line's own text layout
+     * (column 5, inside every padded fixture line) and the point resolves
+     * only when getTargetAtClientPoint reports CONTENT_TEXT — all read-only.
+     * The caller sends the real mouse click exactly once afterwards; a
+     * timeout still fails loudly instead of masking the failure with click
+     * retries or skipped steps.
+     */
+    async function clickPoint(panel, line) {
+      try {
+        return await waitForFunction(
+          s,
+          `() => {
+            const D = window.__TRITONPARSE_DEBUG;
+            const ed = D.panels[${JSON.stringify(panel)}]?.editor;
+            if (!ed) return false;
+            const col = Math.min(5, Math.max(1, ed.getModel().getLineLength(${line})));
+            const pos = ed.getScrolledVisiblePosition({ lineNumber: ${line}, column: col });
+            if (!pos) return false;
+            const r = ed.getDomNode().getBoundingClientRect();
+            const x = r.x + pos.left + 2, y = r.y + pos.top + pos.height / 2;
+            if (y < r.y + 2 || y > r.y + r.height - 2) return false;
+            const t = ed.getTargetAtClientPoint(x, y);
+            if (!t || t.type !== D.monaco.editor.MouseTargetType.CONTENT_TEXT) return false;
+            return { x, y };
+          }`,
+          { timeoutMs: 30000 }
+        );
+      } catch (err) {
+        throw new Error(
+          `${panel} line ${line} never CONTENT_TEXT-clickable: ${String(err.message).slice(0, 160)}`
+        );
+      }
+    }
+
     /** Real-mouse click on a Monaco line; polls decorations to expected. */
     async function clickLine(line, expected) {
       // I003: the debug/editor API is read-only (§6.3) — no reveal/scroll/layout
       // calls. The short fixture fits the initial viewport, so every target
       // line already has a visible position; a case that needs scrolling must
       // use real wheel/keyboard input, never editor API.
-      await waitPanelLayout("single-viewer");
-      const xy = await evaluate(s, `() => {
-        const ed = window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor;
-        const pos = ed.getScrolledVisiblePosition({ lineNumber: ${line}, column: 1 });
-        if (!pos) return null;
-        const r = ed.getDomNode().getBoundingClientRect();
-        const x = r.x + 250, y = r.y + pos.top + pos.height / 2;
-        if (y < 0 || y > window.innerHeight || x < 0 || x > window.innerWidth) return null;
-        return { x, y };
-      }`);
-      if (!xy) throw new Error(`line ${line} not in initial viewport; add real-input scrolling instead of debug-driven reveal`);
+      let xy;
+      try {
+        xy = await clickPoint("single-viewer", line);
+      } catch (err) {
+        // Preserve clickPoint's diagnostic (which line/position failed); like
+        // clickCmpLine, never swallow the cause.
+        throw new Error(`line ${line} not in initial viewport (${err.message}); add real-input scrolling instead of debug-driven reveal`);
+      }
       await mouseClick(s, xy.x, xy.y);
       const deadline = Date.now() + 5000;
       for (;;) {
@@ -1217,47 +1253,10 @@ async function main() {
         return { panels: out, markers, badges };
       }`);
 
-    /** Read-only content+layout settle: editors exist before their model
-     * content is set and before the first paint; a fixed-x click computed
-     * earlier lands past the (empty) line end (CONTENT_EMPTY) on slow
-     * builds. Polls model content + width + first rendered text row. */
-    async function waitPanelLayout(panel) {
-      await waitForFunction(
-        s,
-        `() => {
-          const ed = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panel)}]?.editor;
-          if (!ed) return false;
-          if (ed.getModel().getValueLength() < 1) return false;
-          if (ed.getLayoutInfo().width < 200) return false;
-          const row = ed.getDomNode().querySelector('.view-lines .view-line');
-          return !!(row && row.textContent && row.textContent.length > 0);
-        }`,
-        { timeoutMs: 30000 }
-      );
-    }
-
-    /** Real-mouse click on a comparison panel line (CONTENT_TEXT pre-checked). */
+    /** Real-mouse click on a comparison panel line (I011: text-derived
+     * coordinates, verified CONTENT_TEXT, exactly one real click). */
     async function clickCmpLine(panel, physLine) {
-      await waitPanelLayout(panel);
-      const xy = await evaluate(
-        s,
-        `() => {
-          const D = window.__TRITONPARSE_DEBUG;
-          const ed = D.panels[${JSON.stringify(panel)}].editor;
-          const pos = ed.getScrolledVisiblePosition({ lineNumber: ${physLine}, column: 5 });
-          if (!pos) return null;
-          const r = ed.getDomNode().getBoundingClientRect();
-          const x = r.x + 130, y = r.y + pos.top + pos.height / 2;
-          if (y < 0 || y > window.innerHeight || x < 0 || x > window.innerWidth) return null;
-          const t = ed.getTargetAtClientPoint(x, y);
-          if (!t || t.type !== D.monaco.editor.MouseTargetType.CONTENT_TEXT) {
-            return { bad: t ? t.type : null };
-          }
-          return { x, y };
-        }`
-      );
-      if (!xy) throw new Error(`${panel} line ${physLine} not clickable in viewport`);
-      if (xy.bad !== undefined) throw new Error(`${panel} click point hits target ${xy.bad}, not CONTENT_TEXT`);
+      const xy = await clickPoint(panel, physLine);
       await mouseClick(s, xy.x, xy.y);
     }
 
@@ -2023,6 +2022,55 @@ async function main() {
         { timeoutMs: 10000 }
       );
       assertEqual(copied, st.left.value, "copy button writes full content");
+    });
+
+    // ---- Comparison invalid python values (I008/F19): real trace pipeline --
+    const invFixtureTrace = `http://127.0.0.1:${fixturePort}/comparison-invalid.ndjson`;
+    const invProductUrl =
+      `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(invFixtureTrace)}&renderer=monaco&debug=1`;
+
+    await step("invalid python values never forge highlights, badge visible (I008/F19)", async () => {
+      await s.send("Page.navigate", { url: invProductUrl });
+      await waitCmpEditors();
+      await waitCmpSets([], [], []);
+      const fresh = await cmpState();
+      assertEqual(
+        [fresh.panels.left.scrollTop, fresh.panels.right.scrollTop, fresh.panels.python.scrollTop],
+        [0, 0, 0],
+        "fresh mount scrollTops"
+      );
+      // line:true / line:[459] / line:"0x1cb" must not become python 1/459:
+      // empty python set, no markers, diagnostics badge, no reveal anywhere
+      // (all clicked and mapped lines are visible, so any scrollTop move
+      // would be a wrong reveal).
+      for (const [line, mapped] of [[1, 6], [2, 7], [3, 8]]) {
+        await clickCmpLine("right", line);
+        await waitCmpSets([mapped], [line], []);
+        const st = await cmpState();
+        assertEqual(st.panels.python.decorations, [], `python decorations line ${line}`);
+        assertEqual(st.markers.python, 0, `python markers line ${line}`);
+        assertEqual(st.badges.python, "1 mappings ignored", `python badge line ${line}`);
+        assertEqual(
+          [st.panels.left.scrollTop, st.panels.right.scrollTop, st.panels.python.scrollTop],
+          [0, 0, 0],
+          `no reveal line ${line}`
+        );
+      }
+      await shot("e2e-comparison-invalid.png");
+    });
+
+    await step("strict-int strings and ints still map to python (I008 control)", async () => {
+      await clickCmpLine("right", 4);
+      await waitCmpSets([9], [4], [459]);
+      let st = await cmpState();
+      assertEqual(st.panels.python.decorations, [[459, 459]], "python decorations for '459'");
+      assertEqual(st.markers.python, 1, "python marker for '459'");
+      assertEqual(st.badges.python, null, "no badge for '459'");
+      await clickCmpLine("right", 5);
+      await waitCmpSets([10], [5], [460]);
+      st = await cmpState();
+      assertEqual(st.panels.python.decorations, [[460, 460]], "python decorations for 460");
+      assertEqual(st.badges.python, null, "no badge for 460");
     });
 
     await step("no console errors across all suites (F10/F17)", async () => {
