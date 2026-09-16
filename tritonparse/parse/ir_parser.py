@@ -190,6 +190,32 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
                 )
                 # Note: We don't add this callsite to locations since callee is missing
 
+    # Resolve each callsite to the OUTERMOST frame of its chain. `file`/`line`
+    # describe the callee -- the inlined library code actually emitted -- so on
+    # their own they never point at the user's kernel. The root does.
+    for info in locations.values():
+        if not info.get("is_callsite"):
+            continue
+        cur, seen = info, set()
+        while cur.get("is_callsite"):
+            nxt = cur.get("callsite_caller")
+            # `is None` rather than falsy: "" is the key of the bare `#loc`, so
+            # `loc(callsite(#locN at #loc))` is a real caller and must resolve.
+            if nxt is None or nxt in seen or nxt not in locations:
+                break
+            seen.add(nxt)
+            cur = locations[nxt]
+        # Only a frame that is itself NOT a callsite is the root of the chain.
+        # The loop also exits by `break` -- on a missing, cyclic or unresolvable
+        # caller -- and there `cur` is still a callsite, so its file/line are a
+        # callee: a library line. Recording that as `inlined_at_*` would be the
+        # exact mis-attribution this pass exists to remove. A broken chain means
+        # the call site is unknown, so the entry stays plain, matching what the
+        # PTX path does when a `.file` index will not resolve.
+        if cur is not info and not cur.get("is_callsite"):
+            info["inlined_at_file"] = cur["file"]
+            info["inlined_at_line"] = cur["line"]
+
     # Verify caller references (warning only, don't block)
     for loc_id, _callee_id, caller_id, _def_line in callsite_defs:
         if loc_id in locations and caller_id and caller_id not in locations:
@@ -257,6 +283,11 @@ def _iter_sass_instructions(sass_content: str):
     # Once set, later //## File comments in the same block (outer call sites)
     # must not override the instruction's attribution.
     awaiting_innermost = True
+    # Last frame seen in the current block. nvdisasm orders frames
+    # innermost-first, so the last one is the outermost call site -- the line in
+    # the user's kernel. The innermost is what the instruction *is*; the
+    # outermost is where the user wrote it.
+    outermost_source_info = None
     lines = sass_content.split("\n")
 
     for line_num, line in enumerate(lines, 1):
@@ -274,13 +305,23 @@ def _iter_sass_instructions(sass_content: str):
             if awaiting_innermost:
                 instr_source_info = comment_source_info
                 awaiting_innermost = False
+            outermost_source_info = comment_source_info
             # The comment line itself maps to its own literal location.
             yield line_num, None, comment_source_info
 
         elif instr_source_info:
             pc_match = SASS_PC_PATTERN.match(line)
             if pc_match:
-                yield line_num, pc_match.group(1), instr_source_info
+                info = instr_source_info
+                if outermost_source_info is not instr_source_info:
+                    # More than one frame: this instruction came from inlined
+                    # code. Keep the innermost as file/line (unchanged
+                    # behaviour) and record the call site alongside it.
+                    info = dict(instr_source_info)
+                    info["is_callsite"] = True
+                    info["inlined_at_file"] = outermost_source_info["file"]
+                    info["inlined_at_line"] = outermost_source_info["line"]
+                yield line_num, pc_match.group(1), info
                 # The next //## File comment begins a new inline stack.
                 awaiting_innermost = True
 
@@ -308,12 +349,17 @@ def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
     """
     mappings = {}
     for line_num, _pc_hex, source_info in _iter_sass_instructions(sass_content):
-        mappings[str(line_num)] = {
+        entry = {
             "file": source_info["file"],
             "line": source_info["line"],
             "column": source_info["column"],
             "sass_line": line_num,
         }
+        if source_info.get("is_callsite"):
+            entry["is_callsite"] = True
+            entry["inlined_at_file"] = source_info["inlined_at_file"]
+            entry["inlined_at_line"] = source_info["inlined_at_line"]
+        mappings[str(line_num)] = entry
     return mappings
 
 
@@ -578,6 +624,9 @@ def _parse_generic_loc(
                 entry["is_callsite"] = True
                 entry["callsite_callee"] = info["callsite_callee"]
                 entry["callsite_caller"] = info["callsite_caller"]
+                if "inlined_at_line" in info:
+                    entry["inlined_at_file"] = info["inlined_at_file"]
+                    entry["inlined_at_line"] = info["inlined_at_line"]
             # Propagate alias metadata if present
             if "alias_name" in info:
                 entry["alias_name"] = info["alias_name"]

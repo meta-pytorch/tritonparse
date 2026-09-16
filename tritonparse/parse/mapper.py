@@ -22,7 +22,16 @@ def create_python_mapping(
     py_map = defaultdict(lambda: defaultdict(list))
     for ir_type, ir_map in ir_maps:
         for line_number, info in ir_map.items():
-            py_line_number: int = info["line"]
+            # For inlined code, `line` is a line in the inlined callee -- a
+            # Triton library file, not the kernel being displayed. Filing it
+            # under that number puts it in the python map as though it were a
+            # kernel line, so the UI highlights unrelated source (or nothing).
+            # `inlined_at_line` is the outermost frame: where the user actually
+            # wrote the call.
+            # `is not None` rather than `or`: a line of 0 is falsy, and falling
+            # back on it would silently re-file the entry under the callee.
+            inlined_at = info.get("inlined_at_line")
+            py_line_number: int = info["line"] if inlined_at is None else inlined_at
             py_map[py_line_number][f"{ir_type}_lines"].append(line_number)
     return {k: dict(v) for k, v in py_map.items()}
 

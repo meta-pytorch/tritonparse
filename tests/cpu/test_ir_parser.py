@@ -9,8 +9,115 @@ from tritonparse.parse.ir_parser import (
     extract_sass_mappings,
     extract_sass_pc_mappings,
 )
-from tritonparse.parse.mapper import create_bidirectional_mapping, create_ir_mapping
+from tritonparse.parse.mapper import (
+    create_bidirectional_mapping,
+    create_ir_mapping,
+    create_python_mapping,
+)
 from tritonparse.parse.trace_processor import generate_source_mappings
+
+
+class TestInlinedCallSiteMapping(unittest.TestCase):
+    """Inlined code must map back to the line the user actually wrote.
+
+    For anything inlined, `file`/`line` describe the callee -- a Triton library
+    file. Filing that under the python map puts a library line number where a
+    kernel line number belongs, so the UI highlights unrelated source. Every
+    parser now also records the outermost frame in `inlined_at_*`, and
+    create_python_mapping keys on it.
+    """
+
+    def test_mlir_callsite_resolves_to_outermost_frame(self):
+        ir = """
+module {
+  #loc7 = loc("/tmp/test.py":1091:8)
+  #loc57 = loc("/tmp/test.py":421:16)
+  #loc58 = loc("/tmp/test.py":853:16)
+  #loc190 = loc(callsite(#loc58 at #loc7))
+  #loc220 = loc(callsite(#loc57 at #loc190))
+  %0 = tt.load %ptr loc(#loc220)
+}
+"""
+        locs = extract_loc_definitions(ir)
+        # #loc220 -> caller #loc190 -> caller #loc7, which is not a callsite
+        self.assertEqual(locs["220"]["line"], 421)  # callee, unchanged
+        self.assertEqual(locs["220"]["callsite_caller"], "190")  # immediate
+        self.assertEqual(locs["220"]["inlined_at_line"], 1091)  # root
+
+    def test_broken_chain_records_no_call_site(self):
+        """A walk that cannot reach a non-callsite root must record nothing.
+
+        Breaking out on a missing, cyclic or unresolvable caller leaves the
+        cursor on a callsite, whose file/line are a callee -- a library line.
+        Recording that as `inlined_at_*` is the exact mis-attribution this pass
+        removes, so an incomplete chain leaves the entry plain instead. Matches
+        the PTX path when a `.file` index will not resolve.
+        """
+        ir = """
+module {
+  #loc57 = loc("/tmp/standard.py":43:16)
+  #loc190 = loc(callsite(#loc57 at #loc999))
+  #loc220 = loc(callsite(#loc57 at #loc190))
+  %0 = tt.load %ptr loc(#loc220)
+}
+"""
+        locs = extract_loc_definitions(ir)
+        # the callee is still reported, as for any callsite
+        self.assertEqual(locs["220"]["line"], 43)
+        # but standard.py:43 must not be passed off as the call site
+        self.assertNotIn("inlined_at_line", locs["220"])
+        self.assertNotIn("inlined_at_file", locs["220"])
+        self.assertNotIn("inlined_at_line", locs["190"])
+
+    def test_sass_multiframe_block_records_the_call_site(self):
+        """nvdisasm orders frames innermost-first; the last is the call site."""
+        sass = (
+            "Function:kernel\n"
+            '\t//## File "/lib/standard.py", line 43 inlined at "/work/k.py", line 288\n'
+            '\t//## File "/work/k.py", line 288\n'
+            "        /*0000*/                   MOV R1, c[0x0][0x28] ;\n"
+        )
+        m = extract_sass_mappings(sass)
+        instr = m["4"]
+        self.assertEqual(instr["file"], "/lib/standard.py")  # innermost, unchanged
+        self.assertEqual(instr["line"], 43)
+        self.assertTrue(instr["is_callsite"])
+        self.assertEqual(instr["inlined_at_line"], 288)
+
+    def test_single_frame_block_is_not_a_callsite(self):
+        sass = (
+            "Function:kernel\n"
+            '\t//## File "/work/k.py", line 12\n'
+            "        /*0000*/                   MOV R1, c[0x0][0x28] ;\n"
+        )
+        instr = extract_sass_mappings(sass)["3"]
+        self.assertEqual(instr["line"], 12)
+        self.assertNotIn("is_callsite", instr)
+        self.assertNotIn("inlined_at_line", instr)
+
+    def test_python_mapping_keys_on_the_call_site(self):
+        """The whole point: an inlined entry lands on the kernel, not the library."""
+        ir_maps = [
+            (
+                "llir",
+                {
+                    "5": {
+                        "file": "/lib/standard.py",
+                        "line": 43,
+                        "llir_line": 5,
+                        "is_callsite": True,
+                        "inlined_at_file": "/work/k.py",
+                        "inlined_at_line": 288,
+                    },
+                    "6": {"file": "/work/k.py", "line": 290, "llir_line": 6},
+                },
+            ),
+        ]
+        py = create_python_mapping(ir_maps)
+        self.assertIn(288, py, "inlined entry should file under the call site")
+        self.assertNotIn(43, py, "library line must not appear as a kernel line")
+        self.assertEqual(py[288]["llir_lines"], ["5"])
+        self.assertEqual(py[290]["llir_lines"], ["6"])
 
 
 class TestIRParser(unittest.TestCase):
