@@ -20,6 +20,8 @@
  * p4 takes --input-file <local .ndjson/.ndjson.gz> instead of --trace-url.
  * p2 takes --lines CSV + --expect JSON ({ line: [exact set] }) for inputs
  * where re-clicking one line would pass trivially on the retained set.
+ * p1-cold and p3 take --view single|comparison (default comparison); the
+ * 100k-line gate input runs as --view single.
  *
  * Measurement boundaries (§6.2):
  * - p1-cold: navigationStart -> editors/viewers mounted AND first content
@@ -68,6 +70,8 @@ function parseArgs(argv) {
     chrome: null,
     lines: null,
     expect: null,
+    view: "comparison",
+    hot: false,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--scenario") out.scenario = argv[++i];
@@ -80,6 +84,8 @@ function parseArgs(argv) {
     else if (argv[i] === "--chrome") out.chrome = argv[++i];
     else if (argv[i] === "--lines") out.lines = argv[++i].split(",").map(Number);
     else if (argv[i] === "--expect") out.expect = JSON.parse(readFileSync(argv[++i], "utf8"));
+    else if (argv[i] === "--view") out.view = argv[++i];
+    else if (argv[i] === "--hot") out.hot = true;
     else throw new Error(`unknown arg: ${argv[i]}`);
   }
   if (!["p1-cold", "p1-hot", "p2", "p3", "p4", "p5"].includes(out.scenario)) {
@@ -98,6 +104,17 @@ function parseArgs(argv) {
     throw new Error("--lines must be a comma-separated list of positive integers");
   }
   if (!["monaco", "legacy"].includes(out.renderer)) throw new Error("--renderer must be monaco|legacy");
+  if (!["comparison", "single"].includes(out.view)) throw new Error("--view must be comparison|single");
+  // Fail loudly on silently-ignored combinations (parseArgs style): --hot
+  // is measured only by p1-cold on Single, and p3 Single is monaco-only
+  // (legacy never enters Single, so the scroll would target the overview
+  // page while the artifact claims view=single).
+  if (out.hot && (out.scenario !== "p1-cold" || out.view !== "single")) {
+    throw new Error("--hot requires --scenario p1-cold --view single");
+  }
+  if (out.scenario === "p3" && out.view === "single" && out.renderer !== "monaco") {
+    throw new Error("p3 --view single requires --renderer monaco");
+  }
   if (out.scenario === "p4" && !out.inputFile) throw new Error("p4 requires --input-file");
   if (out.scenario !== "p4" && !out.traceUrl) throw new Error(`${out.scenario} requires --trace-url`);
   out.baseUrl = out.baseUrl.replace(/\/$/, "").replace("://localhost", "://127.0.0.1");
@@ -370,23 +387,54 @@ async function selectByKeyboard(s, targetValue) {
   );
 }
 
+/** Real overview click entering Single on the first .tt card. */
+async function openFirstSingle(s) {
+  await waitForFunction(s, `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`, { timeoutMs: 300000 });
+  const h3 = await evaluate(s, `() => {
+    const h = [...document.querySelectorAll('h3')].find((x) => x.textContent.includes(".tt"));
+    if (!h) return null;
+    h.scrollIntoView({ block: "center" });
+    const r = h.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: h.textContent.trim() };
+  }`);
+  if (!h3) throw new Error("no ttir/ttgir card found");
+  await new Promise((r) => setTimeout(r, 400));
+  const tClick = Date.now();
+  await mouseClick(s, h3.x, h3.y);
+  return { file: h3.text, tClick };
+}
+
 async function scenarioP1Cold(args) {
   const iterations = args.iterations ?? 3;
   const results = [];
   for (let i = 0; i < iterations; i++) {
     const { s, proc, userDataDir } = await freshPage(args.chrome);
     try {
-      const url = `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+      const url = args.view === "single"
+        ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
+        : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
       const tNav = Date.now();
       await s.send("Page.navigate", { url });
+      let tClick = null;
+      let file = null;
+      if (args.view === "single") {
+        ({ file, tClick } = await openFirstSingle(s));
+      }
       const readyFn =
         args.renderer === "monaco"
-          ? `() => {
-              const P = window.__TRITONPARSE_DEBUG?.panels;
-              if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
-              const rows = P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length;
-              return rows > 0 ? true : false;
-            }`
+          ? (args.view === "single"
+            ? `() => {
+                const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
+                if (!ed) return false;
+                const rows = ed.getDomNode().querySelectorAll(".view-lines .view-line").length;
+                return rows > 0 ? true : false;
+              }`
+            : `() => {
+                const P = window.__TRITONPARSE_DEBUG?.panels;
+                if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
+                const rows = P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length;
+                return rows > 0 ? true : false;
+              }`)
           : `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`;
       await waitForFunction(s, readyFn, { timeoutMs: 300000 });
       const tReady = Date.now();
@@ -398,14 +446,28 @@ async function scenarioP1Cold(args) {
           paint,
         };
       }`);
-      results.push({ iteration: i, coldNavToReadyMs: tReady - tNav, ...info });
-      console.log(`  iter ${i}: ready in ${tReady - tNav}ms`);
+      const row = { iteration: i, coldNavToReadyMs: tReady - tNav, ...info };
+      if (tClick !== null) {
+        row.file = file;
+        row.clickToContentMs = tReady - tClick;
+      }
+      if (args.hot && args.view === "single") {
+        // Hot reopen in the same profile (loader already initialized): real
+        // Back click, then re-enter Single and time click->content again.
+        await clickText(s, "button", "Back");
+        await waitForFunction(s, `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`, { timeoutMs: 60000 });
+        const second = await openFirstSingle(s);
+        await waitForFunction(s, readyFn, { timeoutMs: 300000 });
+        row.hotReopenMs = Date.now() - second.tClick;
+      }
+      results.push(row);
+      console.log(`  iter ${i}: ready in ${tReady - tNav}ms${tClick !== null ? ` (click->content ${tReady - tClick}ms)` : ""}${row.hotReopenMs !== undefined ? ` (hot reopen ${row.hotReopenMs}ms)` : ""}`);
     } finally {
       try { s.close(); } catch { /* ignore */ }
       killProcAndCleanTmp(proc, userDataDir);
     }
   }
-  return { scenario: "p1-cold", renderer: args.renderer, traceUrl: args.traceUrl, results };
+  return { scenario: "p1-cold", renderer: args.renderer, view: args.view, traceUrl: args.traceUrl, results };
 }
 
 async function scenarioP1Hot(args) {
@@ -571,11 +633,21 @@ async function scenarioP2(args) {
 async function scenarioP3(args) {
   // 5s passive scroll sampling: the ONLY CDP traffic during the window is
   // the wheel events themselves (no screenshots, no evaluates, no recording).
+  // --view single scrolls the Single viewer (the 100k-line gate input).
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
-    const url = `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    const url = args.view === "single"
+      ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
+      : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
     await s.send("Page.navigate", { url });
-    if (args.renderer === "monaco") {
+    if (args.view === "single" && args.renderer === "monaco") {
+      await openFirstSingle(s);
+      await waitForFunction(s, `() => {
+        const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
+        if (!ed) return false;
+        return ed.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
+      }`, { timeoutMs: 300000 });
+    } else if (args.renderer === "monaco") {
       await waitForFunction(s, `() => {
         const P = window.__TRITONPARSE_DEBUG?.panels;
         return P?.left?.editor ? true : false;
@@ -600,9 +672,12 @@ async function scenarioP3(args) {
         }).observe({ entryTypes: ["longtask"] });
       } catch { /* longtask unsupported */ }
     }`);
+    const wheelTarget = args.view === "single" && args.renderer === "monaco"
+      ? "single-viewer"
+      : "left";
     const c = await evaluate(s, args.renderer === "monaco"
       ? `() => {
-          const r = window.__TRITONPARSE_DEBUG.panels.left.editor.getDomNode().getBoundingClientRect();
+          const r = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(wheelTarget)}].editor.getDomNode().getBoundingClientRect();
           return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
         }`
       : `() => {
@@ -629,7 +704,7 @@ async function scenarioP3(args) {
     const samples = await evaluate(s, `() => ({ frames: window.__p3.frames, longtasks: window.__p3.longtasks, count: window.__p3.count })`);
     const gaps = samples.frames;
     return {
-      scenario: "p3", renderer: args.renderer, traceUrl: args.traceUrl,
+      scenario: "p3", renderer: args.renderer, view: args.view, traceUrl: args.traceUrl,
       windowMs: Date.now() - tStart,
       frameGaps: summarize(gaps.map((g) => Math.round(g * 100) / 100)),
       longtasks: { n: samples.longtasks.length, totalMs: Math.round(samples.longtasks.reduce((a, b) => a + b, 0) * 10) / 10 },
