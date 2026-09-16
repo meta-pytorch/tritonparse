@@ -31,6 +31,8 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
   language = "plaintext",
   onBack,
   irStages,
+  sourceId,
+  kernelId,
 }) => {
   // Track highlighted lines for self-referential mapping
   const [highlightedLines, setHighlightedLines] = useState<number[]>([]);
@@ -119,12 +121,14 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
         </div>
         {/* Code content area with fixed height */}
         <div className="h-[calc(100vh-12rem)]">
-          {new URLSearchParams(window.location.search).get("renderer") === "monaco" ? (
+          {new URLSearchParams(window.location.search).get("renderer") !== "prism" ? (
             <SingleMonacoViewer
               irFile={irFile}
               irContent={irContent}
               title={title}
               irStages={irStages}
+              sourceId={sourceId}
+              kernelId={kernelId}
             />
           ) : (
             <CodeViewer
