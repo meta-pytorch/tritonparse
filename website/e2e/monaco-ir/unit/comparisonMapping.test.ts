@@ -145,6 +145,50 @@ test("python lines keep the legacy file-match direction and guards", () => {
   );
 });
 
+test("python lines prefer the call site for inlined code", () => {
+  const info = { code: "x = 1\n", file_path: "kernel.py", start_line: 288 };
+  // tl.cdiv inlines language/standard.py:43 into the kernel at line 288. The
+  // entry's own file/line describe the callee, which fails the file match and
+  // would leave the user's line unhighlighted.
+  const inlined: Record<string, SourceMapping> = {
+    "21": {
+      line: 43,
+      file: "/triton/language/standard.py",
+      is_callsite: true,
+      inlined_at_file: "/src/kernel.py",
+      inlined_at_line: 288,
+    },
+  };
+  assert.deepEqual(calculatePythonLines(inlined, 21, info), [288]);
+
+  // Plain entries carry neither field and are unaffected.
+  assert.deepEqual(
+    calculatePythonLines(
+      { "21": { line: 288, file: "/src/kernel.py" } },
+      21,
+      info
+    ),
+    [288]
+  );
+
+  // Both fields are required: one without the other is malformed, and mixing a
+  // caller file with a callee line would point at the wrong place silently.
+  assert.deepEqual(
+    calculatePythonLines(
+      {
+        "21": {
+          line: 43,
+          file: "/triton/language/standard.py",
+          inlined_at_line: 288,
+        },
+      },
+      21,
+      info
+    ),
+    []
+  );
+});
+
 test("python lines pass out-of-range candidates to the normalizer (§4.4.1)", () => {
   const info = { code: "a\nb\n", file_path: "m.py", start_line: 1 };
   // Legacy filtered here with console.error; V2 returns the raw candidate so

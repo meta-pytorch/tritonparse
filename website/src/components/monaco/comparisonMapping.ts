@@ -116,6 +116,9 @@ export function calculateMappedLines(
  * Range filtering is intentionally NOT done here: the raw absolute candidate
  * flows into normalizeHighlightLines, which drops out-of-range lines with
  * diagnostics (§4.4.1) instead of the legacy console.error.
+ *
+ * For inlined code the entry's own `file`/`line` describe the callee, so
+ * `inlined_at_file` / `inlined_at_line` are preferred when both are present.
  */
 export function calculatePythonLines(
   sourceMapping: Record<string, SourceMapping> | undefined,
@@ -127,14 +130,24 @@ export function calculatePythonLines(
 
   const lineKey = lineNumber.toString();
   const mapping = sourceMapping[lineKey];
-  if (!mapping || !mapping.file || mapping.line == null) return [];
+  if (!mapping) return [];
+
+  // Inlined code -- tl.cdiv, tl.sum, tl.dot -- reports `file`/`line` for the
+  // *callee*, a line in a Triton library file rather than in the kernel on
+  // screen, so the file check below rejects it and the user's line never
+  // highlights. `inlined_at_*` carries the outermost frame of the inline
+  // chain, which is the line the user wrote. Both fields are required: one
+  // without the other is malformed, and mixing a caller file with a callee
+  // line would silently point at the wrong place.
+  const inlined =
+    mapping.inlined_at_file != null && mapping.inlined_at_line != null;
+  const file = inlined ? mapping.inlined_at_file : mapping.file;
+  const line = inlined ? mapping.inlined_at_line : mapping.line;
+  if (!file || line == null) return [];
 
   // Legacy match direction preserved: the mapping-side file path contains the
   // panel-side file path (absolute build paths vs. recorded prefixes).
-  if (
-    typeof mapping.file !== "string" ||
-    !mapping.file.includes(pythonInfo.file_path)
-  ) {
+  if (typeof file !== "string" || !file.includes(pythonInfo.file_path)) {
     return [];
   }
 
@@ -144,7 +157,7 @@ export function calculatePythonLines(
   // normalizeHighlightLines drops it with diagnostics. Never Number()-coerce:
   // Number(true) === 1 and Number([459]) === 459 forge highlight lines the
   // normalizer can no longer recognize as invalid.
-  const raw: unknown = mapping.line;
+  const raw: unknown = line;
   return [typeof raw === "string" ? parseStrictIntString(raw) : raw];
 }
 

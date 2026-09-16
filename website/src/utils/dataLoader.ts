@@ -29,6 +29,13 @@ export interface SourceMapping {
     loc_id?: string;
     alias_name?: string;
     alias_of?: string;
+    // Set when this entry came from inlined code. `file`/`line` then describe
+    // the callee -- a Triton library file such as language/standard.py -- and
+    // `inlined_at_*` records the outermost frame of the inline chain, which is
+    // the line in the kernel the user actually wrote.
+    is_callsite?: boolean;
+    inlined_at_file?: string;
+    inlined_at_line?: number;
     [key: string]: unknown;
 }
 
