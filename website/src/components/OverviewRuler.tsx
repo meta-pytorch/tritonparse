@@ -1,11 +1,10 @@
 /**
- * Props-driven overview ruler shared by legacy and Monaco views (§4.8).
+ * Props-driven overview ruler for the Monaco views (§4.8).
  *
- * The marker math/positions are intentionally identical to the legacy embedded
- * ruler (same formula, same clamp, same strip width) so both renderers show
- * one identical strip. Scrolling is injected: legacy passes a DOM-based
- * handler, Monaco panels pass an editor-API reveal. Large sets are sampled
- * with an overflow badge + full-list popup (F20).
+ * The strip owns its own 14px flex column beside the editor (§4.8/R9), so it
+ * can neither cover the native overview ruler/scrollbar nor intercept their
+ * pointer events. Scrolling is injected: panels pass an editor-API reveal.
+ * Large sets are sampled with an overflow badge + full-list popup (F20).
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -28,13 +27,6 @@ export interface OverviewRulerProps {
   highlightedLines: number[];
   /** Fired with the absolute line when a marker (or popup entry) activates. */
   onMarkerClick: (line: number) => void;
-  /**
-   * Strip placement. "overlay" keeps the legacy absolute geometry inside the
-   * scroll wrapper; "side" renders the strip as its own 14px flex column
-   * beside the Monaco editor so it never overlaps the native overview ruler
-   * or scrollbar (§4.8/R9). Default "overlay".
-   */
-  layout?: "overlay" | "side";
 }
 
 const OverviewRuler: React.FC<OverviewRulerProps> = ({
@@ -42,7 +34,6 @@ const OverviewRuler: React.FC<OverviewRulerProps> = ({
   startingLineNumber,
   highlightedLines,
   onMarkerClick,
-  layout = "overlay",
 }) => {
   const [popupOpen, setPopupOpen] = useState(false);
   const overflow = highlightedLines.length > RULER_OVERFLOW_THRESHOLD;
@@ -126,23 +117,15 @@ const OverviewRuler: React.FC<OverviewRulerProps> = ({
     }
   }, [highlightedLines]);
 
-  // Side placement always renders its 14px strip — even empty — so showing
-  // or clearing markers never changes the editor width. Mounting the strip
-  // on first highlight used to fire the panel ResizeObserver mid-reveal and
+  // The strip always renders its 14px column — even empty — so showing or
+  // clearing markers never changes the editor width. Mounting the strip on
+  // first highlight used to fire the panel ResizeObserver mid-reveal and
   // freeze the smooth highlight animation part-way (measured: stuck at 117
-  // instead of centering on 428). The overlay variant keeps returning null:
-  // it is absolutely positioned and never affects layout either way.
-  if (highlightedLines.length === 0 && layout !== "side") {
-    return null;
-  }
-
+  // instead of centering on 428).
   return (
     <div
-      className={
-        layout === "side" ? "code-overview-ruler code-overview-ruler--side" : "code-overview-ruler"
-      }
+      className="code-overview-ruler"
       data-testid="overview-ruler"
-      data-layout={layout}
       aria-label="Highlighted lines overview"
     >
       {shownLines.map((line) => (
