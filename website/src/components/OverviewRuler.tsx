@@ -126,7 +126,13 @@ const OverviewRuler: React.FC<OverviewRulerProps> = ({
     }
   }, [highlightedLines]);
 
-  if (highlightedLines.length === 0) {
+  // Side placement always renders its 14px strip — even empty — so showing
+  // or clearing markers never changes the editor width. Mounting the strip
+  // on first highlight used to fire the panel ResizeObserver mid-reveal and
+  // freeze the smooth highlight animation part-way (measured: stuck at 117
+  // instead of centering on 428). The overlay variant keeps returning null:
+  // it is absolutely positioned and never affects layout either way.
+  if (highlightedLines.length === 0 && layout !== "side") {
     return null;
   }
 
