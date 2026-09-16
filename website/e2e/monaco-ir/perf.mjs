@@ -17,11 +17,19 @@
  *   node e2e/monaco-ir/perf.mjs --scenario p4 --input-file LOCAL_3X20M
  *     --base-url URL --artifact-dir DIR
  * Scenarios: p1-cold, p1-tabs, p1-hot, p2, p3, p4, p5, p1-first-frame.
- * p1-tabs alternates real tab switches (comparison tabs or single/open
- * overview) and times each settle; --iterations sets the switch count.
- * p1-first-frame injects a passive rAF sampler before page load and records
- * first-placeholder / first-panels-registered / first-content frames with
- * the full raw frame array (I010).
+ * p1-tabs times one first mount plus --returns real Comparison <-> Overview
+ * tab returns with a committed passive in-page observer (tab-observer.js):
+ * each switch sends one real click and requires visible panels, the correct
+ * document, retained editor/model IDs + scroll + highlights, settled
+ * geometry, and a following frame. --panels lists the expected comparison
+ * panels (default left,right,python; two-panel inputs pass left,right);
+ * --prep selects the retention prep, "click-py:<absline>" or
+ * "key:<panel>:<line>". Monaco + comparison only: Single open/Back is a
+ * remount (covered by p1-cold --hot), not a keep-alive tab switch (I010).
+ * p1-first-frame injects a passive rAF sampler before page load
+ * (first-frame-observer.js) and records the content-first-frame time with
+ * the full raw frame array. O2 deletion branch: the CodeView deferred
+ * placeholder was deleted after the hot gates passed (I010).
  * p4 takes --input-file <local .ndjson/.ndjson.gz> instead of --trace-url.
  * p2 takes --lines CSV + --expect JSON ({ line: [exact set] }) for inputs
  * where re-clicking one line would pass trivially on the retained set.
@@ -34,6 +42,13 @@
  * Measurement boundaries (§6.2):
  * - p1-cold: navigationStart -> editors/viewers mounted AND first content
  *   rows painted. Cold = fresh chrome profile per iteration.
+ * - p1-tabs: trusted mousedown (performance.now in page) -> all expected
+ *   panels visible with the correct document + retained IDs/scroll/
+ *   highlights + geometry stable across two frames + one following frame.
+ *   First mount and repeated returns are labeled separately; the 500ms
+ *   settle gate applies to returns.
+ * - p1-first-frame: content-first-frame time (O2 deletion branch; the
+ *   per-panel Editor.loading placeholder is recorded informatively only).
  * - p1-hot: mousedown dispatch -> highlight sets applied + next rAF paint.
  * - p2: same hot boundary on the Single view + mapping counts.
  * - p3: 5s of real wheel scrolling with a passive in-page sampler only (no
@@ -81,6 +96,9 @@ function parseArgs(argv) {
     expectPath: null,
     view: "comparison",
     hot: false,
+    panels: ["left", "right", "python"],
+    returns: 3,
+    prep: null,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--scenario") out.scenario = argv[++i];
@@ -95,6 +113,9 @@ function parseArgs(argv) {
     else if (argv[i] === "--expect") { out.expectPath = argv[++i]; out.expect = JSON.parse(readFileSync(out.expectPath, "utf8")); }
     else if (argv[i] === "--view") out.view = argv[++i];
     else if (argv[i] === "--hot") out.hot = true;
+    else if (argv[i] === "--panels") out.panels = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
+    else if (argv[i] === "--returns") out.returns = Number(argv[++i]);
+    else if (argv[i] === "--prep") out.prep = argv[++i];
     else throw new Error(`unknown arg: ${argv[i]}`);
   }
   if (!["p1-cold", "p1-tabs", "p1-first-frame", "p1-hot", "p2", "p3", "p4", "p5"].includes(out.scenario)) {
@@ -126,6 +147,23 @@ function parseArgs(argv) {
   }
   if (out.scenario === "p4" && !out.inputFile) throw new Error("p4 requires --input-file");
   if (out.scenario !== "p4" && !out.traceUrl) throw new Error(`${out.scenario} requires --trace-url`);
+  if (out.scenario === "p1-tabs") {
+    if (out.renderer !== "monaco" || out.view !== "comparison") {
+      throw new Error("p1-tabs is monaco + comparison only: Single open/Back is a remount (use p1-cold --hot), and the tab observer needs the monaco debug API (I010)");
+    }
+    const ok = ["left", "right", "python"];
+    if (out.panels.length < 2 || !out.panels.every((p) => ok.includes(p)) || !out.panels.includes("left") || !out.panels.includes("right")) {
+      throw new Error("--panels must include left,right plus optional python (CSV)");
+    }
+    if (!Number.isInteger(out.returns) || out.returns < 1) throw new Error("--returns must be a positive integer");
+    if (!out.prep || !/^(click-py:\d+|key:(left|right|python):\d+)$/.test(out.prep)) {
+      throw new Error('--prep is required for p1-tabs: "click-py:<absline>" or "key:<panel>:<line>"');
+    }
+  }
+  if (out.scenario === "p1-first-frame") {
+    const ok = ["left", "right", "python"];
+    if (!out.panels.every((p) => ok.includes(p))) throw new Error("--panels must be a CSV of left,right,python");
+  }
   out.baseUrl = out.baseUrl.replace(/\/$/, "").replace("://localhost", "://127.0.0.1");
   return out;
 }
@@ -396,23 +434,6 @@ async function selectByKeyboard(s, targetValue) {
   );
 }
 
-/** Resolve a text button's coordinates (untimed settle), click it, return tClick. */
-async function clickTextTimed(s, selector, text) {
-  const pt = await evaluate(s, `() => {
-    const el = [...document.querySelectorAll(${JSON.stringify(selector)})]
-      .find((e) => (e.textContent || '').trim() === ${JSON.stringify(text)});
-    if (!el) return null;
-    el.scrollIntoView({ block: 'center' });
-    const r = el.getBoundingClientRect();
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  }`);
-  if (!pt) throw new Error(`no ${selector} with text ${text}`);
-  await new Promise((r) => setTimeout(r, 400));
-  const tClick = Date.now();
-  await mouseClick(s, pt.x, pt.y);
-  return { tClick };
-}
-
 /** Real overview click entering Single on the first .tt card. */
 async function openFirstSingle(s) {
   await waitForFunction(s, `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`, { timeoutMs: 300000 });
@@ -465,21 +486,13 @@ async function scenarioP1Cold(args) {
         await mouseClick(s, tab.x, tab.y);
         file = "IR Code tab";
       }
+      const need = JSON.stringify(args.view === "single" ? ["single-viewer"] : args.panels);
       const readyFn =
         args.renderer === "monaco"
-          ? (args.view === "single"
-            ? `() => {
-                const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
-                if (!ed) return false;
-                const rows = ed.getDomNode().querySelectorAll(".view-lines .view-line").length;
-                return rows > 0 ? true : false;
-              }`
-            : `() => {
-                const P = window.__TRITONPARSE_DEBUG?.panels;
-                if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
-                const rows = P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length;
-                return rows > 0 ? true : false;
-              }`)
+          ? `() => {
+              const P = window.__TRITONPARSE_DEBUG?.panels ?? {};
+              return ${need}.every((id) => P[id]?.editor?.getDomNode()?.querySelectorAll(".view-lines .view-line").length > 0) ? true : false;
+            }`
           : `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`;
       await waitForFunction(s, readyFn, { timeoutMs: 300000 });
       const tReady = Date.now();
@@ -515,57 +528,237 @@ async function scenarioP1Cold(args) {
   return { scenario: "p1-cold", renderer: args.renderer, view: args.view, traceUrl: args.traceUrl, results };
 }
 
+/** Resolve a tab button's click point; throws loudly when unavailable/covered. */
+async function resolveTabButton(s, text) {
+  return evaluate(s, `() => {
+    const b = [...document.querySelectorAll('button')]
+      .find((e) => (e.textContent || '').trim() === ${JSON.stringify(text)} && e.getBoundingClientRect().width > 0);
+    if (!b) throw Error('Missing visible tab button ' + ${JSON.stringify(text)});
+    if (b.disabled || b.getAttribute('aria-disabled') === 'true') throw Error('Tab button ' + ${JSON.stringify(text)} + ' is disabled');
+    const r = b.getBoundingClientRect();
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (!(x > 0 && y > 0 && x < innerWidth && y < innerHeight)) throw Error('Tab button ' + ${JSON.stringify(text)} + ' is outside the viewport');
+    if (document.elementFromPoint(x, y)?.closest('button') !== b) throw Error('Tab button ' + ${JSON.stringify(text)} + ' is covered');
+    return { x, y };
+  }`);
+}
+
+/** Real-wheel the outer page to its header so the tab buttons are clickable. */
+async function ensureHeaderVisible(s, text) {
+  try {
+    return await resolveTabButton(s, text);
+  } catch (e) {
+    if (!String(e.message).includes("outside the viewport")) throw e;
+  }
+  // Tolerance, not exact zero: sub-pixel/zoomed layouts report fractional
+  // scrollY (e.g. 0.5) with the header fully in view.
+  for (let i = 0; i < 20; i++) {
+    if ((await evaluate(s, `() => window.scrollY`)) < 1) break;
+    await s.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 8, y: 200, deltaX: 0, deltaY: -1000 });
+    await sleep(100);
+  }
+  if ((await evaluate(s, `() => window.scrollY`)) >= 1) throw new Error("outer page did not reach the header");
+  return resolveTabButton(s, text);
+}
+
+/** Read the full retention state of the expected panels (read-only). */
+async function readPanelStates(s, ids) {
+  return evaluate(s, `(ids) => {
+    const P = window.__TRITONPARSE_DEBUG.panels;
+    return ids.map((id) => {
+      const p = P[id], e = p?.editor, m = e?.getModel();
+      if (!e || !m) return { id, present: false, visible: false };
+      const r = e.getDomNode().getBoundingClientRect();
+      return {
+        id, present: true,
+        visible: r.width > 20 && r.height > 20 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight,
+        editorId: e.getId(), modelId: m.id,
+        lineCount: m.getLineCount(), characters: m.getValueLength(),
+        scrollTop: e.getScrollTop(), scrollLeft: e.getScrollLeft(),
+        highlights: p.getHighlights().slice(),
+        physicalLines: m.getAllDecorations().filter((d) => d.options.className === 'mp-highlighted-line')
+          .flatMap((d) => Array.from({ length: d.range.endLineNumber - d.range.startLineNumber + 1 }, (_, i) => d.range.startLineNumber + i)),
+      };
+    });
+  }`, { args: [ids] });
+}
+
+/** Settle loop: the same panel state across 3 consecutive double-rAF reads. */
+async function captureStablePanels(s, ids, what) {
+  let last = await readPanelStates(s, ids);
+  let stable = 0;
+  for (let i = 0; i < 100 && stable < 3; i++) {
+    await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
+    const current = await readPanelStates(s, ids);
+    stable = JSON.stringify(current) === JSON.stringify(last) ? stable + 1 : 0;
+    last = current;
+  }
+  if (stable < 3) throw new Error(`${what} did not settle: ${JSON.stringify(last).slice(0, 300)}`);
+  return last;
+}
+
+/**
+ * Focus a panel by clicking its line-number gutter (never content text), so
+ * no mapping highlight is created during scroll prep: the click chain
+ * (§4.3) only fires on CONTENT_TEXT mousedown. Returns after asserting the
+ * editor has focus and the highlight set is still empty.
+ */
+async function focusPanelGutter(s, panelId) {
+  const g = await evaluate(s, `() => {
+    const D = window.__TRITONPARSE_DEBUG;
+    const ed = D.panels[${JSON.stringify(panelId)}].editor;
+    const range = ed.getVisibleRanges()[0];
+    const layout = ed.getLayoutInfo();
+    for (let line = range.startLineNumber + 1; line <= Math.min(range.endLineNumber, range.startLineNumber + 8); line++) {
+      const col = Math.min(5, ed.getModel().getLineLength(line));
+      if (col < 1) continue;
+      const pos = ed.getScrolledVisiblePosition({ lineNumber: line, column: col });
+      const r = ed.getDomNode().getBoundingClientRect();
+      const x = r.x + layout.lineNumbersLeft + layout.lineNumbersWidth / 2;
+      const y = r.y + pos.top + pos.height / 2;
+      const hit = ed.getTargetAtClientPoint(x, y);
+      if (hit?.type === D.monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS
+        && hit.position?.lineNumber === line && y > 0 && y < innerHeight) {
+        return { x, y, line };
+      }
+    }
+    throw Error('No visible line-number gutter to focus without starting a mapping reveal');
+  }`);
+  await mouseClick(s, g.x, g.y);
+  await new Promise((r) => setTimeout(r, 300));
+  const check = await evaluate(s, `() => {
+    const p = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panelId)}];
+    return { focused: p.editor.hasTextFocus(), highlights: p.getHighlights() };
+  }`);
+  if (!check.focused) throw new Error(`${panelId} gutter click did not focus the editor`);
+  if (check.highlights.length !== 0) throw new Error(`${panelId} gutter click created highlights: ${JSON.stringify(check.highlights)}`);
+}
+
+/**
+ * Scroll prep for tab retention: gutter-focus (no mapping highlight), jump
+ * with Ctrl+End, then PageUp/PageDown until the target line is inside the
+ * visible range. Unlike keyToPanelLine (which must end CONTENT_TEXT-clickable
+ * for p5's long-line click), the stop condition is visibility only, so short
+ * or empty deep lines still yield a deep, stable scrollTop for the baseline.
+ */
+async function scrollPanelToLine(s, panelId, line) {
+  await focusPanelGutter(s, panelId);
+  await keyPress(s, "End", { code: "End", windowsVirtualKeyCode: 35, modifiers: 2 });
+  await new Promise((r) => setTimeout(r, 500));
+  let pages = 0;
+  for (let i = 0; i < 600; i++) {
+    const st = await evaluate(s, `() => {
+      const ed = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panelId)}].editor;
+      const vs = ed.getVisibleRanges()[0];
+      return vs ? { start: vs.startLineNumber, end: vs.endLineNumber, scrollTop: Math.round(ed.getScrollTop()) } : null;
+    }`);
+    if (!st) throw new Error(`${panelId} lost its visible range during scroll prep`);
+    if (line >= st.start && line <= st.end) {
+      const len = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panelId)}].editor.getModel().getLineLength(${line})`);
+      return { panel: panelId, line, lineLength: len, pages, scrollTop: st.scrollTop, visibleRange: [st.start, st.end] };
+    }
+    const mid = (st.start + st.end) / 2;
+    if (line > mid) await keyPress(s, "PageDown", { code: "PageDown", windowsVirtualKeyCode: 34 });
+    else await keyPress(s, "PageUp", { code: "PageUp", windowsVirtualKeyCode: 33 });
+    pages++;
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  throw new Error(`${panelId} line ${line} never became visible`);
+}
+
+/** Untimed leave-leg verification: overview visible, all panels hidden. */
+async function verifyOverviewSettled(s, ids) {
+  const need = JSON.stringify(ids);
+  await waitForFunction(s, `() => {
+    const h = [...document.querySelectorAll('h3')].find((x) => x.textContent.includes('.tt'));
+    if (!h || h.getBoundingClientRect().width === 0) return false;
+    const P = window.__TRITONPARSE_DEBUG?.panels ?? {};
+    return ${need}.every((id) => {
+      const e = P[id]?.editor;
+      if (!e) return false;
+      const r = e.getDomNode().getBoundingClientRect();
+      return r.width <= 20 || r.height <= 20;
+    }) ? true : false;
+  }`, { timeoutMs: 60000 });
+  await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
+}
+
 async function scenarioP1Tabs(args) {
-  // I010: repeated real tab switches with per-switch settle timing.
-  // comparison: "IR Code" <-> "Kernel Overview"; single: h3 card <-> "Back".
-  // Settle = endpoint mounted + first content painted (editors + rows for
-  // monaco IR endpoints, [data-line-number] rows for legacy, h3 for overview).
-  const switches = args.iterations ?? 6;
+  // I010: one timed first mount plus real Comparison <-> Overview tab
+  // returns. Every timed switch arms the committed passive observer
+  // (tab-observer.js), sends ONE real click, and awaits completion with
+  // awaitPromise: visible panels + correct document + retained editor/model
+  // IDs, scroll, and highlights + settled geometry + one following frame.
+  // Hidden keep-alive DOM can never satisfy the observer. Leaves are real
+  // clicks verified untimed (overview visible, panels hidden).
+  const TAB_SETTLE_GATE_MS = 500;
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
     const url = `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
     await s.send("Page.navigate", { url });
-    const h3Fn = `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`;
-    await waitForFunction(s, h3Fn, { timeoutMs: 300000 });
+    await waitForFunction(s, `() => [...document.querySelectorAll('h3')].some((h) => h.textContent.includes('.tt')) ? true : false`, { timeoutMs: 300000 });
     await waitResponsive(s, { tries: 6, settleMs: 2000 });
-    const cmpReadyFn = args.renderer === "monaco"
-      ? `() => {
-          const P = window.__TRITONPARSE_DEBUG?.panels;
-          if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
-          return P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
-        }`
-      : `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`;
-    const singleReadyFn = args.renderer === "monaco"
-      ? `() => {
-          const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
-          if (!ed) return false;
-          return ed.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
-        }`
-      : cmpReadyFn;
-    const results = [];
-    for (let i = 0; i < switches; i++) {
-      if (args.view === "single") {
-        if (i % 2 === 0) {
-          const { file, tClick } = await openFirstSingle(s);
-          await waitForFunction(s, singleReadyFn, { timeoutMs: 300000 });
-          results.push({ switch: i, to: "single", file, settleMs: Date.now() - tClick });
-        } else {
-          const { tClick } = await clickTextTimed(s, "button", "Back");
-          await waitForFunction(s, h3Fn, { timeoutMs: 120000 });
-          results.push({ switch: i, to: "overview", settleMs: Date.now() - tClick });
-        }
-      } else {
-        const tab = i % 2 === 0 ? "IR Code" : "Kernel Overview";
-        const { tClick } = await clickTextTimed(s, "button", tab);
-        await waitForFunction(s, tab === "IR Code" ? cmpReadyFn : h3Fn, { timeoutMs: 300000 });
-        results.push({ switch: i, to: tab, settleMs: Date.now() - tClick });
-      }
-      console.log(`  switch ${i} -> ${results[i].to}: settle ${results[i].settleMs}ms`);
+    const timeOrigin = await evaluate(s, `() => performance.timeOrigin`);
+    await evaluate(s, `() => { ${readFileSync(join(HERE, "tab-observer.js"), "utf8")} return !!window.__PERF_TABS; }`);
+    // Mount leg: first click on IR Code (panels absent until now).
+    let pt = await ensureHeaderVisible(s, "IR Code");
+    const mountArm = await evaluate(s, `(panels) => window.__PERF_TABS.arm({ kind: 'tab-mount', label: 'tab-mount', panels: panels.map((id) => ({ id })) })`, { args: [args.panels], awaitPromise: false });
+    if (!mountArm.armed) throw new Error("mount observer did not arm");
+    await mouseClick(s, pt.x, pt.y);
+    const mount = await evaluate(s, `() => window.__PERF_TABS.completion()`, { awaitPromise: true });
+    if (mount.reason !== "matched-and-next-frame" || mount.durationMs === null) {
+      throw new Error(`mount leg failed: ${mount.reason}`);
     }
+    const mountInventory = await readPanelStates(s, args.panels);
+    if (!mountInventory.every((p) => p.present && p.visible)) {
+      throw new Error(`mount inventory incomplete: ${JSON.stringify(mountInventory).slice(0, 300)}`);
+    }
+    console.log(`  mount -> IR Code: ${Math.round(mount.durationMs * 10) / 10}ms (${mount.frames.length} frames)`);
+    // Retention prep: real input only, then a settle capture as baseline.
+    let prep;
+    if (args.prep.startsWith("click-py:")) {
+      const abs = Number(args.prep.split(":")[1]);
+      const xy = await wheelToPyLine(s, abs);
+      await mouseClick(s, xy.x, xy.y);
+      await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels.python.getHighlights()) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false`, { timeoutMs: 60000, pollingMs: 25 });
+      prep = { kind: "click-py", line: abs };
+    } else {
+      const [, panelId, line] = args.prep.split(":");
+      prep = { kind: "key", ...(await scrollPanelToLine(s, panelId, Number(line))) };
+    }
+    const baseline = await captureStablePanels(s, args.panels, "prep");
+    if (!baseline.every((p) => p.present && p.visible)) {
+      throw new Error(`prep left panels hidden: ${JSON.stringify(baseline).slice(0, 300)}`);
+    }
+    prep.baseline = baseline;
+    console.log(`  prep ${args.prep}: baseline scroll=[${baseline.map((p) => `${p.id}:${Math.round(p.scrollTop)}`).join(",")}] highlights=[${baseline.map((p) => `${p.id}:${p.highlights.length}`).join(",")}]`);
+    // Return legs: real leave (untimed) + timed return, --returns times.
+    const returns = [];
+    for (let i = 0; i < args.returns; i++) {
+      pt = await ensureHeaderVisible(s, "Kernel Overview");
+      await mouseClick(s, pt.x, pt.y);
+      await verifyOverviewSettled(s, args.panels);
+      pt = await ensureHeaderVisible(s, "IR Code");
+      const arm = await evaluate(s, `(panels) => window.__PERF_TABS.arm({ kind: 'tab', label: 'tab-return', panels })`, { args: [baseline.map(({ present, visible, ...keep }) => keep)], awaitPromise: false });
+      if (!arm.armed) throw new Error(`return ${i + 1} observer did not arm`);
+      await mouseClick(s, pt.x, pt.y);
+      const done = await evaluate(s, `() => window.__PERF_TABS.completion()`, { awaitPromise: true });
+      if (done.reason !== "matched-and-next-frame" || done.durationMs === null) {
+        throw new Error(`return ${i + 1} failed: ${done.reason}`);
+      }
+      done.thresholdMs = TAB_SETTLE_GATE_MS;
+      done.thresholdPassed = done.durationMs < TAB_SETTLE_GATE_MS;
+      returns.push({ leg: i + 1, ...done });
+      console.log(`  return ${i + 1} -> IR Code: ${Math.round(done.durationMs * 10) / 10}ms (${done.frames.length} frames) gate ${done.thresholdPassed ? "pass" : "FAIL"}`);
+    }
+    const durations = returns.map((r) => r.durationMs);
     return {
       scenario: "p1-tabs", renderer: args.renderer, view: args.view,
-      traceUrl: args.traceUrl, results,
-      summary: { settleMs: summarize(results.map((r) => r.settleMs)) },
+      traceUrl: args.traceUrl, panels: args.panels, prepKind: args.prep,
+      timeOrigin, thresholdMs: TAB_SETTLE_GATE_MS,
+      mount: { ...mount, inventory: mountInventory },
+      prep, returns,
+      summary: { mountMs: mount.durationMs, returnMs: summarize(durations) },
     };
   } finally {
     try { s.close(); } catch { /* ignore */ }
@@ -574,31 +767,19 @@ async function scenarioP1Tabs(args) {
 }
 
 async function scenarioP1FirstFrame(args) {
-  // I010: committed first-frame verification. A passive rAF sampler is
-  // injected before any page script (addScriptToEvaluateOnNewDocument) and
-  // records per-frame {placeholder visible, debug panels registered, content
-  // rows painted}. Panels register after the synchronous model work inside
-  // editor mount, so firstPlaceholderT < firstPanelsT <= firstContentT proves
-  // the placeholder painted before the sync model work. Raw frames ship in
-  // the result JSON.
+  // I010: committed first-frame verification on the O2 deletion branch. The
+  // CodeView deferred-mount placeholder was deleted (hot gates passed), so
+  // first-frame evidence is the content-first-frame time. first-frame-
+  // observer.js is injected before any page script and passively samples
+  // every frame (performance.now() inside the callback). The per-panel
+  // Editor.loading placeholder is kept per R1 but recorded informatively
+  // only: per R7 it cannot prove pre-work frames. Raw frames ship in the
+  // result JSON.
+  const need = JSON.stringify(args.view === "single" ? ["single-viewer"] : args.panels);
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
     await s.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: `window.__P1FF = { t0: -1, mark: -1, frames: [], done: false };
-        (function rec(t) {
-          if (window.__P1FF.done) return;
-          if (window.__P1FF.t0 < 0) window.__P1FF.t0 = t;
-          const ph = [...document.querySelectorAll('.mp-panel-loading')].some((n) => {
-            const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0;
-          });
-          const panels = Object.keys(window.__TRITONPARSE_DEBUG?.panels ?? {}).length;
-          const rows = document.querySelectorAll('.view-lines .view-line').length;
-          window.__P1FF.frames.push({
-            t: Math.round((t - window.__P1FF.t0) * 10) / 10,
-            ph: ph ? 1 : 0, panels, rows,
-          });
-          requestAnimationFrame(rec);
-        })(performance.now());`,
+      source: readFileSync(join(HERE, "first-frame-observer.js"), "utf8"),
     });
     const url = args.view === "single"
       ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
@@ -606,46 +787,32 @@ async function scenarioP1FirstFrame(args) {
     await s.send("Page.navigate", { url });
     if (args.view === "single") {
       await openFirstSingle(s);
-      await evaluate(s, `() => { window.__P1FF.mark = performance.now(); return true; }`);
     }
-    const readyFn = args.view === "single"
-      ? `() => {
-          const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
-          if (!ed) return false;
-          return ed.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
-        }`
-      : `() => {
-          const P = window.__TRITONPARSE_DEBUG?.panels;
-          if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
-          return P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
-        }`;
-    await waitForFunction(s, readyFn, { timeoutMs: 300000 });
-    // Panels register in a React effect after mount/paint; extend sampling
-    // until registration lands so the panels boundary is always captured.
-    await waitForFunction(
-      s,
-      `() => Object.keys(window.__TRITONPARSE_DEBUG?.panels ?? {}).length > 0 ? true : false`,
-      { timeoutMs: 60000 }
-    );
+    await waitForFunction(s, `() => {
+      const P = window.__TRITONPARSE_DEBUG?.panels ?? {};
+      return ${need}.every((id) => P[id]?.editor?.getDomNode()?.querySelectorAll(".view-lines .view-line").length > 0) ? true : false;
+    }`, { timeoutMs: 300000 });
+    await sleep(1500);
     const data = await evaluate(s, `() => {
-      window.__P1FF.done = true;
-      return { t0: window.__P1FF.t0, mark: window.__P1FF.mark, frames: window.__P1FF.frames };
+      const S = window.__P1FF2;
+      S.done = true;
+      return { rafCount: S.rafCount, frames: S.frames };
     }`);
-    // No pre-click editor exists in either view, so global firsts are the
-    // post-navigation (comparison) / post-click (single) firsts; the mark is
-    // informational only (it trails the click by CDP roundtrips).
-    const markRel = data.mark >= 0 ? data.mark - data.t0 : 0;
-    const first = (pred) => {
-      const f = data.frames.find(pred);
-      return f ? f.t : null;
-    };
+    const firstContent = data.frames.find((f) => f.rows > 0)?.observedAt ?? null;
+    const firstPanels = data.frames.find((f) => f.panels > 0)?.observedAt ?? null;
+    const firstPh = data.frames.find((f) => f.ph === 1)?.observedAt ?? null;
+    if (firstContent === null) {
+      throw new Error("no content frame was ever observed");
+    }
+    const r1 = (v) => (v === null ? null : Math.round(v * 10) / 10);
+    console.log(`  content-first-frame ${r1(firstContent)}ms (panels ${r1(firstPanels)}ms, editor-loading placeholder ${r1(firstPh)}ms, informational)`);
     return {
       scenario: "p1-first-frame", renderer: args.renderer, view: args.view,
-      traceUrl: args.traceUrl,
-      markRelMs: Math.round(markRel * 10) / 10,
-      firstPlaceholderFrameMs: first((f) => f.ph === 1),
-      firstPanelsFrameMs: first((f) => f.panels > 0),
-      firstContentFrameMs: first((f) => f.rows > 0),
+      traceUrl: args.traceUrl, panels: args.view === "single" ? ["single-viewer"] : args.panels,
+      designBranch: "O2-delete-content-first-frame",
+      firstContentObservedMs: r1(firstContent),
+      firstPanelsObservedMs: r1(firstPanels),
+      firstEditorLoadingObservedMs: r1(firstPh),
       frameCount: data.frames.length,
       frames: data.frames,
     };
@@ -1151,7 +1318,7 @@ async function keyToPanelLine(s, panelId, line) {
     if (!t || t.type !== D.monaco.editor.MouseTargetType.CONTENT_TEXT) return null;
     return { x, y };
   }`);
-  for (let i = 0; i < 300; i++) {
+  for (let i = 0; i < 500; i++) {
     const xy = await clickable();
     if (xy) return { ...c, lineX: xy.x, lineY: xy.y };
     const dir = await evaluate(s, `() => {
@@ -1273,6 +1440,9 @@ async function main() {
       expectPath: args.expectPath,
       view: args.view,
       hot: args.hot,
+      panels: args.panels,
+      returns: args.returns,
+      prep: args.prep,
     };
     const stamp = `${args.scenario}-${args.renderer}`;
     writeFileSync(join(args.artifactDir, `${stamp}.json`), JSON.stringify(result, null, 1));
