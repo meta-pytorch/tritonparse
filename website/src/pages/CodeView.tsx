@@ -183,7 +183,7 @@ const CodeViewInner: React.FC<{
       {/* Side-by-side comparison of selected IR files */}
       {leftIR && rightIR ? (
         <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-auto resize-y min-h-48 shadow-sm border border-gray-200">
-          {new URLSearchParams(window.location.search).get("renderer") === "monaco" ? (
+          {new URLSearchParams(window.location.search).get("renderer") !== "prism" ? (
             <CodeComparisonViewV2
               leftPanel={leftPanel}
               rightPanel={rightPanel}
