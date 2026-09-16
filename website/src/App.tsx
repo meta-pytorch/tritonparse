@@ -19,7 +19,6 @@ import IRAnalysis from "./pages/IRAnalysis";
 import DataSourceSelector from "./components/DataSourceSelector";
 import WelcomeScreen from "./components/WelcomeScreen";
 import ExternalLink from "./components/ExternalLink";
-import { mapLanguageToHighlighter } from "./utils/languageUtils";
 import { useFileDiffSession } from "./context/FileDiffSession";
 import { GitHubIcon, BookOpenIcon } from "./components/icons";
 import ShareButton from "./components/ShareButton";
@@ -72,7 +71,7 @@ function App() {
   // once per completed load, reused across ordinary rerenders. Shape
   // `<kind>:<locator>#<loadSeq>` — never derived from the page URL slot, so
   // two local files, URL->local switches, and repeated URL loads each get a
-  // distinct identity (I013). Only load-completion handlers bump the
+  // distinct identity. Only load-completion handlers bump the
   // sequence; render never mints IDs. The pre-load sentinel "no-source" is
   // exempt from the shape: nothing parses this string (buildKernelKey only
   // JSON-wraps it).
@@ -308,7 +307,7 @@ function App() {
         setDataLoaded(true);
         setShowWelcome(false);
         // Covers bundled-example URL strings and local File objects; the
-        // page URL slot is intentionally not read here (I013).
+        // page URL slot is intentionally not read here.
         setSourceIdentity(
           typeof source === "string"
             ? nextSourceIdentity("url", source)
@@ -443,14 +442,14 @@ function App() {
     setVisitedTabs(new Set(visitedTabs).add(activeTab));
   }
 
-  // Committed e2e fixture page (Phase 2): mounts the real comparison V2
+  // Committed e2e fixture page: mounts the real comparison V2
   // with synthetic props and swap buttons. Only reachable through the
   // explicit ?view=comparison_fixture URL; normal flows never render it.
   if (initialParams.get("view") === "comparison_fixture") {
     return <ComparisonFixture />;
   }
 
-  // Committed e2e fixture page (Phase 3, I013): mounts the real Single
+  // Committed e2e fixture page: mounts the real Single
   // viewer with synthetic props and swap buttons. Only reachable through
   // the explicit ?view=single_fixture URL; normal flows never render it.
   if (initialParams.get("view") === "single_fixture") {
@@ -498,7 +497,6 @@ function App() {
         <SingleCodeViewer
           irFile={irFile}
           title={selectedIR}
-          language={mapLanguageToHighlighter(selectedIR, kernel?.ir_stages)}
           onBack={handleBackFromIRView}
           irStages={kernel?.ir_stages}
           sourceId={sourceIdentity}

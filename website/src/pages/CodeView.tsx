@@ -1,9 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { ProcessedKernel, getIRType, getDefaultPanels, IRStageDescriptor } from "../utils/dataLoader";
-import CodeComparisonView from "../components/CodeComparisonView";
 import CodeComparisonViewV2 from "../components/CodeComparisonViewV2";
 import { getDisplayLanguage } from "../utils/irLanguage";
-import { mapLanguageToHighlighter } from "../utils/languageUtils";
 import { ArrowsRightLeftIcon } from "../components/icons";
 
 /**
@@ -12,7 +10,7 @@ import { ArrowsRightLeftIcon } from "../components/icons";
 interface CodeViewProps {
   kernels: ProcessedKernel[]; // Array of processed kernel data
   selectedKernel?: number; // Index of the currently selected kernel
-  /** Actual load-source identity; main path passes App state (I013). */
+  /** Actual load-source identity; main path passes App state. */
   sourceId?: string;
 }
 
@@ -55,16 +53,15 @@ const CodeViewInner: React.FC<{
 
   const hasPythonSource = !!kernel?.pythonSourceInfo?.code;
 
-  // Memoized panel descriptors: CodeComparisonView is memo'd, so these must
-  // keep referential identity across unrelated parent renders (e.g. tab
-  // switches). Fresh object literals here re-rendered all viewers and
+  // Memoized panel descriptors: CodeComparisonViewV2 is memo'd, so these
+  // must keep referential identity across unrelated parent renders (e.g.
+  // tab switches). Fresh object literals here re-rendered all viewers and
   // re-tokenized every row (~6s measured) on each switch.
   const leftPanel = useMemo(() => ({
     code: {
       content: kernel.irFiles[leftIR],
       source_mapping: kernel.sourceMappings?.[getIRType(leftIR)] || {}
     },
-    language: mapLanguageToHighlighter(leftIR, kernel?.ir_stages),
     title: leftIR
   }), [kernel, leftIR]);
   const rightPanel = useMemo(() => ({
@@ -72,7 +69,6 @@ const CodeViewInner: React.FC<{
       content: kernel.irFiles[rightIR],
       source_mapping: kernel.sourceMappings?.[getIRType(rightIR)] || {}
     },
-    language: mapLanguageToHighlighter(rightIR, kernel?.ir_stages),
     title: rightIR
   }), [kernel, rightIR]);
 
@@ -186,35 +182,24 @@ const CodeViewInner: React.FC<{
       {/* Side-by-side comparison of selected IR files */}
       {leftIR && rightIR ? (
         <div className="h-[calc(100vh-20rem)] bg-white rounded-lg overflow-auto resize-y min-h-48 shadow-sm border border-gray-200">
-          {new URLSearchParams(window.location.search).get("renderer") !== "prism" ? (
-            <CodeComparisonViewV2
-              leftPanel={leftPanel}
-              rightPanel={rightPanel}
-              py_code_info={kernel.pythonSourceInfo}
-              showPythonSource={showPythonSource && hasPythonSource}
-              pythonMapping={kernel.sourceMappings?.["python"]}
-              irStages={kernel.ir_stages}
-              // Main path passes the actual load-source identity (I013);
-              // the File Diff preview call site passes nothing and keeps the
-              // legacy page-param derivation (documented boundary: preview
-              // data comes from the File Diff session, not the main load).
-              sourceId={
-                sourceId ??
-                new URLSearchParams(window.location.search).get("json_url") ??
-                "local-data"
-              }
-              kernelId={kernel.metadata?.hash ?? selectedKernel}
-            />
-          ) : (
-            <CodeComparisonView
-              leftPanel={leftPanel}
-              rightPanel={rightPanel}
-              py_code_info={kernel.pythonSourceInfo}
-              showPythonSource={showPythonSource && hasPythonSource}
-              pythonMapping={kernel.sourceMappings?.["python"]}
-              irStages={kernel.ir_stages}
-            />
-          )}
+          <CodeComparisonViewV2
+            leftPanel={leftPanel}
+            rightPanel={rightPanel}
+            py_code_info={kernel.pythonSourceInfo}
+            showPythonSource={showPythonSource && hasPythonSource}
+            pythonMapping={kernel.sourceMappings?.["python"]}
+            irStages={kernel.ir_stages}
+            // Main path passes the actual load-source identity; the File
+            // Diff preview call site passes nothing and falls back to the
+            // page-param derivation (preview data comes from the File Diff
+            // session, not the main load).
+            sourceId={
+              sourceId ??
+              new URLSearchParams(window.location.search).get("json_url") ??
+              "local-data"
+            }
+            kernelId={kernel.metadata?.hash ?? selectedKernel}
+          />
         </div>
       ) : (
         <div className="p-8 text-center text-gray-600">

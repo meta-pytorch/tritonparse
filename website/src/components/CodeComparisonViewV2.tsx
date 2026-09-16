@@ -1,5 +1,5 @@
 /**
- * IR comparison view on Monaco panels (design §3.1, §4.2, Phase 2).
+ * IR comparison view on Monaco panels (design §3.1, §4.2).
  *
  * Same panel props as the legacy CodeComparisonView plus the source-qualified
  * kernel identity (§4.2.1). Owns the three-panel highlight truth source as
@@ -43,12 +43,11 @@ import {
 } from "./monaco/comparisonMapping";
 
 /**
- * Props for a single code panel (same shape as the legacy view).
+ * Props for a single code panel.
  */
 interface CodePanelProps {
   code?: IRFile;
   content?: string;
-  language?: string;
   title?: string;
 }
 
@@ -664,8 +663,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
                   startingLineNumber={1}
                   highlightedLines={leftEffective}
                   onMarkerClick={handleLeftMarkerClick}
-                  layout="side"
-                />
+                          />
                 {renderDiagnosticsBadge("left", diagnostics.left)}
               </div>
             </div>
@@ -726,8 +724,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
                   startingLineNumber={1}
                   highlightedLines={rightEffective}
                   onMarkerClick={handleRightMarkerClick}
-                  layout="side"
-                />
+                          />
                 {renderDiagnosticsBadge("right", diagnostics.right)}
               </div>
             </div>
@@ -797,8 +794,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
                       startingLineNumber={pythonInfo.start_line}
                       highlightedLines={pythonEffective}
                       onMarkerClick={handlePythonMarkerClick}
-                      layout="side"
-                    />
+                                  />
                     {renderDiagnosticsBadge("python", diagnostics.python)}
                   </div>
                 </div>
