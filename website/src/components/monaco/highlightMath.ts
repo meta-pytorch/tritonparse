@@ -118,7 +118,7 @@ export interface AnchorMappingEntry {
 }
 
 /**
- * Strict whole-key line parsing (I001). parseInt would truncate "3.5" to 3
+ * Strict whole-key line parsing. parseInt would truncate "3.5" to 3
  * and "4oops" to 4, forging highlight lines that normalize can no longer
  * recognize as invalid. Only pure integer keys convert; anything else yields
  * NaN so the caller drops it through normalizeHighlightLines with diagnostics.
@@ -132,7 +132,7 @@ function parseMappingKey(key: string): number {
 
 /**
  * Single-view anchor grouping: the clicked line plus every line sharing its
- * anchor value. Key comparison uses strict whole-key parsing (I001):
+ * anchor value. Key comparison uses strict whole-key parsing:
  * non-integer keys yield NaN, which the caller must pipe through
  * normalizeHighlightLines to drop with diagnostics.
  *

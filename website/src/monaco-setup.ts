@@ -1,5 +1,5 @@
 /**
- * Deterministic Monaco loading (design §4.13, Phase 1).
+ * Deterministic Monaco loading (design §4.13).
  *
  * ESM instance injection + inline editor worker. No CDN/AMD requests, no
  * runtime `vs/` resource tree — the single-file build stays self-contained.
@@ -19,7 +19,7 @@ import * as monaco from "monaco-editor/editor/editor.api";
 import "monaco-editor/languages/definitions/python/register";
 import "monaco-editor/editor/contrib/find/browser/findController";
 import "monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoLineQuickAccess";
-// Codicon font + base styles (I005): without this registration the icon
+// Codicon font + base styles: without this registration the icon
 // private-use characters render as tofu (find widget arrows/close/toggles,
 // diff hidden-line expanders). This pulls @font-face + codicon.ttf into the
 // bundle; the standalone inliner embeds the font as a data URI.

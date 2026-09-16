@@ -296,7 +296,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    /** Full Tab/Shift+Tab focus traversal (I006; keyDown, not raw). */
+    /** Full Tab/Shift+Tab focus traversal (keyDown, not raw). */
     async function pressTab(shift = false) {
       for (const type of ["keyDown", "keyUp"]) {
         await s.send("Input.dispatchKeyEvent", {
@@ -308,7 +308,7 @@ async function main() {
     }
 
     /**
-     * Full native Enter sequence (I006): the keyDown carries text like a
+     * Full native Enter sequence: the keyDown carries text like a
      * trusted OS key event. A bare rawKeyDown/keyUp pair does NOT trigger
      * native button activation in Chrome.
      */
@@ -322,7 +322,7 @@ async function main() {
       });
     }
 
-    /** Resolve a verified CONTENT_TEXT click point for a panel line (I011).
+    /** Resolve a verified CONTENT_TEXT click point for a panel line.
      *
      * Editor existence, non-empty model, rendered rows, width and even
      * document navigation-complete do NOT imply the line layout backing
@@ -363,7 +363,7 @@ async function main() {
 
     /** Real-mouse click on a Monaco line; polls decorations to expected. */
     async function clickLine(line, expected) {
-      // I003: the debug/editor API is read-only (§6.3) — no reveal/scroll/layout
+      // The debug/editor API is read-only (§6.3) — no reveal/scroll/layout
       // calls. The short fixture fits the initial viewport, so every target
       // line already has a visible position; a case that needs scrolling must
       // use real wheel/keyboard input, never editor API.
@@ -418,7 +418,7 @@ async function main() {
     await step("anchor group click incl. invalid/out-of-range filtering (F9/F19)", async () => {
       // Fixture group for anchor value 2: lines 2,4 plus key 999 (out of range)
       // and keys locX/3.5/4oops (non-integer) — all must be filtered with a
-      // visible diagnostic (I001: 3.5/4oops must not forge lines 3/4).
+      // visible diagnostic (3.5/4oops must not forge lines 3/4).
       await clickLine(2, [2, 4]);
       const badge = await waitForFunction(
         s,
@@ -466,7 +466,7 @@ async function main() {
       await shot("e2e-single-llir.png");
     });
 
-    // ---- Single same-mount identity (F18 source/stability, Phase 3) ----
+    // ---- Single same-mount identity (F18 source/stability) ----
     // Sibling trace: same filenames, different content/mappings/hash, kernel
     // index 0 like single-basic (F18 counterexample-2 shape: same index,
     // different source must not inherit highlights).
@@ -548,7 +548,7 @@ async function main() {
       await shot("e2e-single-source-switch.png");
     });
 
-    await step("source identity differs across real loads (I013.2)", async () => {
+    await step("source identity differs across real loads", async () => {
       // Still on TRACE-B single from the previous step. Each leg below goes
       // through a real product load flow (header URL / file input); the
       // loading gate remounts Single, and the debug kernelKey must show a
@@ -614,7 +614,7 @@ async function main() {
       // Console errors are asserted once at the very end (more suites follow).
     });
 
-    // ---- Single same-mount identity suite (F18, Phase 3, I013) ----
+    // ---- Single same-mount identity suite (F18) ----
     // Committed fixture page: one real SingleMonacoViewer, one identity
     // input swapped per button through genuine React prop updates. Mirrors
     // the comparison f18Swap discipline (click -> wheel -> swap -> assert).
@@ -796,7 +796,7 @@ async function main() {
         { timeoutMs: 60000 }
       );
       // Real click on line 2; the full 6001-line group lands in state while
-      // the strip samples to 200 markers (I001-style filtering still applies:
+      // the strip samples to 200 markers (strict key filtering still applies:
       // 3 invalid + 2 out-of-range keys are dropped with a badge).
       // Inline layout settle: editors exist before their model content is
       // set and before first paint. Inlined (not shared) so later helper
@@ -864,7 +864,7 @@ async function main() {
       // Already-visible target is still centered by a second real click.
       await mouseClick(s, last.x, last.y);
       await waitCentered(6002);
-      // I006 keyboard path: move the STILL-VISIBLE target off-center with
+      // Keyboard path: move the STILL-VISIBLE target off-center with
       // real wheel input, Tab back to the marker, and prove a full native
       // Enter actually re-centers (scrollTop must observably change back).
       const edCenter = await evaluate(s, `() => {
@@ -1002,8 +1002,8 @@ async function main() {
       `&json_b_url=${encodeURIComponent(fixtureBUrl)}&ir=ttgir&wrap=on&debug=1`;
 
     // File Diff models are pathless DiffEditor models (inmemory://...), while
-    // comparison/single panels use file:///tritonparse/... URIs. Phase 3
-    // keeps comparison monaco-mounted, so filediff counts scope to inmemory.
+    // comparison/single panels use file:///tritonparse/... URIs. Filediff
+    // counts scope to inmemory so mounted IR panels never leak into them.
     const filediffState = () =>
       evaluate(s, `() => {
         const D = window.__TRITONPARSE_DEBUG;
@@ -1186,9 +1186,9 @@ async function main() {
           .some((e) => (e.textContent || '').replace(/\\u00a0/g, ' ').includes(${JSON.stringify(text)}))`);
       await clickText("label", "Only changes");
       await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length > 0`, { timeoutMs: 15000 });
-      // I005: hidden-line expanders use codicons; the font must be loaded.
+      // Hidden-line expanders use codicons; the font must be loaded.
       // Works on dev (served file), preview (asset) and standalone (data URI).
-      // I007: check() alone can pass from fallback coverage; also verify a
+      // check() alone can pass from fallback coverage; also verify a
       // registered FontFace with family codicon reached status loaded.
       await waitForFunction(s, `() => {
         try {
@@ -1452,7 +1452,7 @@ async function main() {
         `() => new URLSearchParams(window.location.search).get('view') === 'ir_code_comparison'`,
         { timeoutMs: 30000 }
       );
-      // Phase 3: comparison mounts monaco by default, so the assertion is
+      // Comparison stays monaco-mounted here, so the assertion is
       // filediff-scoped (diff widgets gone + no inmemory:// filediff models)
       // instead of global zero.
       await waitForFunction(
@@ -1492,7 +1492,7 @@ async function main() {
       await shot("e2e-filediff-final.png");
     });
 
-    // ---- Comparison fixture suite (Phase 2): F1/F2/F3/F4/F6/F7/F13/F15/F18/F19 ----
+    // ---- Comparison fixture suite: F1/F2/F3/F4/F6/F7/F13/F15/F18/F19 ----
     const cmpFixtureUrl =
       `${args.baseUrl}/?view=comparison_fixture&debug=1`;
 
@@ -1530,7 +1530,7 @@ async function main() {
         return { panels: out, markers, badges };
       }`);
 
-    /** Real-mouse click on a comparison panel line (I011: text-derived
+    /** Real-mouse click on a comparison panel line (text-derived
      * coordinates, verified CONTENT_TEXT, exactly one real click). */
     async function clickCmpLine(panel, physLine) {
       const xy = await clickPoint(panel, physLine);
@@ -2055,14 +2055,14 @@ async function main() {
       }
     });
 
-    // ---- Comparison product suite (Phase 2): trace pipeline + tabs ----
+    // ---- Comparison product suite: trace pipeline + tabs ----
     const cmpFixtureTrace = `http://127.0.0.1:${fixturePort}/comparison-basic.ndjson`;
     const cmpProductUrl =
       `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(cmpFixtureTrace)}&debug=1`;
 
-    // Phase 3: monaco is the default branch. This step trips loudly if the
-    // default is misconfigured back to prism (no forced flag anywhere).
-    await step("default URL renders monaco comparison without renderer flag", async () => {
+    // The default URL must render Monaco rows and no legacy rows; the
+    // legacy-row half guards against reintroducing the deleted renderer.
+    await step("default URL renders monaco comparison", async () => {
       await s.send("Page.navigate", { url: cmpProductUrl });
       await waitCmpEditors();
       const branch = await evaluate(s, `() => ({
@@ -2070,14 +2070,10 @@ async function main() {
         legacyRows: document.querySelectorAll("[data-line-number]").length,
       })`);
       if (!(branch.monacoRows > 0 && branch.legacyRows === 0)) {
-        throw new Error(`default branch is not monaco: ${JSON.stringify(branch)}`);
+        throw new Error(`default URL is not monaco: ${JSON.stringify(branch)}`);
       }
-      console.log(`  ok default branch monaco rows=${branch.monacoRows}, legacy rows=0`);
+      console.log(`  ok default monaco rows=${branch.monacoRows}, legacy rows=0`);
     });
-
-    // I015: the prism escape hatch is out of the required suite per design
-    // §5.4 (prism no longer in the CI/test matrix, code kept to Phase 4).
-    // Escape-hatch visual evidence lives in 009-muse tripwire + 010-codex.
 
     await step("product comparison mounts from trace, click maps all panels (F1)", async () => {
       await s.send("Page.navigate", { url: cmpProductUrl });
@@ -2320,12 +2316,12 @@ async function main() {
       assertEqual(copied, st.left.value, "copy button writes full content");
     });
 
-    // ---- Comparison invalid python values (I008/F19): real trace pipeline --
+    // ---- Comparison invalid python values (F19): real trace pipeline --
     const invFixtureTrace = `http://127.0.0.1:${fixturePort}/comparison-invalid.ndjson`;
     const invProductUrl =
       `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(invFixtureTrace)}&debug=1`;
 
-    await step("invalid python values never forge highlights, badge visible (I008/F19)", async () => {
+    await step("invalid python values never forge highlights, badge visible (F19)", async () => {
       await s.send("Page.navigate", { url: invProductUrl });
       await waitCmpEditors();
       await waitCmpSets([], [], []);
@@ -2355,7 +2351,7 @@ async function main() {
       await shot("e2e-comparison-invalid.png");
     });
 
-    await step("strict-int strings and ints still map to python (I008 control)", async () => {
+    await step("strict-int strings and ints still map to python (control)", async () => {
       await clickCmpLine("right", 4);
       await waitCmpSets([9], [4], [459]);
       let st = await cmpState();
@@ -2369,7 +2365,7 @@ async function main() {
       assertEqual(st.badges.python, null, "no badge for 460");
     });
 
-    // ---- Omitted python mapping keeps tab highlights (I012) ----
+    // ---- Omitted python mapping keeps tab highlights ----
     // Fixtures adapted from the Codex round-8 repro (12-line dual IR;
     // omitted lacks source_mappings.python, explicit-empty sets it to {}).
     const omitTrace = `http://127.0.0.1:${fixturePort}/comparison-omitted-python.ndjson`;
@@ -2445,7 +2441,7 @@ async function main() {
       );
     }
 
-    await step("omitted python mapping keeps tab highlights (I012)", async () => {
+    await step("omitted python mapping keeps tab highlights", async () => {
       await s.send("Page.navigate", { url: omitUrl });
       await waitTwoPanels();
       for (const line of [2, 3]) {
@@ -2461,7 +2457,7 @@ async function main() {
       await shot("e2e-comparison-omitted-python.png");
     });
 
-    await step("explicit empty python mapping control (I012)", async () => {
+    await step("explicit empty python mapping control", async () => {
       await s.send("Page.navigate", { url: emptyUrl });
       await waitTwoPanels();
       await clickCmpLine("right", 2);
@@ -2472,7 +2468,7 @@ async function main() {
       assertTwoRetained(before, st, "explicit-empty line 2");
     });
 
-    await step("real IR switch still clears highlights (I012/F18)", async () => {
+    await step("real IR switch still clears highlights (F18)", async () => {
       await selectByKeyboard("cmp_kernel.ttgir");
       await waitTwoSets([], []);
       const st = await cmpState();

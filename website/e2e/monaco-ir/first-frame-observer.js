@@ -1,5 +1,5 @@
 /**
- * Committed first-frame observer for the p1-first-frame perf scenario (I010).
+ * Committed first-frame observer for the p1-first-frame perf scenario.
  *
  * Installed via Page.addScriptToEvaluateOnNewDocument, so it runs before any
  * page script. A passive rAF sampler: every frame records {rafTimestamp,
@@ -7,9 +7,8 @@
  * panels registered}. observedAt is performance.now() read inside the
  * callback; the rAF timestamp argument is stored for correlation only.
  *
- * Design branch (P1 gate line 533, O2 resolved DELETE): the CodeView
- * deferred-mount placeholder was deleted after the hot-open gates passed, so
- * first-frame evidence is the content-first-frame time. The per-panel
+ * First-frame evidence is the content-first-frame time (P1 gate line 533):
+ * no deferred-mount placeholder remains on the measured path. The per-panel
  * Editor.loading placeholder is kept as an init placeholder per R1, but per
  * R7 it cannot prove visible frames during the synchronous model work, so it
  * is recorded informatively only and never asserted as pre-work evidence.

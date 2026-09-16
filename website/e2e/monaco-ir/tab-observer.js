@@ -1,5 +1,5 @@
 /**
- * Committed passive tab-settle observer for the p1-tabs perf scenario (I010).
+ * Committed passive tab-settle observer for the p1-tabs perf scenario.
  *
  * Installed once per page via Runtime.evaluate; each timed switch arms it with
  * explicit expected panels, sends ONE real mouse click, then awaits
@@ -7,7 +7,7 @@
  * except the click itself. All editor/model access is read-only (no reveal,
  * scroll, layout, or model-mutating calls).
  *
- * Boundary (design §6.2 tab settle, rounds/007-codex.md I010):
+ * Boundary (design §6.2 tab settle):
  * - inputAt: performance.now() captured in-page on trusted mousedown/keydown.
  * - match per expected panel: editor present + VISIBLE (rect > 20px and inside
  *   the viewport; hidden keep-alive DOM with 0x0 rects never matches) +

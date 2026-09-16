@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase 2 performance matrix runner (design §6.2, 005 tasks 4-5).
+ * Performance matrix runner (design §6.2).
  *
  * Committed measurement entry: every scenario drives the real UI through
  * real input (CDP mouse/keyboard, no debug-driven calls) and writes raw
@@ -10,9 +10,9 @@
  *
  * Usage:
  *   node e2e/monaco-ir/perf.mjs --scenario p1-cold --trace-url URL
- *     --renderer monaco --base-url URL --artifact-dir DIR [--iterations N]
+ *     --base-url URL --artifact-dir DIR [--iterations N]
  *   node e2e/monaco-ir/perf.mjs --scenario p2 --trace-url URL_100K
- *     --renderer monaco --base-url URL --artifact-dir DIR
+ *     --base-url URL --artifact-dir DIR
  *     --lines 3,2,3 --expect expects.json
  *   node e2e/monaco-ir/perf.mjs --scenario p4 --input-file LOCAL_3X20M
  *     --base-url URL --artifact-dir DIR
@@ -25,17 +25,17 @@
  * panels (default left,right,python; two-panel inputs pass left,right);
  * --prep selects the retention prep, "click-py:<absline>" or
  * "key:<panel>:<line>". Monaco + comparison only: Single open/Back is a
- * remount (covered by p1-cold --hot), not a keep-alive tab switch (I010).
+ * remount (covered by p1-cold --hot), not a keep-alive tab switch.
  * p1-first-frame injects a passive rAF sampler before page load
  * (first-frame-observer.js) and records the content-first-frame time with
- * the full raw frame array. O2 deletion branch: the CodeView deferred
- * placeholder was deleted after the hot gates passed (I010).
+ * the full raw frame array. First-frame evidence is the content-first-frame
+ * time (no deferred-mount placeholder remains on the measured path).
  * p4 takes --input-file <local .ndjson/.ndjson.gz> instead of --trace-url.
  * p2 takes --lines CSV + --expect JSON ({ line: [exact set] }) for inputs
  * where re-clicking one line would pass trivially on the retained set.
  * p1-hot takes --expect JSON ({ pyOffset, clicks: { line: {left,right,python} } })
  * to confirm the exact triple plus all three panels' decorations per click
- * (I009); without it only the python set is confirmed (legacy fallback).
+ * Without --expect only the python set is confirmed.
  * p1-cold and p3 take --view single|comparison (default comparison); the
  * 100k-line gate input runs as --view single.
  *
@@ -47,7 +47,7 @@
  *   highlights + geometry stable across two frames + one following frame.
  *   First mount and repeated returns are labeled separately; the 500ms
  *   settle gate applies to returns.
- * - p1-first-frame: content-first-frame time (O2 deletion branch; the
+ * - p1-first-frame: content-first-frame time (the
  *   per-panel Editor.loading placeholder is recorded informatively only).
  * - p1-hot: mousedown dispatch -> highlight sets applied + next rAF paint.
  * - p2: same hot boundary on the Single view + mapping counts.
@@ -86,7 +86,6 @@ function parseArgs(argv) {
     scenario: null,
     traceUrl: null,
     inputFile: null,
-    renderer: "monaco",
     baseUrl: "http://localhost:5173",
     artifactDir: null,
     iterations: null,
@@ -104,7 +103,6 @@ function parseArgs(argv) {
     if (argv[i] === "--scenario") out.scenario = argv[++i];
     else if (argv[i] === "--trace-url") out.traceUrl = argv[++i];
     else if (argv[i] === "--input-file") out.inputFile = argv[++i];
-    else if (argv[i] === "--renderer") out.renderer = argv[++i];
     else if (argv[i] === "--base-url") out.baseUrl = argv[++i];
     else if (argv[i] === "--artifact-dir") out.artifactDir = argv[++i];
     else if (argv[i] === "--iterations") out.iterations = Number(argv[++i]);
@@ -133,23 +131,18 @@ function parseArgs(argv) {
   if (out.lines !== null && !(out.lines.length > 0 && out.lines.every((n) => Number.isInteger(n) && n > 0))) {
     throw new Error("--lines must be a comma-separated list of positive integers");
   }
-  if (!["monaco", "legacy"].includes(out.renderer)) throw new Error("--renderer must be monaco|legacy");
   if (!["comparison", "single"].includes(out.view)) throw new Error("--view must be comparison|single");
   // Fail loudly on silently-ignored combinations (parseArgs style): --hot
-  // is measured only by p1-cold on Single, and p3 Single is monaco-only
-  // (legacy never enters Single, so the scroll would target the overview
-  // page while the artifact claims view=single).
+  // is measured only by p1-cold on Single. (The p3 Single/monaco guard died
+  // with --renderer: monaco-only leaves no legacy leg to misroute.)
   if (out.hot && (out.scenario !== "p1-cold" || out.view !== "single")) {
     throw new Error("--hot requires --scenario p1-cold --view single");
-  }
-  if (out.scenario === "p3" && out.view === "single" && out.renderer !== "monaco") {
-    throw new Error("p3 --view single requires --renderer monaco");
   }
   if (out.scenario === "p4" && !out.inputFile) throw new Error("p4 requires --input-file");
   if (out.scenario !== "p4" && !out.traceUrl) throw new Error(`${out.scenario} requires --trace-url`);
   if (out.scenario === "p1-tabs") {
-    if (out.renderer !== "monaco" || out.view !== "comparison") {
-      throw new Error("p1-tabs is monaco + comparison only: Single open/Back is a remount (use p1-cold --hot), and the tab observer needs the monaco debug API (I010)");
+    if (out.view !== "comparison") {
+      throw new Error("p1-tabs is comparison only: Single open/Back is a remount (use p1-cold --hot), and the tab observer needs the monaco debug API");
     }
     const ok = ["left", "right", "python"];
     if (out.panels.length < 2 || !out.panels.every((p) => ok.includes(p)) || !out.panels.includes("left") || !out.panels.includes("right")) {
@@ -238,13 +231,6 @@ function killProcAndCleanTmp(proc, userDataDir) {
   } catch (e) {
     console.warn(`warning: tmp profile cleanup failed: ${e?.message ?? e}`);
   }
-}
-
-function rendererParam(renderer) {
-  // Phase 3: monaco is the default; legacy comparison/single are reachable
-  // only via the explicit prism escape hatch. Monaco legs keep the explicit
-  // flag (calibrated method); legacy legs must pass renderer=prism.
-  return renderer === "monaco" ? "&renderer=monaco" : "&renderer=prism";
 }
 
 function summarize(samples) {
@@ -460,13 +446,13 @@ async function scenarioP1Cold(args) {
   for (let i = 0; i < iterations; i++) {
     const { s, proc, userDataDir } = await freshPage(args.chrome);
     try {
-      // I010: --hot on the comparison view measures a real hot open: load
+      // --hot on the comparison view measures a real hot open: load
       // the overview first (cold; the loader initializes), then open the IR
       // view through the tab click and time click->content.
       const hotComparison = args.hot && args.view === "comparison";
       const url = args.view === "single" || hotComparison
-        ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
-        : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+        ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}&debug=1`
+        : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
       const tNav = Date.now();
       await s.send("Page.navigate", { url });
       let tClick = null;
@@ -490,13 +476,10 @@ async function scenarioP1Cold(args) {
         file = "IR Code tab";
       }
       const need = JSON.stringify(args.view === "single" ? ["single-viewer"] : args.panels);
-      const readyFn =
-        args.renderer === "monaco"
-          ? `() => {
-              const P = window.__TRITONPARSE_DEBUG?.panels ?? {};
-              return ${need}.every((id) => P[id]?.editor?.getDomNode()?.querySelectorAll(".view-lines .view-line").length > 0) ? true : false;
-            }`
-          : `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`;
+      const readyFn = `() => {
+        const P = window.__TRITONPARSE_DEBUG?.panels ?? {};
+        return ${need}.every((id) => P[id]?.editor?.getDomNode()?.querySelectorAll(".view-lines .view-line").length > 0) ? true : false;
+      }`;
       await waitForFunction(s, readyFn, { timeoutMs: 300000 });
       const tReady = Date.now();
       const info = await evaluate(s, `() => {
@@ -528,7 +511,7 @@ async function scenarioP1Cold(args) {
       killProcAndCleanTmp(proc, userDataDir);
     }
   }
-  return { scenario: "p1-cold", renderer: args.renderer, view: args.view, traceUrl: args.traceUrl, results };
+  return { scenario: "p1-cold", renderer: "monaco", view: args.view, traceUrl: args.traceUrl, results };
 }
 
 /** Resolve a tab button's click point; throws loudly when unavailable/covered. */
@@ -687,7 +670,7 @@ async function verifyOverviewSettled(s, ids) {
 }
 
 async function scenarioP1Tabs(args) {
-  // I010: one timed first mount plus real Comparison <-> Overview tab
+  // One timed first mount plus real Comparison <-> Overview tab
   // returns. Every timed switch arms the committed passive observer
   // (tab-observer.js), sends ONE real click, and awaits completion with
   // awaitPromise: visible panels + correct document + retained editor/model
@@ -697,7 +680,7 @@ async function scenarioP1Tabs(args) {
   const TAB_SETTLE_GATE_MS = 500;
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
-    const url = `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    const url = `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
     await s.send("Page.navigate", { url });
     await waitForFunction(s, `() => [...document.querySelectorAll('h3')].some((h) => h.textContent.includes('.tt')) ? true : false`, { timeoutMs: 300000 });
     await waitResponsive(s, { tries: 6, settleMs: 2000 });
@@ -756,7 +739,7 @@ async function scenarioP1Tabs(args) {
     }
     const durations = returns.map((r) => r.durationMs);
     return {
-      scenario: "p1-tabs", renderer: args.renderer, view: args.view,
+      scenario: "p1-tabs", renderer: "monaco", view: args.view,
       traceUrl: args.traceUrl, panels: args.panels, prepKind: args.prep,
       timeOrigin, thresholdMs: TAB_SETTLE_GATE_MS,
       mount: { ...mount, inventory: mountInventory },
@@ -770,9 +753,8 @@ async function scenarioP1Tabs(args) {
 }
 
 async function scenarioP1FirstFrame(args) {
-  // I010: committed first-frame verification on the O2 deletion branch. The
-  // CodeView deferred-mount placeholder was deleted (hot gates passed), so
-  // first-frame evidence is the content-first-frame time. first-frame-
+  // Committed first-frame verification. First-frame evidence is the
+  // content-first-frame time. first-frame-
   // observer.js is injected before any page script and passively samples
   // every frame (performance.now() inside the callback). The per-panel
   // Editor.loading placeholder is kept per R1 but recorded informatively
@@ -785,8 +767,8 @@ async function scenarioP1FirstFrame(args) {
       source: readFileSync(join(HERE, "first-frame-observer.js"), "utf8"),
     });
     const url = args.view === "single"
-      ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
-      : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+      ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}&debug=1`
+      : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
     await s.send("Page.navigate", { url });
     if (args.view === "single") {
       await openFirstSingle(s);
@@ -810,7 +792,7 @@ async function scenarioP1FirstFrame(args) {
     const r1 = (v) => (v === null ? null : Math.round(v * 10) / 10);
     console.log(`  content-first-frame ${r1(firstContent)}ms (panels ${r1(firstPanels)}ms, editor-loading placeholder ${r1(firstPh)}ms, informational)`);
     return {
-      scenario: "p1-first-frame", renderer: args.renderer, view: args.view,
+      scenario: "p1-first-frame", renderer: "monaco", view: args.view,
       traceUrl: args.traceUrl, panels: args.view === "single" ? ["single-viewer"] : args.panels,
       designBranch: "O2-delete-content-first-frame",
       firstContentObservedMs: r1(firstContent),
@@ -841,10 +823,10 @@ async function scenarioP1Hot(args) {
   const iterations = args.iterations ?? 5;
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
-    const url = `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    const url = `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
     await s.send("Page.navigate", { url });
     const results = [];
-    if (args.renderer === "monaco") {
+    {
       await waitForFunction(s, `() => {
         const P = window.__TRITONPARSE_DEBUG?.panels;
         return P?.left?.editor && P?.right?.editor && P?.python?.editor ? true : false;
@@ -856,7 +838,7 @@ async function scenarioP1Hot(args) {
         await mouseClick(s, xy.x, xy.y);
         const triple = args.expect?.clicks?.[String(abs)] ?? null;
         if (triple) {
-          // I009: confirm this input's exact highlight triple AND the three
+          // Confirm this input's exact highlight triple AND the three
           // panels' line decorations (python physical = absolute - offset + 1).
           const pyOffset = args.expect.pyOffset ?? 1;
           await waitForFunction(s, `() => {
@@ -892,54 +874,10 @@ async function scenarioP1Hot(args) {
         results.push({ iteration: i, line: abs, clickToSetsMs: tSets - t0, clickToNextFrameMs: tFrame - t0, ...sets });
         console.log(`  iter ${i} (py${abs}): sets ${tSets - t0}ms, frame ${tFrame - t0}ms`);
       }
-    } else {
-      await waitForFunction(s, `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`, { timeoutMs: 300000 });
-      for (let i = 0; i < iterations; i++) {
-        const abs = i % 2 === 0 ? 451 : 601;
-        const xy = await evaluate(s, `() => {
-          const py = document.querySelector('code.language-python');
-          const row = py.querySelector('[data-line-number="${abs}"]');
-          if (!row) return null;
-          row.scrollIntoView({ block: "center" });
-          const r = row.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        }`);
-        if (!xy) throw new Error(`legacy py ${abs} row missing`);
-        await new Promise((r) => setTimeout(r, 400));
-        const t0 = Date.now();
-        await mouseClick(s, xy.x, xy.y);
-        const triple = args.expect?.clicks?.[String(abs)] ?? null;
-        if (triple) {
-          // I009 legacy leg: exact highlighted rows on all three panels
-          // (document order: left block, right block, then python).
-          await waitForFunction(s, `() => {
-            const exp = ${JSON.stringify(normalizeExpectTriple(triple))};
-            const rows = (root) => [...root.querySelectorAll('.highlighted-line')]
-              .map((r) => Number(r.getAttribute("data-line-number"))).sort((a, b) => a - b);
-            const mlir = document.querySelectorAll('code.language-mlir');
-            const py = document.querySelector('code.language-python');
-            if (mlir.length < 2 || !py) return false;
-            return JSON.stringify(rows(mlir[0])) === JSON.stringify(exp.left)
-              && JSON.stringify(rows(mlir[1])) === JSON.stringify(exp.right)
-              && JSON.stringify(rows(py)) === JSON.stringify(exp.python) ? true : false;
-          }`, { timeoutMs: 15000, pollingMs: 25 });
-        } else {
-          await waitForFunction(s, `() => {
-            const py = document.querySelector('code.language-python');
-            const hit = [...py.querySelectorAll('.highlighted-line')].map((r) => Number(r.getAttribute("data-line-number")));
-            return JSON.stringify(hit) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false;
-          }`, { timeoutMs: 15000, pollingMs: 25 });
-        }
-        const tSets = Date.now();
-        await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
-        const tFrame = Date.now();
-        results.push({ iteration: i, line: abs, clickToSetsMs: tSets - t0, clickToNextFrameMs: tFrame - t0 });
-        console.log(`  iter ${i} (py${abs}): sets ${tSets - t0}ms, frame ${tFrame - t0}ms`);
-      }
     }
     const sets = results.map((r) => r.clickToSetsMs);
     const frames = results.map((r) => r.clickToNextFrameMs);
-    return { scenario: "p1-hot", renderer: args.renderer, traceUrl: args.traceUrl, results, summary: { clickToSetsMs: summarize(sets), clickToNextFrameMs: summarize(frames) } };
+    return { scenario: "p1-hot", renderer: "monaco", traceUrl: args.traceUrl, results, summary: { clickToSetsMs: summarize(sets), clickToNextFrameMs: summarize(frames) } };
   } finally {
     try { s.close(); } catch { /* ignore */ }
     killProcAndCleanTmp(proc, userDataDir);
@@ -959,7 +897,7 @@ async function scenarioP2(args) {
   }
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
-    const url = `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    const url = `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
     await s.send("Page.navigate", { url });
     await waitForFunction(s, `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`, { timeoutMs: 300000 });
     // Enter Single on the first kernel's first IR (real overview click).
@@ -1030,7 +968,7 @@ async function scenarioP2(args) {
       results.push({ iteration: i, file: h3.text, line, clickToSetsMs: tSets - t0, clickToNextFrameMs: tFrame - t0, ...counts });
       console.log(`  iter ${i}: line ${line} sets ${tSets - t0}ms, frame ${tFrame - t0}ms, group ${counts.groupSize}`);
     }
-    return { scenario: "p2", renderer: args.renderer, traceUrl: args.traceUrl, results };
+    return { scenario: "p2", renderer: "monaco", traceUrl: args.traceUrl, results };
   } finally {
     try { s.close(); } catch { /* ignore */ }
     killProcAndCleanTmp(proc, userDataDir);
@@ -1044,23 +982,21 @@ async function scenarioP3(args) {
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
     const url = args.view === "single"
-      ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
-      : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+      ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}&debug=1`
+      : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
     await s.send("Page.navigate", { url });
-    if (args.view === "single" && args.renderer === "monaco") {
+    if (args.view === "single") {
       await openFirstSingle(s);
       await waitForFunction(s, `() => {
         const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
         if (!ed) return false;
         return ed.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
       }`, { timeoutMs: 300000 });
-    } else if (args.renderer === "monaco") {
+    } else {
       await waitForFunction(s, `() => {
         const P = window.__TRITONPARSE_DEBUG?.panels;
         return P?.left?.editor ? true : false;
       }`, { timeoutMs: 300000 });
-    } else {
-      await waitForFunction(s, `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`, { timeoutMs: 300000 });
     }
     // Install the passive sampler, then stay silent for 5s of wheeling.
     await evaluate(s, `() => {
@@ -1079,19 +1015,11 @@ async function scenarioP3(args) {
         }).observe({ entryTypes: ["longtask"] });
       } catch { /* longtask unsupported */ }
     }`);
-    const wheelTarget = args.view === "single" && args.renderer === "monaco"
-      ? "single-viewer"
-      : "left";
-    const c = await evaluate(s, args.renderer === "monaco"
-      ? `() => {
-          const r = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(wheelTarget)}].editor.getDomNode().getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        }`
-      : `() => {
-          const v = document.querySelector('code.language-mlir');
-          const r = v.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        }`);
+    const wheelTarget = args.view === "single" ? "single-viewer" : "left";
+    const c = await evaluate(s, `() => {
+      const r = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(wheelTarget)}].editor.getDomNode().getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    }`);
     const tStart = Date.now();
     // 5s window: wheel down, then back up if we hit the bottom. The flip
     // fires once per 2.5s slot (slot counter, not a time-window predicate:
@@ -1111,7 +1039,7 @@ async function scenarioP3(args) {
     const samples = await evaluate(s, `() => ({ frames: window.__p3.frames, longtasks: window.__p3.longtasks, count: window.__p3.count })`);
     const gaps = samples.frames;
     return {
-      scenario: "p3", renderer: args.renderer, view: args.view, traceUrl: args.traceUrl,
+      scenario: "p3", renderer: "monaco", view: args.view, traceUrl: args.traceUrl,
       windowMs: Date.now() - tStart,
       frameGaps: summarize(gaps.map((g) => Math.round(g * 100) / 100)),
       longtasks: { n: samples.longtasks.length, totalMs: Math.round(samples.longtasks.reduce((a, b) => a + b, 0) * 10) / 10 },
@@ -1136,7 +1064,7 @@ async function scenarioP4(args, fixturePort) {
     const big = `http://127.0.0.1:${fixturePort}/p4-input.ndjson.gz`;
     const url =
       `${args.baseUrl}/?json_url=${encodeURIComponent(big)}` +
-      `&json_b_url=${encodeURIComponent(big)}&ir=ttgir&renderer=monaco&debug=1`;
+      `&json_b_url=${encodeURIComponent(big)}&ir=ttgir&debug=1`;
     await s.send("Page.navigate", { url });
     await waitForFunction(
       s,
@@ -1344,10 +1272,10 @@ async function scenarioP5(args) {
   // scenario reports the measured maximum and stays inconclusive. On a
   // conclusive input it also drives the §6.2 wrap gate: wrap must be off,
   // and real horizontal wheel input must move the long-line panel with
-  // content still rendered (equivalent to the legacy <pre> behavior).
+  // content still rendered with the panel scrolled.
   const { s, proc, userDataDir } = await freshPage(args.chrome);
   try {
-    const url = `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    const url = `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}&debug=1`;
     const t0 = Date.now();
     await s.send("Page.navigate", { url });
     await waitForFunction(s, `() => {
@@ -1366,7 +1294,7 @@ async function scenarioP5(args) {
       }
       return best;
     }`);
-    const result = { scenario: "p5", renderer: args.renderer, traceUrl: args.traceUrl, mountMs: tReady - t0, longestRenderedIrLine: longest, conclusive: longest.len > 5000 };
+    const result = { scenario: "p5", renderer: "monaco", traceUrl: args.traceUrl, mountMs: tReady - t0, longestRenderedIrLine: longest, conclusive: longest.len > 5000 };
     if (!result.conclusive) return result;
     // Wrap gate on the panel holding the longest real line. Scroll width is
     // measured after the long line is laid out (Monaco sizes lazily).
@@ -1447,9 +1375,9 @@ async function main() {
       returns: args.returns,
       prep: args.prep,
     };
-    const stamp = `${args.scenario}-${args.renderer}`;
+    const stamp = `${args.scenario}-monaco`;
     writeFileSync(join(args.artifactDir, `${stamp}.json`), JSON.stringify(result, null, 1));
-    console.log(`PERF ${args.scenario}/${args.renderer} DONE -> ${args.artifactDir}/${stamp}.json`);
+    console.log(`PERF ${args.scenario}/monaco DONE -> ${args.artifactDir}/${stamp}.json`);
   } finally {
     // Awaited close: fire-and-forget lets the process exit mid-teardown;
     // closeAllConnections() drops the dead-Chrome keep-alives first so the

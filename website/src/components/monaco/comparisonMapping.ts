@@ -1,12 +1,11 @@
 /**
- * Pure comparison mapping math (design §4.2–§4.4, Phase 2).
+ * Pure comparison mapping math (design §4.2–§4.4).
  *
- * Ports the mapping semantics of CodeComparisonView.calculateMappedLines /
- * calculatePythonLines (lines 260–343) out of React so unit tests and both
- * renderers share one implementation. Two deliberate deviations from the
- * legacy code, both required by the approved design:
+ * Mapping semantics live outside React so unit tests and panels share one
+ * implementation. Two deliberate deviations, both required by the approved
+ * design:
  *
- * 1. No parseInt/Number forging (F19/I008): legacy `parseInt(line, 10)`
+ * 1. No parseInt/Number forging (F19): `parseInt(line, 10)`
  *    truncated "3.5" to 3 and "4oops" to 4, and `Number(mapping.line)`
  *    converted true to 1 and [459] to 459, inventing highlight lines the
  *    normalizer could no longer recognize as invalid. Only pure-integer
@@ -43,7 +42,7 @@ export interface PythonPanelInfo {
 }
 
 /**
- * Strict whole-string integer parsing (I001 rule, shared with the anchor
+ * Strict whole-string integer parsing (shared with the anchor
  * grouping): "42" -> 42, but "3.5"/"4oops"/"" stay verbatim so the
  * normalizer counts them as invalid instead of highlighting forged lines.
  */
@@ -139,7 +138,7 @@ export function calculatePythonLines(
     return [];
   }
 
-  // Same strict rule as calculateMappedLines (I008): integers pass through
+  // Same strict rule as calculateMappedLines: integers pass through
   // verbatim, pure-integer strings convert, and everything else (boolean,
   // array, hex/float strings, objects) passes through verbatim so
   // normalizeHighlightLines drops it with diagnostics. Never Number()-coerce:

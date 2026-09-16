@@ -108,7 +108,7 @@ test("non-numeric mapping keys flow into normalize diagnostics, not decorations"
   assert.equal(out.droppedInvalid, 1);
 });
 
-test("I001: fractional/trailing-char keys never forge line numbers", () => {
+test("fractional/trailing-char keys never forge line numbers", () => {
   // Exact counterexamples from rounds/002-codex.md (candidate 0513e65f).
   const mapping = {
     "2": { ttgir_line: 7 },

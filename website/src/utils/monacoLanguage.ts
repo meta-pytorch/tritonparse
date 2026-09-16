@@ -20,7 +20,7 @@ export const MONACO_LANGUAGE_IDS = {
  * not imported (it would enable diagnostics plus a dedicated worker),
  * and C has no proven legacy coloring behavior (§4.6).
  *
- * A Map (I002): indexing a plain object with a trace-controlled key would
+ * A Map: indexing a plain object with a trace-controlled key would
  * read inherited properties ("constructor"/"toString" return functions,
  * "__proto__" returns an object), skipping the plaintext fallback.
  */
@@ -39,9 +39,8 @@ const SYNTAX_ID_TO_MONACO: ReadonlyMap<string, string> = new Map([
  * Resolve a Monaco language id from the raw filename (R6: never reverse-map
  * from the display name, which is not invertible for custom display_names).
  *
- * Lookup order mirrors mapLanguageToHighlighter: ir_stages syntax_id first,
- * then the legacy extension fallback. Unknown ids fall back to plaintext
- * (matches the legacy unregistered-language behavior) with a warning.
+ * Lookup order: ir_stages syntax_id first, then the extension fallback.
+ * Unknown ids fall back to plaintext with a warning.
  */
 export function mapFileToMonacoLanguage(
   filename: string,
