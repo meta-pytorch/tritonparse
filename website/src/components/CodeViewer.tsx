@@ -6,12 +6,8 @@ import {
 } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { SourceMapping } from "../utils/dataLoader";
 import { mapLanguageToHighlighter } from "../utils/languageUtils";
-import {
-  EMPTY_HIGHLIGHTED_LINES,
-  getCodeViewerHighlights,
-  HIGHLIGHT_LINES_EVENT,
-  type HighlightLinesEventDetail,
-} from "./highlightEvents";
+import { EMPTY_HIGHLIGHTED_LINES, getCodeViewerHighlights } from "./highlightEvents";
+import LegacyRulerAdapter from "./LegacyRulerAdapter";
 import "./CodeViewer.css";
 
 // Import language support
@@ -192,124 +188,6 @@ const countLines = (code: string): number => {
     if (code.charCodeAt(index) === 10) lineCount += 1;
   }
   return lineCount;
-};
-
-interface OverviewRulerProps {
-  viewerId?: string;
-  lineCount: number;
-  startingLineNumber: number;
-  initialHighlightedLines: number[];
-}
-
-/**
- * A lightweight overview of highlighted logical lines in the full file.
- * Highlight updates are delivered separately from the code viewer props so
- * changing a mapping does not re-render a large syntax-highlighted document.
- */
-const OverviewRuler: React.FC<OverviewRulerProps> = ({
-  viewerId,
-  lineCount,
-  startingLineNumber,
-  initialHighlightedLines,
-}) => {
-  const [eventHighlightedLines, setEventHighlightedLines] = useState<
-    number[] | null
-  >(() => viewerId ? getCodeViewerHighlights(viewerId) ?? null : null);
-  const highlightedLines = eventHighlightedLines ?? initialHighlightedLines;
-
-  useEffect(() => {
-    if (!viewerId) return;
-
-    const handleHighlightLines = (event: Event) => {
-      const detail = (event as CustomEvent<HighlightLinesEventDetail>).detail;
-      if (detail.viewerId === viewerId) {
-        setEventHighlightedLines(detail.lineNumbers);
-      }
-    };
-
-    window.addEventListener(HIGHLIGHT_LINES_EVENT, handleHighlightLines);
-    return () => {
-      window.removeEventListener(HIGHLIGHT_LINES_EVENT, handleHighlightLines);
-    };
-  }, [viewerId]);
-
-  const lastLineNumber = startingLineNumber + lineCount - 1;
-  const visibleMarkers = useMemo(
-    () => Array.from(new Set(highlightedLines))
-      .filter(line => line >= startingLineNumber && line <= lastLineNumber)
-      .sort((a, b) => a - b),
-    [highlightedLines, startingLineNumber, lastLineNumber]
-  );
-
-  const scrollToLine = useCallback((lineNumber: number) => {
-    if (!viewerId) return;
-
-    const container = document.querySelector(
-      `[data-viewer-id="${viewerId}"]`
-    ) as HTMLElement | null;
-    if (!container) return;
-
-    const target = container.querySelector(
-      `[data-line-number="${lineNumber}"]`
-    ) as HTMLElement | null;
-    if (target) {
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-      const centeredTop = container.scrollTop + targetRect.top -
-        containerRect.top - container.clientHeight / 2;
-      container.scrollTo({ top: Math.max(0, centeredTop), behavior: "smooth" });
-      return;
-    }
-
-    // A virtualized viewer may not have the requested line in the DOM yet.
-    // Virtualized rows have uniform height, so measure one rendered row
-    // (exact under any font size) and jump precisely instead of guessing by
-    // fraction: with virtualization active above 100KB this fallback is the
-    // common path, not the exception.
-    const probe = container.querySelector(
-      '[data-line-number]'
-    ) as HTMLElement | null;
-    const rowHeight = probe ? probe.getBoundingClientRect().height : 0;
-    if (rowHeight > 0) {
-      const lineTop = (lineNumber - startingLineNumber) * rowHeight;
-      container.scrollTo({
-        top: Math.max(0, lineTop - container.clientHeight / 2),
-        behavior: 'smooth',
-      });
-      return;
-    }
-
-    // No measurable row (empty viewer): fall back to a fractional guess.
-    const fraction = lineCount <= 1
-      ? 0
-      : (lineNumber - startingLineNumber) / (lineCount - 1);
-    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    container.scrollTo({ top: fraction * maxScrollTop, behavior: "smooth" });
-  }, [viewerId, lineCount, startingLineNumber]);
-
-  if (!viewerId) return null;
-
-  return (
-    <div className="code-overview-ruler" aria-label="Highlighted lines overview">
-      {visibleMarkers.map(lineNumber => {
-        const rawPosition = lineCount <= 1
-          ? 0
-          : ((lineNumber - startingLineNumber) / (lineCount - 1)) * 100;
-        const position = Math.min(98, Math.max(2, rawPosition));
-        return (
-          <button
-            key={lineNumber}
-            type="button"
-            className="code-overview-marker"
-            style={{ top: `${position}%` }}
-            aria-label={`Scroll to highlighted line ${lineNumber}`}
-            title={`Line ${lineNumber}`}
-            onClick={() => scrollToLine(lineNumber)}
-          />
-        );
-      })}
-    </div>
-  );
 };
 
 /**
@@ -822,6 +700,11 @@ const StandardCodeViewer: React.FC<CodeViewerProps> = ({
  */
 const CodeViewer: React.FC<CodeViewerProps> = (props) => {
   const lineCount = useMemo(() => countLines(props.code), [props.code]);
+  const startingLineNumber = props.startingLineNumber ?? 1;
+
+  // The highlight-bus subscription lives in LegacyRulerAdapter, NOT here:
+  // owning bus state in CodeViewer would re-render the whole Prism syntax
+  // subtree on every mapping event. This component stays props-driven.
 
   // Restore retained classes when a viewer (notably the optional Python panel)
   // mounts after its latest highlight event was published.
@@ -900,15 +783,14 @@ const CodeViewer: React.FC<CodeViewerProps> = (props) => {
       style={{ height: props.height || "100%" }}
     >
       {viewer}
-      <OverviewRuler
-        key={props.viewerId}
-        viewerId={props.viewerId}
-        lineCount={lineCount}
-        startingLineNumber={props.startingLineNumber ?? 1}
-        initialHighlightedLines={
-          props.highlightedLines ?? EMPTY_HIGHLIGHTED_LINES
-        }
-      />
+      {props.viewerId && (
+        <LegacyRulerAdapter
+          viewerId={props.viewerId}
+          lineCount={lineCount}
+          startingLineNumber={startingLineNumber}
+          fallbackLines={props.highlightedLines ?? EMPTY_HIGHLIGHTED_LINES}
+        />
+      )}
     </div>
   );
 };
