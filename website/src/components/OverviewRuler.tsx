@@ -122,9 +122,12 @@ const OverviewRuler: React.FC<OverviewRulerProps> = ({
   // first highlight used to fire the panel ResizeObserver mid-reveal and
   // freeze the smooth highlight animation part-way (measured: stuck at 117
   // instead of centering on 428).
+  // An empty strip keeps its 14px column (layout stability) but drops the
+  // grey track so it no longer reads as a dead scrollbar.
+  const empty = highlightedLines.length === 0;
   return (
     <div
-      className="code-overview-ruler"
+      className={`code-overview-ruler${empty ? " is-empty" : ""}`}
       data-testid="overview-ruler"
       aria-label="Highlighted lines overview"
     >

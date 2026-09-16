@@ -933,6 +933,22 @@ async function main() {
         };
       }`);
       assertEqual(interception, { inMonaco: true, inRuler: false }, "no ruler interception at editor edge");
+      // Native overview ruler removed: zero lanes, no strip rendered. Only
+      // the native scrollbar (scrolling) and the side strip (markers) remain.
+      const nativeRuler = await evaluate(s, `() => {
+        const D = window.__TRITONPARSE_DEBUG;
+        const ed = D.panels['single-viewer'].editor;
+        const el = ed.getDomNode().querySelector('.overview-ruler');
+        return {
+          lanes: ed.getOption(D.monaco.editor.EditorOption.overviewRulerLanes),
+          width: el ? el.getBoundingClientRect().width : -1,
+        };
+      }`);
+      assertEqual(nativeRuler.lanes, 0, "native overview ruler lanes off");
+      if (!(nativeRuler.width === -1 || nativeRuler.width === 0)) {
+        throw new Error(`native overview ruler still rendered: width=${nativeRuler.width}`);
+      }
+      console.log("  ok no native overview ruler strip");
       await shot("e2e-ruler-overflow.png");
     });
 

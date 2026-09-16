@@ -18,6 +18,11 @@
     z-index: 30;
 }
 
+.code-overview-ruler.is-empty {
+    background: transparent;
+    box-shadow: none;
+}
+
 .code-overview-marker {
     position: absolute;
     left: 3px;
