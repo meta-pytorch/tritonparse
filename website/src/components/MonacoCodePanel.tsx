@@ -124,6 +124,10 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
     () => ({
       readOnly: true,
       minimap: { enabled: false },
+      // No native overview ruler: the side OverviewRuler owns all markers
+      // (clickable, sampled, overflow popup). Zero lanes hides the strip
+      // while the native scrollbar stays for scrolling.
+      overviewRulerLanes: 0,
       folding: false,
       occurrencesHighlight: "off",
       selectionHighlight: false,
@@ -254,10 +258,6 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
             isWholeLine: true,
             className: "mp-highlighted-line",
             zIndex: 10,
-            overviewRuler: {
-              color: "rgba(245,158,11,.9)",
-              position: monacoApi.editor.OverviewRulerLane.Right,
-            },
           },
         }))
       );
