@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "build:single": "tsc -b && vite build && node scripts/inline-html.js",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "node --test \"e2e/monaco-ir/unit/*.test.ts\"",
+    "test:e2e-monaco": "node e2e/monaco-ir/run.mjs",
+    "test:worker": "node e2e/monaco-ir/worker-probe.mjs"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
