@@ -1,0 +1,56 @@
+/* Monaco IR panel styles. Colors reuse CodeViewer.css values. */
+
+.mp-panel-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.mp-panel-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+/* Mapping highlight: whole-line decoration (cf. .highlighted-line). */
+.mp-highlighted-line {
+  background-color: rgba(255, 215, 0, 0.4);
+  border-left: 3px solid orange;
+}
+
+/* Single-view wrapper: flex row holding the editor plus the side ruler
+   strip; also the positioning context for the diagnostics badge. */
+.mp-single-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+}
+
+/* In the flex row the panel takes the remaining width; min-width: 0 lets it
+   shrink below content size instead of squeezing the 14px ruler strip. */
+.mp-single-wrap > .mp-panel-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+/* Visible diagnostics for filtered mappings (§4.4.1 second channel). */
+.mp-diagnostics-badge {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 20;
+  background-color: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 8px;
+  border-radius: 4px;
+  pointer-events: auto;
+}
