@@ -289,6 +289,40 @@ async function main() {
       }
     }
 
+    /** Real mouse wheel scroll at viewport coordinates. */
+    async function mouseWheel(x, y, deltaY) {
+      await s.send("Input.dispatchMouseEvent", {
+        type: "mouseWheel", x, y, deltaX: 0, deltaY,
+      });
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    /** Full Tab/Shift+Tab focus traversal (I006; keyDown, not raw). */
+    async function pressTab(shift = false) {
+      for (const type of ["keyDown", "keyUp"]) {
+        await s.send("Input.dispatchKeyEvent", {
+          type, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9,
+          modifiers: shift ? 8 : 0,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    /**
+     * Full native Enter sequence (I006): the keyDown carries text like a
+     * trusted OS key event. A bare rawKeyDown/keyUp pair does NOT trigger
+     * native button activation in Chrome.
+     */
+    async function pressEnter() {
+      await s.send("Input.dispatchKeyEvent", {
+        type: "keyDown", key: "Enter", code: "Enter",
+        windowsVirtualKeyCode: 13, text: "\r", unmodifiedText: "\r",
+      });
+      await s.send("Input.dispatchKeyEvent", {
+        type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13,
+      });
+    }
+
     /** Real-mouse click on a Monaco line; polls decorations to expected. */
     async function clickLine(line, expected) {
       // I003: the debug/editor API is read-only (§6.3) — no reveal/scroll/layout
@@ -511,10 +545,48 @@ async function main() {
       await waitCentered(6002);
       let st = await singleState();
       assertEqual(st.highlights.length, 6001, "marker click keeps set");
-      // Already-visible target is still centered; keyboard Enter activates.
+      // Already-visible target is still centered by a second real click.
+      await mouseClick(s, last.x, last.y);
       await waitCentered(6002);
-      await keyPress(s, "Enter", { code: "Enter", windowsVirtualKeyCode: 13 });
+      // I006 keyboard path: move the STILL-VISIBLE target off-center with
+      // real wheel input, Tab back to the marker, and prove a full native
+      // Enter actually re-centers (scrollTop must observably change back).
+      const edCenter = await evaluate(s, `() => {
+        const r = window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor.getDomNode().getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      }`);
+      await mouseWheel(edCenter.x, edCenter.y, 220);
+      await mouseWheel(edCenter.x, edCenter.y, 220);
+      await waitForFunction(
+        s,
+        `() => {
+          const D = window.__TRITONPARSE_DEBUG;
+          const ed = D.panels['single-viewer'].editor;
+          const lh = ed.getOption(D.monaco.editor.EditorOption.lineHeight);
+          const h = ed.getLayoutInfo().height;
+          const pos = ed.getScrolledVisiblePosition({ lineNumber: 6002, column: 1 });
+          if (!pos || pos.top < 0 || pos.top + pos.height > h) return false;
+          return Math.abs(pos.top + pos.height / 2 - h / 2) > lh * 2 ? true : false;
+        }`,
+        { timeoutMs: 15000 }
+      );
+      console.log("  ok target visible but off-center");
+      const offCenterTop = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor.getScrollTop()`);
+      await pressTab(true);
+      await pressTab(false);
+      const focused = await evaluate(s, `() => document.activeElement?.getAttribute('data-testid')`);
+      assertEqual(focused, "overview-marker-6002", "real Tab focuses marker");
+      await pressEnter();
       await waitCentered(6002);
+      const recenteredTop = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor.getScrollTop()`);
+      const lineH = await evaluate(s, `() => {
+        const D = window.__TRITONPARSE_DEBUG;
+        return D.panels['single-viewer'].editor.getOption(D.monaco.editor.EditorOption.lineHeight);
+      }`);
+      if (!(Math.abs(recenteredTop - offCenterTop) > lineH)) {
+        throw new Error(`Enter did not move scroll: ${offCenterTop} -> ${recenteredTop}`);
+      }
+      console.log("  ok Enter re-centered the visible target");
       st = await singleState();
       assertEqual(st.highlights.length, 6001, "keyboard activation keeps set");
       await shot("e2e-ruler-centered.png");
@@ -780,6 +852,10 @@ async function main() {
           .some((e) => (e.textContent || '').replace(/\\u00a0/g, ' ').includes(${JSON.stringify(text)}))`);
       await clickText("label", "Only changes");
       await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length > 0`, { timeoutMs: 15000 });
+      // I005: hidden-line expanders use codicons; the font must be loaded.
+      // Works on dev (served file), preview (asset) and standalone (data URI).
+      await waitForFunction(s, `() => document.fonts.check('16px codicon') ? true : false`, { timeoutMs: 30000 });
+      console.log("  ok codicon font loaded");
       const before = await hiddenTotal();
       if (!(before > 0)) throw new Error("only-changes hid nothing");
       // Context 3 (default): line 119 visible, line 110 hidden. The viewport

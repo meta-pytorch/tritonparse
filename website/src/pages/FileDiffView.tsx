@@ -295,11 +295,13 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
 
   // NOTE: an earlier revision hid the diff editors on preview navigation
   // ("hideDiff") to dodge the Monaco dispose race. That race is fixed at its
-  // root (detach-then-dispose in DiffComparisonView), and tab switches never
-  // unmount this view (App keep-alive hides with display:none), so the extra
-  // unmount was pure cost — and the flag was never restored when the reset
-  // key was unchanged, leaving a blank diff after a preview round-trip.
-  // The preview buttons below navigate directly; nothing unmounts.
+  // root (detach-then-dispose in DiffComparisonView), so the extra unmount
+  // was pure cost — and the flag was never restored when the reset key was
+  // unchanged, leaving a blank diff after a preview round-trip. Plain tab
+  // switches keep this view mounted (App keep-alive hides with display:none),
+  // but the preview buttons below navigate into App's EXCLUSIVE preview
+  // rendering, which genuinely unmounts this view and remounts a fresh one
+  // on return (covered by the preview round-trip e2e step).
 
   const renderSingle = () => {
     const leftContent = getContentByIRType(leftKernel, effectiveIrType);

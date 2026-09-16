@@ -19,6 +19,11 @@ import * as monaco from "monaco-editor/editor/editor.api";
 import "monaco-editor/languages/definitions/python/register";
 import "monaco-editor/editor/contrib/find/browser/findController";
 import "monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoLineQuickAccess";
+// Codicon font + base styles (I005): without this registration the icon
+// private-use characters render as tofu (find widget arrows/close/toggles,
+// diff hidden-line expanders). This pulls @font-face + codicon.ttf into the
+// bundle; the standalone inliner embeds the font as a data URI.
+import "monaco-editor/features/codicon/register";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker&inline";
 
 declare global {

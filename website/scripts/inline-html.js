@@ -193,6 +193,38 @@ for (const script of inlinedScripts) {
   }
 }
 
+// Inline font assets referenced from the inlined JS (I005). Vite emits e.g.
+// assets/codicon-<hash>.ttf and references it from JS-injected CSS via
+// new URL(`codicon-<hash>.ttf`, document.currentScript...src||baseURI).
+// The moved standalone.html has no adjacent assets, so each referenced font
+// basename is replaced with its data URI (split/join: no `$` substitution).
+// Any leftover reference fails the build — it would 404 in delivery.
+const FONT_EXTENSIONS = new Set(['.ttf', '.woff', '.woff2', '.otf', '.eot']);
+const FONT_MIME_TYPES = { '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.otf': 'font/otf', '.eot': 'application/vnd.ms-fontobject' };
+const assetsDir = path.join(distDir, 'assets');
+// Skip-if-missing like every other inliner step (style/favicon/img all
+// guard before reading): an unguarded readdirSync would throw ENOENT.
+const assetEntries = fs.existsSync(assetsDir) ? fs.readdirSync(assetsDir, { withFileTypes: true }) : [];
+for (const entry of assetEntries) {
+  if (!entry.isFile() || !FONT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
+  const fontPath = path.join(assetsDir, entry.name);
+  const occurrences = html.split(entry.name).length - 1;
+  if (occurrences === 0) continue;
+  const dataUri = toDataURI(fontPath, FONT_MIME_TYPES[path.extname(entry.name).toLowerCase()]);
+  // A null read must abort like every other inliner failure: without this
+  // guard join() would inject the literal string "null" into the bundle.
+  if (!dataUri) {
+    console.error(`Error: could not read font asset ${entry.name}; aborting.`);
+    process.exit(1);
+  }
+  html = html.split(entry.name).join(dataUri);
+  console.log(`Inlined font asset ${entry.name} (${occurrences} reference(s)) as data URI.`);
+  if (html.includes(entry.name)) {
+    console.error(`Error: font reference ${entry.name} survives inlining; aborting.`);
+    process.exit(1);
+  }
+}
+
 // Write the result to a new HTML file
 fs.writeFileSync(outputFile, html);
 console.log(`✅ Standalone HTML file created at: ${outputFile}`);

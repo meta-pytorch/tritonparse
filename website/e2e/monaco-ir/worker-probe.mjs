@@ -441,6 +441,9 @@ async function main() {
     await clickText("label", "Only changes");
     await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length > 0`, { timeoutMs: 15000 });
     console.log("  ok only-changes hides rows");
+    // I005: the codicon font must load (data URI on standalone delivery).
+    await waitForFunction(s, `() => document.fonts.check('16px codicon') ? true : false`, { timeoutMs: 30000 });
+    console.log("  ok codicon font loaded");
     await clickText("label", "Only changes");
     await waitForFunction(s, `() => document.querySelectorAll('.diff-hidden-lines').length === 0`, { timeoutMs: 15000 });
     // The wrap/only-changes toggles above emit worker replies of their own;
@@ -495,9 +498,16 @@ async function main() {
     if (warnings.some((t) => /Could not create web worker|Falling back to loading web worker|main thread.*fallback/i.test(t))) {
       throw new Error(`worker fallback warning: ${JSON.stringify(warnings)}`);
     }
+    // AMD/CDN/worker-file requests are banned everywhere; font files may load
+    // same-origin on dev/preview, but the standalone delivery (no adjacent
+    // assets) must be fully self-contained via the inlined data URI (I005).
     const badRequests = requests.filter((r) =>
-      /jsdelivr\.net|unpkg\.com|\/monaco-tmp\/|\/vs\/loader\.js|\/vs\/editor\/editor\.main|(?:json|ts|css|html)\.worker|\.ttf|\.woff2?/i.test(r.url));
-    assertEqual(badRequests, [], "amd/cdn/worker/font requests");
+      /jsdelivr\.net|unpkg\.com|\/monaco-tmp\/|\/vs\/loader\.js|\/vs\/editor\/editor\.main|(?:json|ts|css|html)\.worker/i.test(r.url));
+    assertEqual(badRequests, [], "amd/cdn/worker requests");
+    if (args.staticDir) {
+      const fontRequests = requests.filter((r) => /\.(ttf|woff2?|otf|eot)(\?|$)/i.test(r.url));
+      assertEqual(fontRequests, [], "standalone font requests");
+    }
 
     await s.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: observerId });
     s.close();
