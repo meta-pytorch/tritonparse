@@ -37,6 +37,8 @@ interface SingleMonacoViewerProps {
   sourceId?: string;
   /** Kernel hash or index within the source; never a global identity. */
   kernelId?: string | number;
+  /** Word wrap. Default "off". */
+  wordWrap?: "off" | "on";
 }
 
 const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
@@ -46,6 +48,7 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
   irStages,
   sourceId,
   kernelId,
+  wordWrap = "off",
 }) => {
   const codeContent = irContent || (irFile ? irFile.content : "");
   const sourceMapping = irFile?.source_mapping;
@@ -163,6 +166,7 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
         docToken={currentDoc}
         debugIdentity={kernelKey}
         fontSize={16}
+        wordWrap={wordWrap}
         onLineClick={handleLineClick}
         onMount={handlePanelMount}
       />

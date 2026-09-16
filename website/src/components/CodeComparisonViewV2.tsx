@@ -68,6 +68,8 @@ interface CodeComparisonViewV2Props {
   sourceId: string;
   /** Kernel identity within the source: metadata.hash ?? selected index. */
   kernelId: string | number;
+  /** Word wrap for all three panels. Default "off". */
+  wordWrap?: "off" | "on";
 }
 
 /**
@@ -150,6 +152,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
   irStages,
   sourceId,
   kernelId,
+  wordWrap = "off",
 }) => {
   // ==================== Memoized Computations ====================
 
@@ -655,6 +658,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
                   entryDoc={highlights.left.doc}
                   docToken={leftDoc}
                   fontSize={14}
+                  wordWrap={wordWrap}
                   onLineClick={handleLeftLineClick}
                   onMount={handlePanelMount}
                 />
@@ -716,6 +720,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
                   entryDoc={highlights.right.doc}
                   docToken={rightDoc}
                   fontSize={14}
+                  wordWrap={wordWrap}
                   onLineClick={handleRightLineClick}
                   onMount={handlePanelMount}
                 />
@@ -786,6 +791,7 @@ const CodeComparisonViewV2: React.FC<CodeComparisonViewV2Props> = ({
                       functionRange={pythonFunctionRange}
                       initialLine={pythonInitialLine}
                       fontSize={14}
+                      wordWrap={wordWrap}
                       onLineClick={handlePythonLineClick}
                       onMount={handlePanelMount}
                     />

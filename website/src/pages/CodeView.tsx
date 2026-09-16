@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { ProcessedKernel, getIRType, getDefaultPanels, IRStageDescriptor } from "../utils/dataLoader";
 import CodeComparisonViewV2 from "../components/CodeComparisonViewV2";
 import { getDisplayLanguage } from "../utils/irLanguage";
@@ -51,6 +51,22 @@ const CodeViewInner: React.FC<{
   // State to track if Python source code should be shown
   const [showPythonSource, setShowPythonSource] = useState<boolean>(true);
 
+  // Word wrap for all three panels (same `wrap` URL param as File Diff).
+  const [wordWrap, setWordWrap] = useState<"off" | "on">(() => {
+    const w = new URLSearchParams(window.location.search).get("wrap");
+    return w === "on" ? "on" : "off";
+  });
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    // Preserve existing history.state (a router may own it) and skip the
+    // write when the URL already reflects the value (absent == "off"), so
+    // mounting never rewrites a URL the user didn't touch.
+    const current = url.searchParams.get("wrap") ?? "off";
+    if (current === wordWrap) return;
+    url.searchParams.set("wrap", wordWrap);
+    window.history.replaceState(window.history.state, "", url.toString());
+  }, [wordWrap]);
+
   const hasPythonSource = !!kernel?.pythonSourceInfo?.code;
 
   // Memoized panel descriptors: CodeComparisonViewV2 is memo'd, so these
@@ -74,9 +90,24 @@ const CodeViewInner: React.FC<{
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-800 mb-4">
-        Code Comparison: [{selectedKernel}] {kernel.name}
-      </h1>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold text-gray-800">
+          Code Comparison: [{selectedKernel}] {kernel.name}
+        </h1>
+        <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+          Wrap:
+          <select
+            data-testid="comparison-wrap-select"
+            value={wordWrap}
+            onChange={(e) => setWordWrap(e.target.value as "off" | "on")}
+            className="border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            aria-label="Word wrap"
+          >
+            <option value="off">Off</option>
+            <option value="on">On</option>
+          </select>
+        </label>
+      </div>
 
       {/* IR file selector controls */}
       <div className="flex justify-between items-center mb-6 relative">
@@ -199,6 +230,7 @@ const CodeViewInner: React.FC<{
               "local-data"
             }
             kernelId={kernel.metadata?.hash ?? selectedKernel}
+            wordWrap={wordWrap}
           />
         </div>
       ) : (

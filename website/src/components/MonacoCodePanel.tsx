@@ -60,6 +60,8 @@ export interface MonacoCodePanelProps {
   initialLine?: number;
   /** Editor font size. Default 14. */
   fontSize?: number;
+  /** Word wrap. Default "off" (long lines scroll horizontally). */
+  wordWrap?: "off" | "on";
   /** Fired with the absolute line number on text click (§4.3). */
   onLineClick?: (absoluteLine: number) => void;
   /** Fired once the editor instance is ready (rulers use it to scroll). */
@@ -89,6 +91,7 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
   functionRange,
   initialLine,
   fontSize = 14,
+  wordWrap = "off",
   onLineClick,
   onMount,
   debugIdentity,
@@ -135,15 +138,21 @@ const MonacoCodePanel: React.FC<MonacoCodePanelProps> = ({
       scrollBeyondLastLine: false,
       // smoothScrolling:true is required for ScrollType.Smooth reveals (§4.1).
       smoothScrolling: true,
-      wordWrap: "off",
-      scrollbar: { vertical: "auto", horizontal: "auto" },
+      wordWrap,
+      // No horizontal scrollbar when wrapping: with wrap on there is no
+      // horizontal overflow by construction; with wrap off the user needs
+      // it to reach content past the viewport edge.
+      scrollbar: {
+        vertical: "auto",
+        horizontal: wordWrap === "on" ? "hidden" : "auto",
+      },
       lineNumbers: (n: number) => String(toAbsolute(n, lineOffset)),
       fontSize,
       fontFamily: "SFMono-Regular, Menlo, Consolas, monospace",
       automaticLayout: false,
       fixedOverflowWidgets: true,
     }),
-    [fontSize, lineOffset]
+    [fontSize, lineOffset, wordWrap]
   );
 
   // Manual layout (§3.3 template): non-zero resizes only; synchronous in the
