@@ -335,29 +335,110 @@ async function main() {
      * retries or skipped steps.
      */
     async function clickPoint(panel, line) {
-      try {
-        return await waitForFunction(
-          s,
-          `() => {
+      // One-shot probe: editor coords for `line` only when the line's visible
+      // position exists, lands inside the viewport, AND a hit-test at the
+      // exact coords reports CONTENT_TEXT on the SAME line. Position-exists
+      // alone mis-clicked during scroll animation (observed: requested 6010,
+      // hit 6016), so the line number is verified, not assumed.
+      // Last probe failure, embedded in the timeout below so a persistent
+      // page-eval fault keeps its diagnostic (waitForFunction parity).
+      let lastProbeError = null;
+      async function probe() {
+        // Predicate exceptions (e.g. line out of range before content
+        // settles) mean "not ready", mirroring waitForFunction semantics.
+        try {
+          return await evaluate(s, `() => {
             const D = window.__TRITONPARSE_DEBUG;
             const ed = D.panels[${JSON.stringify(panel)}]?.editor;
-            if (!ed) return false;
+            if (!ed) return null;
             const col = Math.min(5, Math.max(1, ed.getModel().getLineLength(${line})));
             const pos = ed.getScrolledVisiblePosition({ lineNumber: ${line}, column: col });
-            if (!pos) return false;
+            if (!pos) return null;
             const r = ed.getDomNode().getBoundingClientRect();
             const x = r.x + pos.left + 2, y = r.y + pos.top + pos.height / 2;
-            if (y < r.y + 2 || y > r.y + r.height - 2) return false;
+            if (y < r.y + 2 || y > r.y + r.height - 2) return null;
             const t = ed.getTargetAtClientPoint(x, y);
-            if (!t || t.type !== D.monaco.editor.MouseTargetType.CONTENT_TEXT) return false;
+            if (!t || t.type !== D.monaco.editor.MouseTargetType.CONTENT_TEXT) return null;
+            if (!t.position || t.position.lineNumber !== ${line}) return null;
             return { x, y };
-          }`,
-          { timeoutMs: 30000 }
-        );
-      } catch (err) {
-        throw new Error(
-          `${panel} line ${line} never CONTENT_TEXT-clickable: ${String(err.message).slice(0, 160)}`
-        );
+          }`);
+        } catch (e) {
+          lastProbeError = e?.message ?? String(e);
+          return null;
+        }
+      }
+      // Cross-frame stability: two consecutive rAF-separated probes must
+      // agree exactly before the single real click. Read-only observation
+      // only — no fixed sleeps, no click retries; on timeout fail loudly.
+      const deadline = Date.now() + 30000;
+      let prev = null;
+      let sawValidProbe = false;
+      for (;;) {
+        const cur = await probe();
+        if (cur) sawValidProbe = true;
+        if (cur && prev && cur.x === prev.x && cur.y === prev.y) return cur;
+        prev = cur;
+        if (Date.now() > deadline) {
+          // Distinguish "never settled" (valid but shifting coordinates)
+          // from "probes returned null": lastProbeError stays null in both
+          // no-throw cases, so the bare fallback would mislead during a
+          // real layout-shift flake.
+          const detail = lastProbeError
+            ?? (sawValidProbe ? "none — probes returned valid but never-settling coordinates" : "none — probes returned null");
+          throw new Error(
+            `${panel} line ${line} never settled CONTENT_TEXT-clickable (last probe error: ${detail})`
+          );
+        }
+        try {
+          await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
+        } catch (e) {
+          throw new Error(`${panel} line ${line} settle wait failed during rAF delay: ${e?.message ?? e}`);
+        }
+      }
+    }
+
+    // Wait until a line's scrolled position AND the editor scrollTop are
+    // stable across rAF-separated samples. Used after impetus scrolls
+    // (Ctrl+End); read-only observation only, no fixed sleeps.
+    async function waitScrollStable(panel, line) {
+      // Last sample failure, embedded in the timeout below (probe parity).
+      let lastSampleError = null;
+      async function sample() {
+        try {
+          return await evaluate(s, `() => {
+            const ed = window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panel)}]?.editor;
+            if (!ed) return null;
+            const pos = ed.getScrolledVisiblePosition({ lineNumber: ${line}, column: 1 });
+            if (!pos) return null;
+            return { top: ed.getScrollTop(), y: pos.top };
+          }`);
+        } catch (e) {
+          lastSampleError = e?.message ?? String(e);
+          return null;
+        }
+      }
+      const deadline = Date.now() + 15000;
+      let prev = null;
+      let sawValidSample = false;
+      for (;;) {
+        const cur = await sample();
+        if (cur) sawValidSample = true;
+        if (cur && prev && cur.top === prev.top && cur.y === prev.y) return;
+        prev = cur;
+        if (Date.now() > deadline) {
+          // Same never-settled vs returned-null distinction as clickPoint:
+          // the bare fallback misleads when samples were valid but shifting.
+          const detail = lastSampleError
+            ?? (sawValidSample ? "none — samples returned valid but never-stabilizing positions" : "none — samples returned null");
+          throw new Error(
+            `${panel} line ${line} position never stabilized after scroll (last sample error: ${detail})`
+          );
+        }
+        try {
+          await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
+        } catch (e) {
+          throw new Error(`${panel} line ${line} scroll-stability wait failed during rAF delay: ${e?.message ?? e}`);
+        }
       }
     }
 
@@ -982,11 +1063,7 @@ async function main() {
       await mouseClick(s, focus.x, focus.y);
       await s.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "End", code: "End", windowsVirtualKeyCode: 35, modifiers: 2 });
       await s.send("Input.dispatchKeyEvent", { type: "keyUp", key: "End", code: "End", windowsVirtualKeyCode: 35, modifiers: 2 });
-      await waitForFunction(
-        s,
-        `() => !!window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor.getScrolledVisiblePosition({ lineNumber: 6010, column: 1 })`,
-        { timeoutMs: 15000 }
-      );
+      await waitScrollStable("single-viewer", 6010);
       await clickLine(6010, [6010]);
       const st = await singleState();
       assertEqual(st.markers, 1, "single marker after replacement");
