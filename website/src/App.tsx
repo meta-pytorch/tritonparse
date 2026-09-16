@@ -469,6 +469,11 @@ function App() {
           language={mapLanguageToHighlighter(selectedIR, kernel?.ir_stages)}
           onBack={handleBackFromIRView}
           irStages={kernel?.ir_stages}
+          sourceId={
+            new URLSearchParams(window.location.search).get("json_url") ??
+            "local-data"
+          }
+          kernelId={kernel.metadata?.hash ?? selectedKernel}
         />
       );
     } else if (sess.preview.active) {
