@@ -161,6 +161,7 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
         effectiveLines={effectiveLines}
         entryDoc={highlight.doc}
         docToken={currentDoc}
+        debugIdentity={kernelKey}
         fontSize={16}
         onLineClick={handleLineClick}
         onMount={handlePanelMount}
