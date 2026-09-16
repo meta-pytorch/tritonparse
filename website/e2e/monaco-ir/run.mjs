@@ -548,6 +548,62 @@ async function main() {
       await shot("e2e-single-source-switch.png");
     });
 
+    await step("source identity differs across real loads (I013.2)", async () => {
+      // Still on TRACE-B single from the previous step. Each leg below goes
+      // through a real product load flow (header URL / file input); the
+      // loading gate remounts Single, and the debug kernelKey must show a
+      // distinct per-load identity each time.
+      const keyB = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels['single-viewer'].identity`);
+      if (!(typeof keyB === "string" && keyB.startsWith('["url:'))) {
+        throw new Error(`unexpected B kernelKey shape: ${JSON.stringify(keyB)}`);
+      }
+      console.log(`  ok B kernelKey = ${keyB}`);
+      // Same URL reloaded: same locator, new load generation. The previous
+      // step leaves the URL box open; only toggle when it is absent.
+      const boxOpen = await evaluate(s, `() => !!document.querySelector('input[type="url"]')`);
+      if (!boxOpen) await clickText("button", "Load from URL");
+      await waitForFunction(s, `() => !!document.querySelector('input[type="url"]')`, { timeoutMs: 10000 });
+      const boxA = await rectOf('input[type="url"]');
+      await mouseClick(s, boxA.x, boxA.y);
+      await ctrlA(); // the box retains the previous URL; replace it
+      await typeText(s, fixtureUrl);
+      await clickText("button", "Load");
+      await waitForFunction(
+        s,
+        `() => {
+          const p = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer'];
+          if (!p) return false;
+          return p.editor.getModel().getValue().startsWith("#blocked = #ttg.blocked") &&
+            p.getHighlights().length === 0 ? true : false;
+        }`,
+        { timeoutMs: 60000 }
+      );
+      const keyA2 = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels['single-viewer'].identity`);
+      if (!(typeof keyA2 === "string" && keyA2.startsWith('["url:'))) {
+        throw new Error(`unexpected A2 kernelKey shape: ${JSON.stringify(keyA2)}`);
+      }
+      if (keyA2 === keyB) throw new Error(`reload reused identity: ${keyA2}`);
+      console.log(`  ok A-reload kernelKey = ${keyA2}`);
+      // URL -> local file through the real file input: the kind changes and
+      // the old URL must not be reused (audit scenario ii).
+      const doc = await s.send("DOM.getDocument", {});
+      const q = await s.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#fileInput" });
+      await s.send("DOM.setFileInputFiles", { nodeId: q.nodeId, files: [join(FIXTURES, "single-basic.ndjson")] });
+      await waitForFunction(
+        s,
+        `() => {
+          const p = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer'];
+          if (!p || typeof p.identity !== "string") return false;
+          return p.identity.startsWith('["local:single-basic.ndjson#') &&
+            p.getHighlights().length === 0 ? true : false;
+        }`,
+        { timeoutMs: 60000 }
+      );
+      const keyLocal = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels['single-viewer'].identity`);
+      if (keyLocal === keyA2) throw new Error(`local load reused URL identity: ${keyLocal}`);
+      console.log(`  ok local kernelKey = ${keyLocal}`);
+    });
+
     await step("back removes debug hook (F10)", async () => {
       await clickText("button", "Back");
       await waitForFunction(
@@ -556,6 +612,131 @@ async function main() {
         { timeoutMs: 30000 }
       );
       // Console errors are asserted once at the very end (more suites follow).
+    });
+
+    // ---- Single same-mount identity suite (F18, Phase 3, I013) ----
+    // Committed fixture page: one real SingleMonacoViewer, one identity
+    // input swapped per button through genuine React prop updates. Mirrors
+    // the comparison f18Swap discipline (click -> wheel -> swap -> assert).
+    const singleFixtureUrl =
+      `${args.baseUrl}/?view=single_fixture&debug=1`;
+
+    async function singleFixtureState() {
+      return evaluate(s, `() => {
+        const p = window.__TRITONPARSE_DEBUG.panels['single-viewer'];
+        const ed = p.editor;
+        const ruler = document.querySelector('[data-testid="overview-ruler"]');
+        return {
+          editorId: ed.getId(),
+          modelId: ed.getModel().id,
+          modelUri: ed.getModel().uri.toString(),
+          kernelKey: p.identity ?? null,
+          highlights: p.getHighlights(),
+          decorations: ed.getModel().getAllDecorations()
+            .filter((d) => d.options.className === "mp-highlighted-line")
+            .map((d) => [d.range.startLineNumber, d.range.endLineNumber]),
+          markers: ruler ? ruler.querySelectorAll('[data-testid^="overview-marker-"]').length : -1,
+          badge: document.querySelector('[data-testid="mp-diagnostics-badge"]')?.textContent.trim() ?? null,
+          scrollTop: ed.getScrollTop(),
+        };
+      }`);
+    }
+
+    async function waitSingleFixtureSets(expected) {
+      await waitForFunction(
+        s,
+        `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels['single-viewer'].getHighlights()) === ${JSON.stringify(JSON.stringify(expected))} ? true : false`,
+        { timeoutMs: 15000 }
+      );
+    }
+
+    async function singleF18Swap(testid, label, expectKeyChange) {
+      // Fresh mount per swap: every run starts from the same known state.
+      // The same-mount assertions only span click -> swap (no navigation).
+      await s.send("Page.navigate", { url: singleFixtureUrl });
+      await waitForFunction(
+        s,
+        `() => !!window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor`,
+        { timeoutMs: 60000 }
+      );
+      await waitSingleFixtureSets([]);
+      const lang = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor.getModel().getLanguageId()`);
+      assertEqual(lang, "triton-mlir", "fixture filename drives ttgir language");
+      await clickLine(2, [2, 4]);
+      const st0 = await singleFixtureState();
+      assertEqual(st0.badge, "4 mappings ignored", "diagnostics badge before swap");
+      assertEqual(st0.markers, 2, "ruler markers before swap");
+      assertEqual(st0.kernelKey, '["fixture-a","k0"]', "base kernelKey before swap");
+      // Scroll down first so a stale-highlight reveal would be observable
+      // as a scrollTop change.
+      const c = await evaluate(s, `() => {
+        const r = window.__TRITONPARSE_DEBUG.panels['single-viewer'].editor.getDomNode().getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      }`);
+      await mouseWheel(c.x, c.y, 240);
+      await waitScrollSettled("single-viewer");
+      const before = await singleFixtureState();
+      if (!(before.scrollTop > 0)) {
+        throw new Error(`wheel did not scroll single panel: ${before.scrollTop}`);
+      }
+      await clickFixtureButton(testid);
+      await waitSingleFixtureSets([]);
+      const st = await singleFixtureState();
+      if (expectKeyChange) {
+        assertEqual(st.kernelKey, '["fixture-b","k0"]', `${label}: only the source leg changed`);
+      } else {
+        assertEqual(st.kernelKey, before.kernelKey, `${label}: kernelKey untouched (swap isolated)`);
+      }
+      assertEqual(st.decorations, [], `${label}: decorations cleared`);
+      assertEqual(st.markers, 0, `${label}: markers gone`);
+      assertEqual(st.badge, null, `${label}: badge gone`);
+      assertEqual(st.editorId, before.editorId, `${label}: same editor (same mount)`);
+      assertEqual(st.modelId, before.modelId, `${label}: same model id`);
+      assertEqual(st.modelUri, before.modelUri, `${label}: same model uri`);
+      assertEqual(st.scrollTop, before.scrollTop, `${label}: scroll untouched (no stale reveal)`);
+      // Switching back to the base inputs must not restore the set.
+      await clickFixtureButton("fixture-single-reset");
+      await waitSingleFixtureSets([]);
+      const back = await singleFixtureState();
+      assertEqual(back.highlights, [], `${label}: still empty after reset`);
+      assertEqual(back.decorations, [], `${label}: decorations still empty after reset`);
+      console.log(`  ok ${label}: cleared same-mount, stayed empty on reset`);
+    }
+
+    await step("F18 single source-only swap clears in the same mount", async () => {
+      // Same filename, kernel id "k0", content and mapping/stages refs; only
+      // the source identity changes. A bare-hash/index identity would
+      // wrongly keep the stale set.
+      await singleF18Swap("fixture-single-source-only", "source-only", true);
+    });
+
+    await step("F18 single content-only swap clears in the same mount", async () => {
+      await singleF18Swap("fixture-single-content-only", "content-only", false);
+    });
+
+    await step("F18 single mapping-only swap clears in the same mount", async () => {
+      await singleF18Swap("fixture-single-mapping-only", "mapping-only", false);
+    });
+
+    await step("single fixture touch rerender retains highlights (F18 stability)", async () => {
+      await s.send("Page.navigate", { url: singleFixtureUrl });
+      await waitForFunction(
+        s,
+        `() => !!window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor`,
+        { timeoutMs: 60000 }
+      );
+      await clickLine(2, [2, 4]);
+      const before = await singleFixtureState();
+      // Touch flips unrelated state twice (back to the base label), forcing
+      // two ordinary rerenders with identical identity inputs.
+      await clickFixtureButton("fixture-single-touch");
+      await clickFixtureButton("fixture-single-touch");
+      const st = await singleFixtureState();
+      assertEqual(st.highlights, before.highlights, "highlights retained across touch rerenders");
+      assertEqual(st.decorations, before.decorations, "decorations retained");
+      assertEqual(st.markers, before.markers, "markers retained");
+      assertEqual(st.badge, before.badge, "badge retained");
+      await shot("e2e-single-fixture.png");
     });
 
     // ---- Single ruler suite (F14/F20): 6001-line overflow set ----
@@ -1894,22 +2075,9 @@ async function main() {
       console.log(`  ok default branch monaco rows=${branch.monacoRows}, legacy rows=0`);
     });
 
-    await step("prism escape hatch still renders legacy comparison", async () => {
-      await s.send("Page.navigate", { url: `${cmpProductUrl}&renderer=prism` });
-      await waitForFunction(
-        s,
-        `() => document.querySelectorAll("[data-line-number]").length > 100 ? true : false`,
-        { timeoutMs: 60000 }
-      );
-      const branch = await evaluate(s, `() => ({
-        panels: Object.keys(window.__TRITONPARSE_DEBUG?.panels ?? {}).length,
-        legacyRows: document.querySelectorAll("[data-line-number]").length,
-      })`);
-      if (!(branch.panels === 0 && branch.legacyRows > 100)) {
-        throw new Error(`prism escape did not render legacy: ${JSON.stringify(branch)}`);
-      }
-      console.log(`  ok prism escape legacy rows=${branch.legacyRows}, monaco panels=0`);
-    });
+    // I015: the prism escape hatch is out of the required suite per design
+    // §5.4 (prism no longer in the CI/test matrix, code kept to Phase 4).
+    // Escape-hatch visual evidence lives in 009-muse tripwire + 010-codex.
 
     await step("product comparison mounts from trace, click maps all panels (F1)", async () => {
       await s.send("Page.navigate", { url: cmpProductUrl });
