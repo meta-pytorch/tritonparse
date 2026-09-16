@@ -8,7 +8,10 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, summarize } from "../perf.mjs";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseArgs, summarize, normalizeExpectTriple, killProcAndCleanTmp } from "../perf.mjs";
 
 const BASE = [
   "--scenario", "p2",
@@ -57,4 +60,31 @@ test("summarize p95 interpolates within the top rank", () => {
 
 test("summarize throws on empty input", () => {
   assert.throws(() => summarize([]), /summarize: no samples/);
+});
+
+test("normalizeExpectTriple sorts every leg ascending", () => {
+  const out = normalizeExpectTriple({ left: [9, 3], right: [5], python: [451, 120] });
+  assert.deepEqual(out, { left: [3, 9], right: [5], python: [120, 451] });
+});
+
+test("normalizeExpectTriple does not mutate the input", () => {
+  const triple = { left: [9, 3], right: [5], python: [451, 120] };
+  normalizeExpectTriple(triple);
+  assert.deepEqual(triple, { left: [9, 3], right: [5], python: [451, 120] });
+});
+
+test("killProcAndCleanTmp kills the proc and removes the profile dir", () => {
+  const dir = mkdtempSync(join(tmpdir(), "perf-test-profile-"));
+  writeFileSync(join(dir, "f"), "x");
+  let killed = false;
+  killProcAndCleanTmp({ kill: () => { killed = true; } }, dir);
+  assert.equal(killed, true);
+  assert.equal(existsSync(dir), false);
+});
+
+test("killProcAndCleanTmp tolerates a missing dir and a throwing kill", () => {
+  const dir = join(tmpdir(), `perf-test-missing-${Date.now()}`);
+  assert.doesNotThrow(() =>
+    killProcAndCleanTmp({ kill: () => { throw new Error("gone"); } }, dir)
+  );
 });

@@ -16,10 +16,18 @@
  *     --lines 3,2,3 --expect expects.json
  *   node e2e/monaco-ir/perf.mjs --scenario p4 --input-file LOCAL_3X20M
  *     --base-url URL --artifact-dir DIR
- * Scenarios: p1-cold, p1-hot, p2, p3, p4, p5.
+ * Scenarios: p1-cold, p1-tabs, p1-hot, p2, p3, p4, p5, p1-first-frame.
+ * p1-tabs alternates real tab switches (comparison tabs or single/open
+ * overview) and times each settle; --iterations sets the switch count.
+ * p1-first-frame injects a passive rAF sampler before page load and records
+ * first-placeholder / first-panels-registered / first-content frames with
+ * the full raw frame array (I010).
  * p4 takes --input-file <local .ndjson/.ndjson.gz> instead of --trace-url.
  * p2 takes --lines CSV + --expect JSON ({ line: [exact set] }) for inputs
  * where re-clicking one line would pass trivially on the retained set.
+ * p1-hot takes --expect JSON ({ pyOffset, clicks: { line: {left,right,python} } })
+ * to confirm the exact triple plus all three panels' decorations per click
+ * (I009); without it only the python set is confirmed (legacy fallback).
  * p1-cold and p3 take --view single|comparison (default comparison); the
  * 100k-line gate input runs as --view single.
  *
@@ -70,6 +78,7 @@ function parseArgs(argv) {
     chrome: null,
     lines: null,
     expect: null,
+    expectPath: null,
     view: "comparison",
     hot: false,
   };
@@ -83,13 +92,13 @@ function parseArgs(argv) {
     else if (argv[i] === "--iterations") out.iterations = Number(argv[++i]);
     else if (argv[i] === "--chrome") out.chrome = argv[++i];
     else if (argv[i] === "--lines") out.lines = argv[++i].split(",").map(Number);
-    else if (argv[i] === "--expect") out.expect = JSON.parse(readFileSync(argv[++i], "utf8"));
+    else if (argv[i] === "--expect") { out.expectPath = argv[++i]; out.expect = JSON.parse(readFileSync(out.expectPath, "utf8")); }
     else if (argv[i] === "--view") out.view = argv[++i];
     else if (argv[i] === "--hot") out.hot = true;
     else throw new Error(`unknown arg: ${argv[i]}`);
   }
-  if (!["p1-cold", "p1-hot", "p2", "p3", "p4", "p5"].includes(out.scenario)) {
-    throw new Error("--scenario must be one of p1-cold p1-hot p2 p3 p4 p5");
+  if (!["p1-cold", "p1-tabs", "p1-first-frame", "p1-hot", "p2", "p3", "p4", "p5"].includes(out.scenario)) {
+    throw new Error("--scenario must be one of p1-cold p1-tabs p1-first-frame p1-hot p2 p3 p4 p5");
   }
   if (!out.artifactDir) throw new Error("--artifact-dir is required");
   // NaN is not nullish: without this, a non-numeric --iterations silently
@@ -387,6 +396,23 @@ async function selectByKeyboard(s, targetValue) {
   );
 }
 
+/** Resolve a text button's coordinates (untimed settle), click it, return tClick. */
+async function clickTextTimed(s, selector, text) {
+  const pt = await evaluate(s, `() => {
+    const el = [...document.querySelectorAll(${JSON.stringify(selector)})]
+      .find((e) => (e.textContent || '').trim() === ${JSON.stringify(text)});
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  }`);
+  if (!pt) throw new Error(`no ${selector} with text ${text}`);
+  await new Promise((r) => setTimeout(r, 400));
+  const tClick = Date.now();
+  await mouseClick(s, pt.x, pt.y);
+  return { tClick };
+}
+
 /** Real overview click entering Single on the first .tt card. */
 async function openFirstSingle(s) {
   await waitForFunction(s, `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`, { timeoutMs: 300000 });
@@ -410,7 +436,11 @@ async function scenarioP1Cold(args) {
   for (let i = 0; i < iterations; i++) {
     const { s, proc, userDataDir } = await freshPage(args.chrome);
     try {
-      const url = args.view === "single"
+      // I010: --hot on the comparison view measures a real hot open: load
+      // the overview first (cold; the loader initializes), then open the IR
+      // view through the tab click and time click->content.
+      const hotComparison = args.hot && args.view === "comparison";
+      const url = args.view === "single" || hotComparison
         ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
         : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
       const tNav = Date.now();
@@ -419,6 +449,21 @@ async function scenarioP1Cold(args) {
       let file = null;
       if (args.view === "single") {
         ({ file, tClick } = await openFirstSingle(s));
+      } else if (hotComparison) {
+        await waitForFunction(s, `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`, { timeoutMs: 300000 });
+        await waitResponsive(s, { tries: 6, settleMs: 2000 });
+        const tab = await evaluate(s, `() => {
+          const el = [...document.querySelectorAll('button')].find((e) => e.textContent.trim() === 'IR Code');
+          if (!el) return null;
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }`);
+        if (!tab) throw new Error("no IR Code tab");
+        await new Promise((r) => setTimeout(r, 400));
+        tClick = Date.now();
+        await mouseClick(s, tab.x, tab.y);
+        file = "IR Code tab";
       }
       const readyFn =
         args.renderer === "monaco"
@@ -470,6 +515,158 @@ async function scenarioP1Cold(args) {
   return { scenario: "p1-cold", renderer: args.renderer, view: args.view, traceUrl: args.traceUrl, results };
 }
 
+async function scenarioP1Tabs(args) {
+  // I010: repeated real tab switches with per-switch settle timing.
+  // comparison: "IR Code" <-> "Kernel Overview"; single: h3 card <-> "Back".
+  // Settle = endpoint mounted + first content painted (editors + rows for
+  // monaco IR endpoints, [data-line-number] rows for legacy, h3 for overview).
+  const switches = args.iterations ?? 6;
+  const { s, proc, userDataDir } = await freshPage(args.chrome);
+  try {
+    const url = `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    await s.send("Page.navigate", { url });
+    const h3Fn = `() => [...document.querySelectorAll('h3')].length > 0 ? true : false`;
+    await waitForFunction(s, h3Fn, { timeoutMs: 300000 });
+    await waitResponsive(s, { tries: 6, settleMs: 2000 });
+    const cmpReadyFn = args.renderer === "monaco"
+      ? `() => {
+          const P = window.__TRITONPARSE_DEBUG?.panels;
+          if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
+          return P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
+        }`
+      : `() => document.querySelectorAll('[data-line-number]').length > 100 ? true : false`;
+    const singleReadyFn = args.renderer === "monaco"
+      ? `() => {
+          const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
+          if (!ed) return false;
+          return ed.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
+        }`
+      : cmpReadyFn;
+    const results = [];
+    for (let i = 0; i < switches; i++) {
+      if (args.view === "single") {
+        if (i % 2 === 0) {
+          const { file, tClick } = await openFirstSingle(s);
+          await waitForFunction(s, singleReadyFn, { timeoutMs: 300000 });
+          results.push({ switch: i, to: "single", file, settleMs: Date.now() - tClick });
+        } else {
+          const { tClick } = await clickTextTimed(s, "button", "Back");
+          await waitForFunction(s, h3Fn, { timeoutMs: 120000 });
+          results.push({ switch: i, to: "overview", settleMs: Date.now() - tClick });
+        }
+      } else {
+        const tab = i % 2 === 0 ? "IR Code" : "Kernel Overview";
+        const { tClick } = await clickTextTimed(s, "button", tab);
+        await waitForFunction(s, tab === "IR Code" ? cmpReadyFn : h3Fn, { timeoutMs: 300000 });
+        results.push({ switch: i, to: tab, settleMs: Date.now() - tClick });
+      }
+      console.log(`  switch ${i} -> ${results[i].to}: settle ${results[i].settleMs}ms`);
+    }
+    return {
+      scenario: "p1-tabs", renderer: args.renderer, view: args.view,
+      traceUrl: args.traceUrl, results,
+      summary: { settleMs: summarize(results.map((r) => r.settleMs)) },
+    };
+  } finally {
+    try { s.close(); } catch { /* ignore */ }
+    killProcAndCleanTmp(proc, userDataDir);
+  }
+}
+
+async function scenarioP1FirstFrame(args) {
+  // I010: committed first-frame verification. A passive rAF sampler is
+  // injected before any page script (addScriptToEvaluateOnNewDocument) and
+  // records per-frame {placeholder visible, debug panels registered, content
+  // rows painted}. Panels register after the synchronous model work inside
+  // editor mount, so firstPlaceholderT < firstPanelsT <= firstContentT proves
+  // the placeholder painted before the sync model work. Raw frames ship in
+  // the result JSON.
+  const { s, proc, userDataDir } = await freshPage(args.chrome);
+  try {
+    await s.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `window.__P1FF = { t0: -1, mark: -1, frames: [], done: false };
+        (function rec(t) {
+          if (window.__P1FF.done) return;
+          if (window.__P1FF.t0 < 0) window.__P1FF.t0 = t;
+          const ph = [...document.querySelectorAll('.mp-panel-loading')].some((n) => {
+            const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+          });
+          const panels = Object.keys(window.__TRITONPARSE_DEBUG?.panels ?? {}).length;
+          const rows = document.querySelectorAll('.view-lines .view-line').length;
+          window.__P1FF.frames.push({
+            t: Math.round((t - window.__P1FF.t0) * 10) / 10,
+            ph: ph ? 1 : 0, panels, rows,
+          });
+          requestAnimationFrame(rec);
+        })(performance.now());`,
+    });
+    const url = args.view === "single"
+      ? `${args.baseUrl}/?json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`
+      : `${args.baseUrl}/?view=ir_code_comparison&json_url=${encodeURIComponent(args.traceUrl)}${rendererParam(args.renderer)}&debug=1`;
+    await s.send("Page.navigate", { url });
+    if (args.view === "single") {
+      await openFirstSingle(s);
+      await evaluate(s, `() => { window.__P1FF.mark = performance.now(); return true; }`);
+    }
+    const readyFn = args.view === "single"
+      ? `() => {
+          const ed = window.__TRITONPARSE_DEBUG?.panels?.['single-viewer']?.editor;
+          if (!ed) return false;
+          return ed.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
+        }`
+      : `() => {
+          const P = window.__TRITONPARSE_DEBUG?.panels;
+          if (!(P?.left?.editor && P?.right?.editor && P?.python?.editor)) return false;
+          return P.left.editor.getDomNode().querySelectorAll(".view-lines .view-line").length > 0 ? true : false;
+        }`;
+    await waitForFunction(s, readyFn, { timeoutMs: 300000 });
+    // Panels register in a React effect after mount/paint; extend sampling
+    // until registration lands so the panels boundary is always captured.
+    await waitForFunction(
+      s,
+      `() => Object.keys(window.__TRITONPARSE_DEBUG?.panels ?? {}).length > 0 ? true : false`,
+      { timeoutMs: 60000 }
+    );
+    const data = await evaluate(s, `() => {
+      window.__P1FF.done = true;
+      return { t0: window.__P1FF.t0, mark: window.__P1FF.mark, frames: window.__P1FF.frames };
+    }`);
+    // No pre-click editor exists in either view, so global firsts are the
+    // post-navigation (comparison) / post-click (single) firsts; the mark is
+    // informational only (it trails the click by CDP roundtrips).
+    const markRel = data.mark >= 0 ? data.mark - data.t0 : 0;
+    const first = (pred) => {
+      const f = data.frames.find(pred);
+      return f ? f.t : null;
+    };
+    return {
+      scenario: "p1-first-frame", renderer: args.renderer, view: args.view,
+      traceUrl: args.traceUrl,
+      markRelMs: Math.round(markRel * 10) / 10,
+      firstPlaceholderFrameMs: first((f) => f.ph === 1),
+      firstPanelsFrameMs: first((f) => f.panels > 0),
+      firstContentFrameMs: first((f) => f.rows > 0),
+      frameCount: data.frames.length,
+      frames: data.frames,
+    };
+  } finally {
+    try { s.close(); } catch { /* ignore */ }
+    killProcAndCleanTmp(proc, userDataDir);
+  }
+}
+
+/**
+ * Normalize a p1-hot --expect click triple for comparison. The page-side
+ * `got` sets are sorted ascending before the JSON.stringify equality check,
+ * so the expected sets must be sorted too — otherwise a --expect file that
+ * lists lines out of order never matches despite correct highlights (p2
+ * already normalizes via expectedSorted for the same reason).
+ */
+function normalizeExpectTriple(triple) {
+  const sorted = (xs) => [...xs].sort((a, b) => a - b);
+  return { left: sorted(triple.left), right: sorted(triple.right), python: sorted(triple.python) };
+}
+
 async function scenarioP1Hot(args) {
   const iterations = args.iterations ?? 5;
   const { s, proc, userDataDir } = await freshPage(args.chrome);
@@ -487,13 +684,36 @@ async function scenarioP1Hot(args) {
         const xy = await wheelToPyLine(s, abs);
         const t0 = Date.now();
         await mouseClick(s, xy.x, xy.y);
-        await waitForFunction(s, `() => {
-          const P = window.__TRITONPARSE_DEBUG.panels;
-          return JSON.stringify(P.python.getHighlights()) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false;
-        }`, { timeoutMs: 15000 });
+        const triple = args.expect?.clicks?.[String(abs)] ?? null;
+        if (triple) {
+          // I009: confirm this input's exact highlight triple AND the three
+          // panels' line decorations (python physical = absolute - offset + 1).
+          const pyOffset = args.expect.pyOffset ?? 1;
+          await waitForFunction(s, `() => {
+            const P = window.__TRITONPARSE_DEBUG.panels;
+            const exp = ${JSON.stringify(normalizeExpectTriple(triple))};
+            for (const id of ["left", "right"]) {
+              const got = P[id].editor.getModel().getAllDecorations()
+                .filter((d) => d.options.className === 'mp-highlighted-line')
+                .map((d) => d.range.startLineNumber).sort((a, b) => a - b);
+              if (JSON.stringify(got) !== JSON.stringify(exp[id])) return false;
+            }
+            const pyExp = exp.python.map((a) => a - ${pyOffset} + 1);
+            const pyGot = P.python.editor.getModel().getAllDecorations()
+              .filter((d) => d.options.className === 'mp-highlighted-line')
+              .map((d) => d.range.startLineNumber).sort((a, b) => a - b);
+            if (JSON.stringify(pyGot) !== JSON.stringify(pyExp)) return false;
+            return true;
+          }`, { timeoutMs: 15000, pollingMs: 25 });
+        } else {
+          await waitForFunction(s, `() => {
+            const P = window.__TRITONPARSE_DEBUG.panels;
+            return JSON.stringify(P.python.getHighlights()) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false;
+          }`, { timeoutMs: 15000, pollingMs: 25 });
+        }
         const tSets = Date.now();
         // Next frame after the sets landed.
-        await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+        await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
         const tFrame = Date.now();
         const sets = await evaluate(s, `() => {
           const P = window.__TRITONPARSE_DEBUG.panels;
@@ -518,13 +738,30 @@ async function scenarioP1Hot(args) {
         await new Promise((r) => setTimeout(r, 400));
         const t0 = Date.now();
         await mouseClick(s, xy.x, xy.y);
-        await waitForFunction(s, `() => {
-          const py = document.querySelector('code.language-python');
-          const hit = [...py.querySelectorAll('.highlighted-line')].map((r) => Number(r.getAttribute("data-line-number")));
-          return JSON.stringify(hit) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false;
-        }`, { timeoutMs: 15000 });
+        const triple = args.expect?.clicks?.[String(abs)] ?? null;
+        if (triple) {
+          // I009 legacy leg: exact highlighted rows on all three panels
+          // (document order: left block, right block, then python).
+          await waitForFunction(s, `() => {
+            const exp = ${JSON.stringify(normalizeExpectTriple(triple))};
+            const rows = (root) => [...root.querySelectorAll('.highlighted-line')]
+              .map((r) => Number(r.getAttribute("data-line-number"))).sort((a, b) => a - b);
+            const mlir = document.querySelectorAll('code.language-mlir');
+            const py = document.querySelector('code.language-python');
+            if (mlir.length < 2 || !py) return false;
+            return JSON.stringify(rows(mlir[0])) === JSON.stringify(exp.left)
+              && JSON.stringify(rows(mlir[1])) === JSON.stringify(exp.right)
+              && JSON.stringify(rows(py)) === JSON.stringify(exp.python) ? true : false;
+          }`, { timeoutMs: 15000, pollingMs: 25 });
+        } else {
+          await waitForFunction(s, `() => {
+            const py = document.querySelector('code.language-python');
+            const hit = [...py.querySelectorAll('.highlighted-line')].map((r) => Number(r.getAttribute("data-line-number")));
+            return JSON.stringify(hit) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false;
+          }`, { timeoutMs: 15000, pollingMs: 25 });
+        }
         const tSets = Date.now();
-        await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+        await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
         const tFrame = Date.now();
         results.push({ iteration: i, line: abs, clickToSetsMs: tSets - t0, clickToNextFrameMs: tFrame - t0 });
         console.log(`  iter ${i} (py${abs}): sets ${tSets - t0}ms, frame ${tFrame - t0}ms`);
@@ -603,10 +840,10 @@ async function scenarioP2(args) {
             .filter((d) => d.options.className === 'mp-highlighted-line')
             .map((d) => d.range.startLineNumber).sort((a, b) => a - b);
           return JSON.stringify(got) === ${JSON.stringify(JSON.stringify(expectedSorted))} ? true : false;
-        }`, { timeoutMs: 60000 });
+        }`, { timeoutMs: 60000, pollingMs: 25 });
       } else {
         try {
-          await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels["single-viewer"].getHighlights()) !== ${JSON.stringify(preSig)} ? true : false`, { timeoutMs: 15000 });
+          await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels["single-viewer"].getHighlights()) !== ${JSON.stringify(preSig)} ? true : false`, { timeoutMs: 15000, pollingMs: 25 });
         } catch {
           throw new Error(
             `p2 line ${line}: highlight set unchanged 15s after click — same-line re-click without --expect, an unmapped line, or a missed click; rotate --lines or pass --expect with the exact set`
@@ -614,7 +851,7 @@ async function scenarioP2(args) {
         }
       }
       const tSets = Date.now();
-      await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+      await evaluate(s, `() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`, { awaitPromise: true });
       const tFrame = Date.now();
       const counts = await evaluate(s, `() => {
         const p = window.__TRITONPARSE_DEBUG.panels["single-viewer"];
@@ -1021,6 +1258,8 @@ async function main() {
   try {
     let result;
     if (args.scenario === "p1-cold") result = await scenarioP1Cold(args);
+    else if (args.scenario === "p1-tabs") result = await scenarioP1Tabs(args);
+    else if (args.scenario === "p1-first-frame") result = await scenarioP1FirstFrame(args);
     else if (args.scenario === "p1-hot") result = await scenarioP1Hot(args);
     else if (args.scenario === "p2") result = await scenarioP2(args);
     else if (args.scenario === "p3") result = await scenarioP3(args);
@@ -1028,6 +1267,13 @@ async function main() {
     else result = await scenarioP5(args);
     result.recordedAt = new Date().toISOString();
     result.baseUrl = args.baseUrl;
+    result.params = {
+      iterations: args.iterations,
+      lines: args.lines,
+      expectPath: args.expectPath,
+      view: args.view,
+      hot: args.hot,
+    };
     const stamp = `${args.scenario}-${args.renderer}`;
     writeFileSync(join(args.artifactDir, `${stamp}.json`), JSON.stringify(result, null, 1));
     console.log(`PERF ${args.scenario}/${args.renderer} DONE -> ${args.artifactDir}/${stamp}.json`);
@@ -1042,7 +1288,7 @@ async function main() {
 
 // Dual-use module: unit tests import the pure helpers; the runner only
 // starts when this file is invoked as a script (not when imported).
-export { parseArgs, summarize };
+export { parseArgs, summarize, normalizeExpectTriple, killProcAndCleanTmp };
 const invokedAsScript =
   process.argv[1] != null &&
   pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
