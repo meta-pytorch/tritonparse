@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import CodeViewer from "./CodeViewer";
+import SingleMonacoViewer from "./SingleMonacoViewer";
 import { IRFile, IRStageDescriptor, getGroupingAnchor } from "../utils/dataLoader";
 import { getDisplayLanguage } from "../utils/irLanguage";
 import CopyCodeButton from "./CopyCodeButton";
@@ -116,18 +117,27 @@ const SingleCodeViewer: React.FC<SingleCodeViewerProps> = ({
         </div>
         {/* Code content area with fixed height */}
         <div className="h-[calc(100vh-12rem)]">
-          <CodeViewer
-            code={codeContent}
-            language={language}
-            height="100%"
-            theme="light"
-            fontSize={16}
-            highlightedLines={highlightedLines}
-            onLineClick={handleLineClick}
-            sourceMapping={sourceMapping}
-            onMappedLinesFound={handleMappedLinesFound}
-            viewerId="single-viewer"
-          />
+          {new URLSearchParams(window.location.search).get("renderer") === "monaco" ? (
+            <SingleMonacoViewer
+              irFile={irFile}
+              irContent={irContent}
+              title={title}
+              irStages={irStages}
+            />
+          ) : (
+            <CodeViewer
+              code={codeContent}
+              language={language}
+              height="100%"
+              theme="light"
+              fontSize={16}
+              highlightedLines={highlightedLines}
+              onLineClick={handleLineClick}
+              sourceMapping={sourceMapping}
+              onMappedLinesFound={handleMappedLinesFound}
+              viewerId="single-viewer"
+            />
+          )}
         </div>
       </div>
     </div>
