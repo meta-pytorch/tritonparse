@@ -6,12 +6,14 @@
  * renderers share one implementation. Two deliberate deviations from the
  * legacy code, both required by the approved design:
  *
- * 1. No parseInt forging (F19): legacy `parseInt(line, 10)` truncated "3.5"
- *    to 3 and "4oops" to 4, inventing highlight lines the normalizer could no
- *    longer recognize as invalid. Only pure-integer strings convert; anything
- *    else passes through verbatim so normalizeHighlightLines drops it with
- *    diagnostics. Non-array `*_lines` fields yield [] instead of throwing
- *    inside .map() (legacy crashed: TypeError).
+ * 1. No parseInt/Number forging (F19/I008): legacy `parseInt(line, 10)`
+ *    truncated "3.5" to 3 and "4oops" to 4, and `Number(mapping.line)`
+ *    converted true to 1 and [459] to 459, inventing highlight lines the
+ *    normalizer could no longer recognize as invalid. Only pure-integer
+ *    strings convert; anything else passes through verbatim so
+ *    normalizeHighlightLines drops it with diagnostics. Non-array `*_lines`
+ *    fields yield [] instead of throwing inside .map() (legacy crashed:
+ *    TypeError).
  * 2. Single normalization point (§4.4.1): the mapping layer returns raw
  *    candidates (absolute line numbers); range/illegal filtering happens only
  *    in normalizeHighlightLines, whose single output drives decorations,
@@ -137,7 +139,14 @@ export function calculatePythonLines(
     return [];
   }
 
-  return [Number(mapping.line)];
+  // Same strict rule as calculateMappedLines (I008): integers pass through
+  // verbatim, pure-integer strings convert, and everything else (boolean,
+  // array, hex/float strings, objects) passes through verbatim so
+  // normalizeHighlightLines drops it with diagnostics. Never Number()-coerce:
+  // Number(true) === 1 and Number([459]) === 459 forge highlight lines the
+  // normalizer can no longer recognize as invalid.
+  const raw: unknown = mapping.line;
+  return [typeof raw === "string" ? parseStrictIntString(raw) : raw];
 }
 
 /**

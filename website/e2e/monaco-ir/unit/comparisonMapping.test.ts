@@ -160,6 +160,31 @@ test("python lines pass out-of-range candidates to the normalizer (§4.4.1)", ()
   assert.equal(normalized.droppedOutOfRange, 1);
 });
 
+test("python lines never coerce illegal types; strict-int strings only (I008)", () => {
+  const info = { code: "a\nb\n", file_path: "m.py", start_line: 1 };
+  const doc = { offset: 1, lineCount: 2 };
+  const solve = (line: unknown) => {
+    const raw = calculatePythonLines(
+      { "5": { line: line as number, file: "/x/m.py" } },
+      5,
+      info
+    );
+    return { raw, normalized: normalizeHighlightLines(raw, doc) };
+  };
+  // Boolean/array/hex/float-string values pass through verbatim so the
+  // normalizer drops them with diagnostics instead of forging highlights.
+  for (const bad of [true, [459], "0x1cb", "455.0", 3.5]) {
+    const { raw, normalized } = solve(bad);
+    assert.deepEqual(raw, [bad]);
+    assert.deepEqual(normalized.lines, []);
+    assert.equal(normalized.droppedInvalid, 1);
+  }
+  // Integers and pure-integer strings (same strict rule as the IR side).
+  assert.deepEqual(solve(2).normalized.lines, [2]);
+  assert.deepEqual(solve("2").raw, [2]);
+  assert.deepEqual(solve("2").normalized.lines, [2]);
+});
+
 test("kernel key always qualifies the kernel with its source (§4.2.1)", () => {
   assert.equal(buildKernelKey("left", 0), '["left",0]');
   assert.equal(buildKernelKey("http://x/t.json", "abc"), '["http://x/t.json","abc"]');
