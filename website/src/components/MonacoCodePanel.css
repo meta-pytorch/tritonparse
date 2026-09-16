@@ -21,9 +21,32 @@
   border-left: 3px solid orange;
 }
 
-/* Single-view wrapper: flex row holding the editor plus the side ruler
-   strip; also the positioning context for the diagnostics badge. */
-.mp-single-wrap {
+/* Function range (§4.5): colors reuse CodeViewer.css .function-range values.
+   A line carrying both decorations keeps the highlight background/border
+   (combined selector beats either single class regardless of file order);
+   the range start/end edge borders still show through. */
+.mp-function-range {
+  background-color: rgba(255, 235, 59, 0.08);
+  border-left: 3px solid #ffc107;
+}
+
+.mp-function-range-start {
+  border-top: 2px solid #ffc107;
+}
+
+.mp-function-range-end {
+  border-bottom: 2px solid #ffc107;
+}
+
+.mp-highlighted-line.mp-function-range {
+  background-color: rgba(255, 215, 0, 0.4);
+  border-left: 3px solid orange;
+}
+
+/* Panel wrapper: flex row holding the editor plus the side ruler strip;
+   also the positioning context for the diagnostics badge. Shared by the
+   Single view and every comparison panel. */
+.mp-panel-row {
   position: relative;
   display: flex;
   flex-direction: row;
@@ -33,7 +56,7 @@
 
 /* In the flex row the panel takes the remaining width; min-width: 0 lets it
    shrink below content size instead of squeezing the 14px ruler strip. */
-.mp-single-wrap > .mp-panel-container {
+.mp-panel-row > .mp-panel-container {
   flex: 1 1 auto;
   min-width: 0;
   width: auto;

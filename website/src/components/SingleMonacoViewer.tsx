@@ -16,24 +16,14 @@ import type { IRFile, IRStageDescriptor } from "../utils/dataLoader";
 import { getGroupingAnchor } from "../utils/dataLoader";
 import { mapFileToMonacoLanguage } from "../utils/monacoLanguage";
 import {
+  EMPTY_DOC,
   getAnchorGroupedLines,
   normalizeHighlightLines,
   toPhysical,
+  type DocToken,
+  type PanelDiagnostics,
+  type PanelHighlight,
 } from "./monaco/highlightMath";
-
-/** Opaque document token: reference equality means same document. */
-export type DocToken = object;
-
-export interface PanelHighlight {
-  doc: DocToken;
-  lines: number[];
-}
-
-interface PanelDiagnostics {
-  doc: DocToken;
-  droppedInvalid: number;
-  droppedOutOfRange: number;
-}
 
 interface SingleMonacoViewerProps {
   irFile?: IRFile;
@@ -42,9 +32,6 @@ interface SingleMonacoViewerProps {
   title: string;
   irStages?: IRStageDescriptor[];
 }
-
-/** Initial entry token: distinct from every real doc so the guard yields []. */
-const EMPTY_DOC: DocToken = {};
 
 const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
   irFile,
@@ -80,8 +67,9 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
   // Doc-change clearing: any token change resets the truth source (switching
   // back does not restore, matching legacy ref-loss semantics). Synchronous
   // (no setTimeout): a deferred clear could wipe a click that lands for the
-  // new doc before the timer fires. The click guard skips the clear when the
-  // new doc already has a click in the same commit batch.
+  // new doc before the timer fires (same race rationale as
+  // CodeComparisonViewV2). The click guard skips the clear when the new doc
+  // already has a click in the same commit batch.
   const lastClickDocRef = useRef<DocToken | null>(null);
   useEffect(() => {
     if (lastClickDocRef.current === currentDoc) return;
@@ -149,7 +137,7 @@ const SingleMonacoViewer: React.FC<SingleMonacoViewerProps> = ({
   }, []);
 
   return (
-    <div className="mp-single-wrap">
+    <div className="mp-panel-row">
       <MonacoCodePanel
         viewerId="single-viewer"
         content={codeContent}
