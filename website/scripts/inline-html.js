@@ -82,22 +82,13 @@ function processInlineFonts(css) {
   });
 }
 
-// Replace script tags with inline scripts
-html = html.replace(scriptRegex, (match, src) => {
-  const scriptPath = getFilePath(src);
-  if (fs.existsSync(scriptPath)) {
-    try {
-      const scriptContent = fs.readFileSync(scriptPath, 'utf8');
-      // Preserve type="module" attribute if it exists
-      const typeModule = match.includes('type="module"') ? ' type="module"' : '';
-      const crossOrigin = match.includes('crossorigin') ? ' crossorigin' : '';
-      return `<script${typeModule}${crossOrigin}>${scriptContent}</script>`;
-    } catch (err) {
-      console.warn(`Warning: Could not inline script ${scriptPath}. Error: ${err.message}`);
-    }
-  }
-  return match;
-});
+// Inlining order is load-bearing. The style/favicon/img/svg replacements
+// below use broad regexes that could match bundle bytes (e.g. an <img>
+// string inside JS), so they run FIRST, while `html` is still the original
+// index.html; the CSS font injection inside the style step only rewrites
+// @font-face rules, never script bytes. Scripts are inlined next and
+// integrity-checked immediately; any later step that rewrites script bytes
+// by design must run after the check.
 
 // Replace link tags with inline styles, and process any font references within CSS
 html = html.replace(styleRegex, (match, href) => {
@@ -155,6 +146,52 @@ html = html.replace(svgRegex, (match, href) => {
   }
   return match;
 });
+
+// Replace script tags with inline scripts. Inlined bundles are collected and
+// re-inserted before </body>: `defer` is ignored on src-less inline scripts,
+// so a bundle left in <head> would run before <div id="root"> is parsed
+// (React createRoot on null). End-of-body placement preserves the original
+// deferred timing for classic scripts; inline modules defer implicitly.
+const inlinedScripts = [];
+html = html.replace(scriptRegex, (match, src) => {
+  const scriptPath = getFilePath(src);
+  if (fs.existsSync(scriptPath)) {
+    try {
+      const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+      // Preserve type="module" attribute if it exists
+      const typeModule = match.includes('type="module"') ? ' type="module"' : '';
+      const crossOrigin = match.includes('crossorigin') ? ' crossorigin' : '';
+      inlinedScripts.push(`<script${typeModule}${crossOrigin}>${scriptContent}</script>`);
+      return '';
+    } catch (err) {
+      console.warn(`Warning: Could not inline script ${scriptPath}. Error: ${err.message}`);
+    }
+  }
+  return match;
+});
+if (inlinedScripts.length > 0) {
+  const combined = inlinedScripts.join('\n');
+  if (!html.includes('</body>')) {
+    console.warn('Warning: no </body> tag; appending inlined scripts before </html> or at end of document.');
+  }
+  // Replacer function, NOT a replacement string: bundle bytes contain `$`
+  // sequences (`$$`, `$&`, ... ) that String.replace would substitute.
+  html = html.includes('</body>')
+    ? html.replace('</body>', () => `${combined}\n</body>`)
+    : html.includes('</html>')
+      ? html.replace('</html>', () => `${combined}\n</html>`)
+      : html + combined;
+}
+
+// Integrity self-check: every inlined script must survive byte-identical.
+// A corrupt insertion (e.g. `$`-pattern substitution) fails the build here
+// instead of shipping a standalone page that throws a SyntaxError.
+for (const script of inlinedScripts) {
+  if (!html.includes(script)) {
+    console.error('Error: inlined script bytes do not match the output HTML; aborting.');
+    process.exit(1);
+  }
+}
 
 // Write the result to a new HTML file
 fs.writeFileSync(outputFile, html);
