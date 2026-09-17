@@ -64,8 +64,18 @@ LLVM_DBG_REF_PATTERN = re.compile(r"!dbg\s+!(\d+)")
 # the definition of the PTX loc directive.
 # Example: .loc 1 0 50 // abcdef.py:0:50
 PTX_LOC_PATTERN = re.compile(
-    r"^\s*\.loc\s+\d+\s+(\d+)\s+(\d+)\s+//\s*(.+?):(\d+):(\d+)"
+    # The leading index is the .loc's own file; it identifies this frame as the
+    # target of another directive's `inlined_at`, so the chain can be walked.
+    r"^\s*\.loc\s+(\d+)\s+(\d+)\s+(\d+)"
+    # Inlined code carries extra fields before the comment, e.g.
+    #   .loc 2 43 13, function_name $L__info_string0, inlined_at 1 288 21 // f.py:43:13
+    # Requiring "//" straight after the column silently skipped every one of
+    # them, leaving PTX with no entries at all for inlined code.
+    r"(?:\s*,[^/]*?\binlined_at\s+(\d+)\s+(\d+)\s+(\d+))?"
+    r"[^/]*//\s*(.+?):(\d+):(\d+)"
 )
+# `.file N "path"` -- resolves the file index used by `inlined_at`.
+PTX_FILE_PATTERN = re.compile(r'^\s*\.file\s+(\d+)\s+"([^"]+)"', re.MULTILINE)
 
 # the definition of the AMDGCN loc directive.
 # Example: .loc	1 32 30                         ; abcd.py:32:30
@@ -230,6 +240,32 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
                 )
                 # Note: We don't add this callsite to locations since callee is missing
 
+    # Resolve each callsite to the OUTERMOST frame of its chain. `file`/`line`
+    # describe the callee -- the inlined library code actually emitted -- so on
+    # their own they never point at the user's kernel. The root does.
+    for info in locations.values():
+        if not info.get("is_callsite"):
+            continue
+        cur, seen = info, set()
+        while cur.get("is_callsite"):
+            nxt = cur.get("callsite_caller")
+            # `is None` rather than falsy: "" is the key of the bare `#loc`, so
+            # `loc(callsite(#locN at #loc))` is a real caller and must resolve.
+            if nxt is None or nxt in seen or nxt not in locations:
+                break
+            seen.add(nxt)
+            cur = locations[nxt]
+        # Only a frame that is itself NOT a callsite is the root of the chain.
+        # The loop also exits by `break` -- on a missing, cyclic or unresolvable
+        # caller -- and there `cur` is still a callsite, so its file/line are a
+        # callee: a library line. Recording that as `inlined_at_*` would be the
+        # exact mis-attribution this pass exists to remove. A broken chain means
+        # the call site is unknown, so the entry stays plain, matching what the
+        # PTX path does when a `.file` index will not resolve.
+        if cur is not info and not cur.get("is_callsite"):
+            info["inlined_at_file"] = cur["file"]
+            info["inlined_at_line"] = cur["line"]
+
     # Verify caller references (warning only, don't block)
     for loc_id, _callee_id, caller_id, _def_line in callsite_defs:
         if loc_id in locations and caller_id and caller_id not in locations:
@@ -297,6 +333,11 @@ def _iter_sass_instructions(sass_content: str):
     # Once set, later //## File comments in the same block (outer call sites)
     # must not override the instruction's attribution.
     awaiting_innermost = True
+    # Last frame seen in the current block. nvdisasm orders frames
+    # innermost-first, so the last one is the outermost call site -- the line in
+    # the user's kernel. The innermost is what the instruction *is*; the
+    # outermost is where the user wrote it.
+    outermost_source_info = None
     lines = sass_content.split("\n")
 
     for line_num, line in enumerate(lines, 1):
@@ -314,13 +355,23 @@ def _iter_sass_instructions(sass_content: str):
             if awaiting_innermost:
                 instr_source_info = comment_source_info
                 awaiting_innermost = False
+            outermost_source_info = comment_source_info
             # The comment line itself maps to its own literal location.
             yield line_num, None, comment_source_info
 
         elif instr_source_info:
             pc_match = SASS_PC_PATTERN.match(line)
             if pc_match:
-                yield line_num, pc_match.group(1), instr_source_info
+                info = instr_source_info
+                if outermost_source_info is not instr_source_info:
+                    # More than one frame: this instruction came from inlined
+                    # code. Keep the innermost as file/line (unchanged
+                    # behaviour) and record the call site alongside it.
+                    info = dict(instr_source_info)
+                    info["is_callsite"] = True
+                    info["inlined_at_file"] = outermost_source_info["file"]
+                    info["inlined_at_line"] = outermost_source_info["line"]
+                yield line_num, pc_match.group(1), info
                 # The next //## File comment begins a new inline stack.
                 awaiting_innermost = True
 
@@ -348,12 +399,17 @@ def extract_sass_mappings(sass_content: str) -> Dict[str, Dict[str, Any]]:
     """
     mappings = {}
     for line_num, _pc_hex, source_info in _iter_sass_instructions(sass_content):
-        mappings[str(line_num)] = {
+        entry = {
             "file": source_info["file"],
             "line": source_info["line"],
             "column": source_info["column"],
             "sass_line": line_num,
         }
+        if source_info.get("is_callsite"):
+            entry["is_callsite"] = True
+            entry["inlined_at_file"] = source_info["inlined_at_file"]
+            entry["inlined_at_line"] = source_info["inlined_at_line"]
+        mappings[str(line_num)] = entry
     return mappings
 
 
@@ -667,6 +723,23 @@ def extract_ptx_amdgcn_mappings(
     is_amdgcn = ir_type == "amdgcn"
 
     tmp_loc_pattern = PTX_LOC_PATTERN if is_ptx else AMDGCN_LOC_PATTERN
+    # index -> path, for resolving `inlined_at <index> <line> <col>`
+    ptx_files = {m.group(1): m.group(2) for m in PTX_FILE_PATTERN.finditer(content)}
+
+    # `inlined_at` names the IMMEDIATE caller, not the root of the chain. For
+    # `tl.sum`, ptxas emits
+    #     .loc 2 273 12, ... inlined_at 2 313 12     (standard.py -> standard.py)
+    #     .loc 2 313 12, ... inlined_at 1   8  9     (standard.py -> the kernel)
+    # so taking the field verbatim files the inner frame under standard.py:313 --
+    # a library line -- while MLIR, SASS and LLIR all walk to the root and file
+    # it under the kernel line. Build frame -> caller here so PTX can walk too.
+    # (the pattern is line-anchored without re.MULTILINE, so scan line by line)
+    ptx_inline_parent: Dict[tuple, tuple] = {}
+    if is_ptx:
+        for _l in lines:
+            _m = PTX_LOC_PATTERN.match(_l)
+            if _m and _m.group(4) is not None:
+                ptx_inline_parent[_m.group(1, 2, 3)] = _m.group(4, 5, 6)
     # Second scan: process code within function body
     # pay attention to the line number, it starts from 0 but the function_start_line starts from 1
     for i, line in enumerate(
@@ -676,13 +749,40 @@ def extract_ptx_amdgcn_mappings(
             # Check .loc directive line
             match = tmp_loc_pattern.match(line)
             if match:
+                inl_file_idx = inl_line = None
                 if is_ptx:
-                    py_line, py_col, filename, _, _ = match.groups()
+                    (
+                        own_file_idx,
+                        py_line,
+                        py_col,
+                        inl_file_idx,
+                        inl_line,
+                        inl_col,
+                        filename,
+                        _,
+                        _,
+                    ) = match.groups()
+                    if inl_line is not None:
+                        # Walk to the OUTERMOST frame, as the other parsers do.
+                        seen = {(own_file_idx, py_line, py_col)}
+                        cur = (inl_file_idx, inl_line, inl_col)
+                        while cur in ptx_inline_parent and cur not in seen:
+                            seen.add(cur)
+                            cur = ptx_inline_parent[cur]
+                        inl_file_idx, inl_line, _ = cur
                 elif is_amdgcn:
                     py_file_index, py_line, py_col, filename, _, _ = match.groups()
                 else:
                     logger.error(f"Unknown IR type: {ir_type}")
                     raise ValueError(f"Unknown IR type: {ir_type}")
+                if int(py_line) == 0:
+                    # `.loc <f> 0 <c>` is the DWARF encoding for "no line
+                    # information". Taking it literally invents a mapping to
+                    # python line 0, which does not exist -- the entry looks
+                    # mapped in the UI and resolves to nothing. Drop it, and
+                    # stop attributing following instructions to a stale .loc.
+                    current_mapping = None
+                    continue
                 file_path = get_file_path(filename)
                 # Create new mapping
                 current_mapping = {
@@ -691,6 +791,20 @@ def extract_ptx_amdgcn_mappings(
                     "column": int(py_col),
                     f"{ir_type}_line": i,
                 }
+                inl_path = ptx_files.get(inl_file_idx) if inl_line is not None else None
+                if inl_path:
+                    # Inlined: file/line describe the callee, matching the other
+                    # parsers. The call site is the line the user wrote.
+                    #
+                    # Both fields are set together or not at all. Recording a
+                    # caller line beside a callee file would make
+                    # `create_python_mapping` file the entry under the caller
+                    # line without anything having checked the file it came
+                    # from. An unresolvable `.file` index means we do not know
+                    # the call site, so the entry stays a plain one.
+                    current_mapping["is_callsite"] = True
+                    current_mapping["inlined_at_file"] = inl_path
+                    current_mapping["inlined_at_line"] = int(inl_line)
                 # Store mapping
                 mappings[str(i)] = current_mapping
             elif current_mapping:
@@ -701,12 +815,21 @@ def extract_ptx_amdgcn_mappings(
                     (is_ptx and line_content.startswith("//"))
                     or (is_amdgcn and line_content.startswith(";"))
                 ):
-                    mappings[str(i)] = {
+                    inherited = {
                         "file": current_mapping["file"],
                         "line": current_mapping["line"],
                         "column": current_mapping["column"],
                         f"{ir_type}_line": i,
                     }
+                    if current_mapping.get("is_callsite"):
+                        inherited["is_callsite"] = True
+                        inherited["inlined_at_file"] = current_mapping[
+                            "inlined_at_file"
+                        ]
+                        inherited["inlined_at_line"] = current_mapping[
+                            "inlined_at_line"
+                        ]
+                    mappings[str(i)] = inherited
         except Exception as e:
             logger.error(f"Error processing line {i}: {e}")
             logger.error(f"Line content: {line}")
@@ -776,6 +899,9 @@ def _parse_generic_loc(
                 entry["is_callsite"] = True
                 entry["callsite_callee"] = info["callsite_callee"]
                 entry["callsite_caller"] = info["callsite_caller"]
+                if "inlined_at_line" in info:
+                    entry["inlined_at_file"] = info["inlined_at_file"]
+                    entry["inlined_at_line"] = info["inlined_at_line"]
             # Propagate alias metadata if present
             if "alias_name" in info:
                 entry["alias_name"] = info["alias_name"]

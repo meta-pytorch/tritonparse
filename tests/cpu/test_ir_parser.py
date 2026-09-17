@@ -7,11 +7,296 @@ from tests.test_utils import get_sass_test_file
 from tritonparse.parse.ir_parser import (
     extract_llvm_dbg_mappings,
     extract_loc_definitions,
+    extract_ptx_amdgcn_mappings,
     extract_sass_mappings,
     extract_sass_pc_mappings,
 )
-from tritonparse.parse.mapper import create_bidirectional_mapping, create_ir_mapping
+from tritonparse.parse.mapper import (
+    create_bidirectional_mapping,
+    create_ir_mapping,
+    create_python_mapping,
+)
 from tritonparse.parse.trace_processor import generate_source_mappings
+
+
+class TestInlinedCallSiteMapping(unittest.TestCase):
+    """Inlined code must map back to the line the user actually wrote.
+
+    For anything inlined, `file`/`line` describe the callee -- a Triton library
+    file. Filing that under the python map puts a library line number where a
+    kernel line number belongs, so the UI highlights unrelated source. Every
+    parser now also records the outermost frame in `inlined_at_*`, and
+    create_python_mapping keys on it.
+    """
+
+    def test_mlir_callsite_resolves_to_outermost_frame(self):
+        ir = """
+module {
+  #loc7 = loc("/tmp/test.py":1091:8)
+  #loc57 = loc("/tmp/test.py":421:16)
+  #loc58 = loc("/tmp/test.py":853:16)
+  #loc190 = loc(callsite(#loc58 at #loc7))
+  #loc220 = loc(callsite(#loc57 at #loc190))
+  %0 = tt.load %ptr loc(#loc220)
+}
+"""
+        locs = extract_loc_definitions(ir)
+        # #loc220 -> caller #loc190 -> caller #loc7, which is not a callsite
+        self.assertEqual(locs["220"]["line"], 421)  # callee, unchanged
+        self.assertEqual(locs["220"]["callsite_caller"], "190")  # immediate
+        self.assertEqual(locs["220"]["inlined_at_line"], 1091)  # root
+
+    def test_broken_chain_records_no_call_site(self):
+        """A walk that cannot reach a non-callsite root must record nothing.
+
+        Breaking out on a missing, cyclic or unresolvable caller leaves the
+        cursor on a callsite, whose file/line are a callee -- a library line.
+        Recording that as `inlined_at_*` is the exact mis-attribution this pass
+        removes, so an incomplete chain leaves the entry plain instead. Matches
+        the PTX path when a `.file` index will not resolve.
+        """
+        ir = """
+module {
+  #loc57 = loc("/tmp/standard.py":43:16)
+  #loc190 = loc(callsite(#loc57 at #loc999))
+  #loc220 = loc(callsite(#loc57 at #loc190))
+  %0 = tt.load %ptr loc(#loc220)
+}
+"""
+        locs = extract_loc_definitions(ir)
+        # the callee is still reported, as for any callsite
+        self.assertEqual(locs["220"]["line"], 43)
+        # but standard.py:43 must not be passed off as the call site
+        self.assertNotIn("inlined_at_line", locs["220"])
+        self.assertNotIn("inlined_at_file", locs["220"])
+        self.assertNotIn("inlined_at_line", locs["190"])
+
+    def test_sass_multiframe_block_records_the_call_site(self):
+        """nvdisasm orders frames innermost-first; the last is the call site."""
+        sass = (
+            "Function:kernel\n"
+            '\t//## File "/lib/standard.py", line 43 inlined at "/work/k.py", line 288\n'
+            '\t//## File "/work/k.py", line 288\n'
+            "        /*0000*/                   MOV R1, c[0x0][0x28] ;\n"
+        )
+        m = extract_sass_mappings(sass)
+        instr = m["4"]
+        self.assertEqual(instr["file"], "/lib/standard.py")  # innermost, unchanged
+        self.assertEqual(instr["line"], 43)
+        self.assertTrue(instr["is_callsite"])
+        self.assertEqual(instr["inlined_at_line"], 288)
+
+    def test_single_frame_block_is_not_a_callsite(self):
+        sass = (
+            "Function:kernel\n"
+            '\t//## File "/work/k.py", line 12\n'
+            "        /*0000*/                   MOV R1, c[0x0][0x28] ;\n"
+        )
+        instr = extract_sass_mappings(sass)["3"]
+        self.assertEqual(instr["line"], 12)
+        self.assertNotIn("is_callsite", instr)
+        self.assertNotIn("inlined_at_line", instr)
+
+    def test_python_mapping_keys_on_the_call_site(self):
+        """The whole point: an inlined entry lands on the kernel, not the library."""
+        ir_maps = [
+            (
+                "llir",
+                {
+                    "5": {
+                        "file": "/lib/standard.py",
+                        "line": 43,
+                        "llir_line": 5,
+                        "is_callsite": True,
+                        "inlined_at_file": "/work/k.py",
+                        "inlined_at_line": 288,
+                    },
+                    "6": {"file": "/work/k.py", "line": 290, "llir_line": 6},
+                },
+            ),
+        ]
+        py = create_python_mapping(ir_maps)
+        self.assertIn(288, py, "inlined entry should file under the call site")
+        self.assertNotIn(43, py, "library line must not appear as a kernel line")
+        self.assertEqual(py[288]["llir_lines"], ["5"])
+        self.assertEqual(py[290]["llir_lines"], ["6"])
+
+
+class TestPtxLocEdgeCases(unittest.TestCase):
+    """`.loc` forms the PTX parser previously mishandled."""
+
+    PTX = """\
+// .globl    k                       // -- Begin function k
+.file    1 "/work/k.py"
+.file    2 "/lib/standard.py"
+.visible .entry k()
+{
+    .loc    1 10 5                          // k.py:10:5
+    mov.u32 %r1, 0;
+    .loc    2 43 13, function_name $L__info_string0, inlined_at 1 288 21 // standard.py:43:13
+    add.s32 %r2, %r1, 1;
+    .loc    1 0 9                           // k.py:0:9
+    mov.u32 %r3, %r2;
+    ret;
+}
+                                        // -- End function
+"""
+
+    def test_inlined_loc_is_matched_and_records_the_call_site(self):
+        """Requiring "//" right after the column skipped every inlined .loc.
+
+        Those instructions then inherited whatever .loc came before, so PTX
+        claimed a source position the other stages never claim and the
+        cross-stage joins missed on inlined code.
+        """
+        m = extract_ptx_amdgcn_mappings(self.PTX, None, "ptx")
+        e = m["8"]  # the inlined .loc directive line
+        # `file` comes from the trailing // comment and is resolved against
+        # other_mappings (None here, so it stays a basename) -- pre-existing
+        # behaviour. `inlined_at_file` is resolved via the .file table instead.
+        self.assertEqual(e["file"], "standard.py")  # callee, as elsewhere
+        self.assertEqual(e["line"], 43)
+        self.assertTrue(e["is_callsite"])
+        self.assertEqual(e["inlined_at_line"], 288)
+        self.assertEqual(e["inlined_at_file"], "/work/k.py")
+        # the instruction under it inherits the call site too
+        self.assertEqual(m["9"]["inlined_at_line"], 288)
+
+    def test_line_zero_produces_no_mapping(self):
+        """`.loc <f> 0 <c>` is DWARF for "no line info", not line 0."""
+        m = extract_ptx_amdgcn_mappings(self.PTX, None, "ptx")
+        self.assertEqual([k for k, v in m.items() if v.get("line") == 0], [])
+        # and it must not leak: the instruction after it gets no stale mapping
+        self.assertNotIn("11", m)
+
+    def test_plain_loc_still_works(self):
+        m = extract_ptx_amdgcn_mappings(self.PTX, None, "ptx")
+        self.assertEqual(m["6"]["line"], 10)
+        self.assertEqual(m["6"]["file"], "k.py")
+        self.assertNotIn("is_callsite", m["6"])
+
+    def test_tab_separated_loc_parses(self):
+        """Real ptxas output separates with tabs, not spaces.
+
+        The fixture above uses spaces so the file stays free of literal tabs
+        (E101/W191); this pins the on-disk form explicitly.
+        """
+        ptx = (
+            "// .globl\tk                       // -- Begin function k\n"
+            '.file\t1 "/work/k.py"\n'
+            ".visible .entry k()\n"
+            "{\n"
+            "\t.loc\t1 10 5\t// k.py:10:5\n"
+            "\tmov.u32 %r1, 0;\n"
+            "}\n"
+            "                                        // -- End function\n"
+        )
+        m = extract_ptx_amdgcn_mappings(ptx, None, "ptx")
+        self.assertEqual(m["5"]["line"], 10)
+        self.assertEqual(m["5"]["file"], "k.py")
+
+    def test_two_level_inline_resolves_to_the_outermost_frame(self):
+        """`inlined_at` names the IMMEDIATE caller, not the root.
+
+        Verified against ptxas output for a `tl.sum` kernel, which nests two
+        deep -- the inner frame's `inlined_at` is another standard.py line, not
+        the kernel. Taking the field verbatim files it under a library line
+        while MLIR/SASS/LLIR all file the same instruction under the kernel
+        line, so the stages disagree. The chain has to be walked.
+        """
+        ptx = (
+            "// .globl k                          // -- Begin function k\n"
+            '.file 1 "/work/k.py"\n'
+            '.file 2 "/lib/standard.py"\n'
+            ".visible .entry k()\n"
+            "{\n"
+            "  .loc 2 273 12, function_name $L__i0, inlined_at 2 313 12 // standard.py:273:12\n"
+            "  add.s32 %r1, %r2, 1;\n"
+            "  .loc 2 313 12, function_name $L__i0, inlined_at 1 8 9 // standard.py:313:12\n"
+            "  mov.u32 %r3, %r1;\n"
+            "}\n"
+            "                                     // -- End function\n"
+        )
+        m = extract_ptx_amdgcn_mappings(ptx, None, "ptx")
+        # inner frame: callee is standard.py:273, call site is the kernel line 8
+        # (NOT standard.py:313, the immediate caller)
+        self.assertEqual(m["6"]["line"], 273)
+        self.assertEqual(m["6"]["inlined_at_file"], "/work/k.py")
+        self.assertEqual(m["6"]["inlined_at_line"], 8)
+        # outer frame resolves to the same root
+        self.assertEqual(m["8"]["line"], 313)
+        self.assertEqual(m["8"]["inlined_at_line"], 8)
+        # every inlined entry agrees on one call site
+        self.assertEqual(
+            {v["inlined_at_line"] for v in m.values() if v.get("is_callsite")}, {8}
+        )
+
+    def test_inline_chain_cycle_does_not_hang(self):
+        """A malformed self-referential chain must terminate."""
+        ptx = (
+            "// .globl k                          // -- Begin function k\n"
+            '.file 1 "/work/k.py"\n'
+            ".visible .entry k()\n"
+            "{\n"
+            "  .loc 1 10 5, inlined_at 1 20 5 // k.py:10:5\n"
+            "  .loc 1 20 5, inlined_at 1 10 5 // k.py:20:5\n"
+            "  mov.u32 %r1, 0;\n"
+            "}\n"
+            "                                     // -- End function\n"
+        )
+        m = extract_ptx_amdgcn_mappings(ptx, None, "ptx")
+        self.assertIn(m["5"]["inlined_at_line"], (10, 20))
+
+    def test_unresolvable_inlined_file_index_yields_no_call_site(self):
+        """A caller line is only usable together with the file it came from.
+
+        `create_python_mapping` keys on `inlined_at_line` alone, so recording
+        one without `inlined_at_file` would file the entry under the caller
+        line with nothing having checked the file it came from. `.file 9` is
+        undeclared here, so the entry stays plain rather than half-attributed.
+        """
+        ptx = (
+            "// .globl k                          // -- Begin function k\n"
+            '.file 1 "/work/k.py"\n'
+            ".visible .entry k()\n"
+            "{\n"
+            "  .loc 7 43 13, inlined_at 9 288 21 // standard.py:43:13\n"
+            "  add.s32 %r2, %r1, 1;\n"
+            "}\n"
+            "                                     // -- End function\n"
+        )
+        m = extract_ptx_amdgcn_mappings(ptx, None, "ptx")
+        self.assertEqual(m["5"]["line"], 43)
+        for key in ("is_callsite", "inlined_at_line", "inlined_at_file"):
+            self.assertNotIn(key, m["5"])
+        # and the instruction under it inherits nothing either
+        self.assertNotIn("is_callsite", m["6"])
+
+
+class TestAmdgcnLocEdgeCases(unittest.TestCase):
+    """The line-0 skip sits after the is_ptx/is_amdgcn branch, so it applies
+    to AMDGCN as well. Same DWARF encoding, same bug; pinned here so the AMD
+    path is not left to the PTX tests by implication."""
+
+    AMDGCN = (
+        "; -- Begin function k\n"
+        "k:\n"
+        "  .loc 1 32 30                    ; abcd.py:32:30\n"
+        "  v_mov_b32 v0, 0\n"
+        "  .loc 1 0 30                     ; abcd.py:0:30\n"
+        "  v_mov_b32 v1, v0\n"
+        "  s_endpgm\n"
+        "; -- End function\n"
+    )
+
+    def test_line_zero_produces_no_mapping(self):
+        m = extract_ptx_amdgcn_mappings(self.AMDGCN, None, "amdgcn")
+        self.assertEqual(m["3"]["line"], 32)
+        self.assertEqual(m["4"]["line"], 32)
+        self.assertEqual([k for k, v in m.items() if v.get("line") == 0], [])
+        # the line-0 directive itself, and the instruction under it, get nothing
+        self.assertNotIn("5", m)
+        self.assertNotIn("6", m)
 
 
 class TestIRParser(unittest.TestCase):
