@@ -8,11 +8,17 @@ interface DiffOptions {
 }
 
 interface DiffComparisonViewProps {
+  /** Content shown in the left diff pane. */
   leftContent: string;
+  /** Content shown in the right diff pane. */
   rightContent: string;
   language?: string;
   height?: string;
   options?: DiffOptions;
+  /** User-defined name for the left pane; falls back to the positional "Left". */
+  leftLabel?: string;
+  /** User-defined name for the right pane; falls back to the positional "Right". */
+  rightLabel?: string;
 }
 
 // Monaco editor types vary by version, so we need to use a loose type for the editor options
@@ -36,6 +42,10 @@ interface MonacoEditorOptions {
   minimap: { enabled: boolean };
   scrollBeyondLastLine: boolean;
   automaticLayout: boolean;
+  /** Accessible name announced by screen readers for the original (left) pane. */
+  originalAriaLabel?: string;
+  /** Accessible name announced by screen readers for the modified (right) pane. */
+  modifiedAriaLabel?: string;
 }
 
 // Monaco diff editor interface (minimal types for our usage).
@@ -65,6 +75,8 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
   language = "plaintext",
   height = "calc(100vh - 12rem)",
   options,
+  leftLabel,
+  rightLabel,
 }) => {
   const monacoOptions = useMemo(() => {
     // Always pass a full object: updateOptions({hideUnchangedRegions: undefined})
@@ -128,11 +140,16 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
       // burned ~5s per tab switch on large models (measured via LoAF). The
       // effect below lays out only when the container has a real size.
       automaticLayout: false,
+      // Screen readers announce these pane names; mirror the visible header
+      // labels so custom names are not visual-only.
+      originalAriaLabel: leftLabel || "Left",
+      modifiedAriaLabel: rightLabel || "Right",
     };
     return opts;
   // Depend on individual fields: callers pass a fresh object literal each
   // render, and [options] would rebuild (and re-apply) options every time.
-  }, [options?.onlyChanged, options?.context, options?.wordWrap]);
+  // Labels are deps so the aria labels track the visible ones.
+  }, [options?.onlyChanged, options?.context, options?.wordWrap, leftLabel, rightLabel]);
 
   const editorRef = useRef<MonacoDiffEditor | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -276,6 +293,25 @@ const DiffComparisonView: React.FC<DiffComparisonViewProps> = ({
 
   return (
     <div className="w-full border border-gray-200 rounded bg-white" data-testid="file-diff-view">
+      {/* Labels name the two panes. Fallback is positional (Left/Right) rather than
+          Original/Modified: the tool cannot guarantee a before/after relationship
+          between the two loaded traces. Each label is constrained to its half of the
+          header (min-w-0 + truncate) so long names cannot overflow the card; the
+          title attribute exposes the full text on hover. */}
+      <div className="flex justify-between gap-4 mb-2 px-2 pt-2">
+        <span
+          className="text-sm font-medium text-gray-600 min-w-0 flex-1 truncate"
+          title={leftLabel || undefined}
+        >
+          {leftLabel || "Left"}
+        </span>
+        <span
+          className="text-sm font-medium text-gray-600 min-w-0 flex-1 truncate text-right"
+          title={rightLabel || undefined}
+        >
+          {rightLabel || "Right"}
+        </span>
+      </div>
       <div
         ref={containerRef}
         className="w-full resize-y overflow-auto"
