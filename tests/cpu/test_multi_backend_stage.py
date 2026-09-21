@@ -938,20 +938,19 @@ class TestStageParserContract(unittest.TestCase):
         not understand the format it was given.
         """
         import json
+        from importlib.resources import files
 
-        log = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        log = files("tests").joinpath(
             "example_output",
             "logs",
             "dedicated_log_triton_trace_findhao_.ndjson",
         )
-        if not os.path.exists(log):
-            self.skipTest("example trace not available")
+        self.assertTrue(log.is_file(), f"Required example trace not available: {log}")
 
         adapter = NvidiaTritonAdapter()
         by_stage = {s.name: s for s in adapter.list_ir_stages()}
         checked = set()
-        with open(log) as fh:
+        with log.open() as fh:
             for line in fh:
                 event = json.loads(line)
                 if event.get("event_type") != "compilation":
