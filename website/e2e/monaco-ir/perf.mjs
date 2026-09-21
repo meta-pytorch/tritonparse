@@ -640,7 +640,8 @@ async function scrollPanelToLine(s, panelId, line) {
     }`);
     if (!st) throw new Error(`${panelId} lost its visible range during scroll prep`);
     if (line >= st.start && line <= st.end) {
-      const len = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panelId)}].editor.getModel().getLineLength(${line})`);
+      // E2E harness: evaluated via CDP in a local test browser; values are test-controlled (panel ID via JSON.stringify, numeric line).
+      const len = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panelId)}].editor.getModel().getLineLength(${line})`); // lgtm[js/bad-code-sanitization]
       return { panel: panelId, line, lineLength: len, pages, scrollTop: st.scrollTop, visibleRange: [st.start, st.end] };
     }
     const mid = (st.start + st.end) / 2;
@@ -706,7 +707,8 @@ async function scenarioP1Tabs(args) {
       const abs = Number(args.prep.split(":")[1]);
       const xy = await wheelToPyLine(s, abs);
       await mouseClick(s, xy.x, xy.y);
-      await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels.python.getHighlights()) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false`, { timeoutMs: 60000, pollingMs: 25 });
+      // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+      await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels.python.getHighlights()) === ${JSON.stringify(JSON.stringify([abs]))} ? true : false`, { timeoutMs: 60000, pollingMs: 25 }); // lgtm[js/bad-code-sanitization]
       prep = { kind: "click-py", line: abs };
     } else {
       const [, panelId, line] = args.prep.split(":");
@@ -951,7 +953,8 @@ async function scenarioP2(args) {
         }`, { timeoutMs: 60000, pollingMs: 25 });
       } else {
         try {
-          await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels["single-viewer"].getHighlights()) !== ${JSON.stringify(preSig)} ? true : false`, { timeoutMs: 15000, pollingMs: 25 });
+          // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+          await waitForFunction(s, `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels["single-viewer"].getHighlights()) !== ${JSON.stringify(preSig)} ? true : false`, { timeoutMs: 15000, pollingMs: 25 }); // lgtm[js/bad-code-sanitization]
         } catch {
           throw new Error(
             `p2 line ${line}: highlight set unchanged 15s after click — same-line re-click without --expect, an unmapped line, or a missed click; rotate --lines or pass --expect with the exact set`
@@ -1102,7 +1105,8 @@ async function scenarioP4(args, fixturePort) {
       return !!window.__PERF_P4;
     }`, "install p4 sampler");
     const sample = (label) =>
-      evalRetry(s, `() => window.__PERF_P4.sample(${JSON.stringify(label)})`, `sample ${label}`);
+      // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+      evalRetry(s, `() => window.__PERF_P4.sample(${JSON.stringify(label)})`, `sample ${label}`); // lgtm[js/bad-code-sanitization]
 
     console.log("  phase: open File Diff");
     await clickText(s, "button", "File Diff");

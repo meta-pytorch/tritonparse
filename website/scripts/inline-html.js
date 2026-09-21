@@ -153,7 +153,8 @@ html = html.replace(svgRegex, (match, href) => {
 // (React createRoot on null). End-of-body placement preserves the original
 // deferred timing for classic scripts; inline modules defer implicitly.
 const inlinedScripts = [];
-html = html.replace(scriptRegex, (match, src) => {
+// Build-time inliner: input is trusted Vite-generated dist/index.html, so unmatched <script> spellings are not attacker-controlled.
+html = html.replace(scriptRegex, (match, src) => { // lgtm[js/incomplete-multi-character-sanitization]
   const scriptPath = getFilePath(src);
   if (fs.existsSync(scriptPath)) {
     try {

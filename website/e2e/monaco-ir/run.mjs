@@ -769,7 +769,8 @@ async function main() {
     async function waitSingleFixtureSets(expected) {
       await waitForFunction(
         s,
-        `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels['single-viewer'].getHighlights()) === ${JSON.stringify(JSON.stringify(expected))} ? true : false`,
+        // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+        `() => JSON.stringify(window.__TRITONPARSE_DEBUG.panels['single-viewer'].getHighlights()) === ${JSON.stringify(JSON.stringify(expected))} ? true : false`, // lgtm[js/bad-code-sanitization]
         { timeoutMs: 15000 }
       );
     }
@@ -1542,7 +1543,8 @@ async function main() {
       await clickNthText("button", "Load", 0);
       await waitForFunction(
         s,
-        `() => window.__TRITONPARSE_DEBUG.panels.filediff.diffEditor.getOriginalEditor().getModel().getValue() !== ${JSON.stringify(beforeOrig)} ? true : false`,
+        // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+        `() => window.__TRITONPARSE_DEBUG.panels.filediff.diffEditor.getOriginalEditor().getModel().getValue() !== ${JSON.stringify(beforeOrig)} ? true : false`, // lgtm[js/bad-code-sanitization]
         { timeoutMs: 60000 }
       );
       let counts = await globalCounts();
@@ -1555,7 +1557,8 @@ async function main() {
       await clickNthText("button", "Load", 1);
       await waitForFunction(
         s,
-        `() => window.__TRITONPARSE_DEBUG.panels.filediff.diffEditor.getModifiedEditor().getModel().getValue() !== ${JSON.stringify(beforeMod)} ? true : false`,
+        // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+        `() => window.__TRITONPARSE_DEBUG.panels.filediff.diffEditor.getModifiedEditor().getModel().getValue() !== ${JSON.stringify(beforeMod)} ? true : false`, // lgtm[js/bad-code-sanitization]
         { timeoutMs: 60000 }
       );
       counts = await globalCounts();
@@ -1715,12 +1718,14 @@ async function main() {
      * Requires two consecutive equal samples (600ms of stillness): a single
      * first-equal return would miss an animation that starts late. */
     async function waitScrollSettled(panel) {
-      let prev = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panel)}].editor.getScrollTop()`);
+      // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+      let prev = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panel)}].editor.getScrollTop()`); // lgtm[js/bad-code-sanitization]
       const deadline = Date.now() + 8000;
       let stable = 0;
       for (;;) {
         await new Promise((r) => setTimeout(r, 300));
-        const cur = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panel)}].editor.getScrollTop()`);
+        // E2E harness: evaluated via CDP in a local test browser; JSON.stringify in expression position is safe.
+        const cur = await evaluate(s, `() => window.__TRITONPARSE_DEBUG.panels[${JSON.stringify(panel)}].editor.getScrollTop()`); // lgtm[js/bad-code-sanitization]
         if (cur === prev) {
           stable++;
           if (stable >= 2) return;
