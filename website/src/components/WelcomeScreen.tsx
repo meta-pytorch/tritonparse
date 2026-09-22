@@ -20,7 +20,7 @@ const BUNDLED_EXAMPLES = [
     fileName: "dedicated_log_triton_trace_inductor__mapped.ndjson.gz",
     title: "Inductor Example",
     description:
-      "Kernels torch.compile generated across two frames. Their Python source is inductor's output_code.py. No launch data yet.",
+      "Kernels torch.compile generated across two frames, with launch data for launch diffs and roofline. Their Python source is inductor's output_code.py.",
   },
 ] as const;
 

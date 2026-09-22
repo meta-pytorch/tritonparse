@@ -86,7 +86,7 @@ class TestKernelQuery(unittest.TestCase):
         # half-written fixture; refresh it with `make regen-examples-install`.
         kernel_dict = {k.name: k for k in result}
         self.assertEqual(kernel_dict["fused_op_kernel"].total_launches, 4)
-        self.assertEqual(kernel_dict["matmul_kernel"].total_launches, 1091)
+        self.assertEqual(kernel_dict["matmul_kernel"].total_launches, 1078)
 
     def test_find_launch_index_valid(self):
         """Test finding valid kernel name and launch_id."""

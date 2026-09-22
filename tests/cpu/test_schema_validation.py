@@ -933,9 +933,12 @@ class ValidateTraceFileTest(unittest.TestCase):
     def test_validate_raw_trace_dedicated_log(self):
         """Validate raw trace: dedicated_log_triton_trace_findhao_.ndjson.
 
-        A raw NDJSON trace straight off the writer: 4 compilation, 20 launch
-        and 2 autotune records (the launch tail is capped by the generator).
-        Validates that every record conforms to its schema.
+        A raw NDJSON trace straight off the writer: 4 compilation and 20
+        launch records (the launch tail is capped by the generator). There
+        are no `autotune` records: the writer emits those through
+        `knobs.autotuning.listener`, which triton 3.7 removed, so current
+        runs cannot produce them. Validates that every record conforms to
+        its schema.
         """
         raw_file = get_raw_trace_file()
         result = validate_trace_file(str(raw_file))
@@ -1061,9 +1064,16 @@ class ValidateTraceFileTest(unittest.TestCase):
                 )
 
     def test_raw_trace_covers_the_writer_event_types(self):
-        """Same guard for the raw fixture, which the writer produces directly."""
+        """Same guard for the raw fixture, which the writer produces directly.
+
+        `autotune` is deliberately not required here: the writer emits it
+        through `knobs.autotuning.listener`, which triton 3.7 removed, so a
+        fixture generated with current triton cannot contain any. The
+        writer keeps `_autotune_listener` for older tritons, and the
+        `autotune` schema stays covered by the synthetic unit tests above.
+        """
         counts = validate_trace_file(str(get_raw_trace_file()))["event_type_counts"]
-        for event_type in ("compilation", "launch", "autotune"):
+        for event_type in ("compilation", "launch"):
             with self.subTest(event_type=event_type):
                 self.assertGreater(counts.get(event_type, 0), 0)
 

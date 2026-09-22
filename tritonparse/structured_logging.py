@@ -2268,6 +2268,16 @@ def init(
     knobs.compilation.listener = maybe_trace_triton
     if hasattr(knobs.autotuning, "listener"):
         knobs.autotuning.listener = _autotune_listener
+    else:
+        # Triton 3.7 removed knobs.autotuning.listener; without it the writer
+        # cannot emit raw 'autotune' events. Not an error -- the derived
+        # autotune_analysis/autotune_summary events come from compilations
+        # and launches -- but worth one line so a missing event type in a
+        # regenerated trace does not send anyone spelunking.
+        log.debug(
+            "[tritonparse] knobs.autotuning.listener not present "
+            "(triton >= 3.7); raw 'autotune' events will not be recorded"
+        )
 
 
 def init_with_env():
