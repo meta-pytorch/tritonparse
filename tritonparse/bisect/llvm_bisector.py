@@ -519,4 +519,4 @@ class LLVMBisector(BaseBisector):
         try:
             return self._run_bisect(actual_good, bad_llvm, output_callback)
         except BisectError as e:
-            raise LLVMBisectError(str(e)) from e
+            raise LLVMBisectError(str(e), result=e.result) from e

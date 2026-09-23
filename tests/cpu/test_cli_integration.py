@@ -7,7 +7,9 @@ into the main tritonparse bisect CLI for automatic environment setup.
 """
 
 import argparse
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from tritonparse.bisect.cli import (
@@ -17,7 +19,10 @@ from tritonparse.bisect.cli import (
     bisect_command,
 )
 from tritonparse.bisect.commit_detector import CommitDetectorError, LLVMBumpInfo
+from tritonparse.bisect.llvm_bisector import LLVMBisectError
+from tritonparse.bisect.result import BisectResult
 from tritonparse.bisect.state import BisectPhase, BisectState
+from tritonparse.bisect.triton_bisector import TritonBisectError
 
 
 class CLIArgumentParsingTest(unittest.TestCase):
@@ -313,6 +318,171 @@ class LLVMDescriptorWorkflowTest(unittest.TestCase):
         self.assertEqual(state.phase, BisectPhase.COMPLETED)
         self.assertEqual(state.llvm_comparison, info.to_dict())
         tester.assert_not_called()
+
+
+class BisectOutcomeWorkflowTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.log_dir = Path(temporary.name)
+        self.ui = MagicMock()
+        self.ui.is_tui_enabled = False
+        self.ui._rich_enabled = False
+        self.ui.progress.elapsed_seconds = 0
+        self.logger = MagicMock()
+        self.logger.log_dir = self.log_dir
+        self.logger.module_log_path = self.log_dir / "module.log"
+        self.logger.command_log_path = self.log_dir / "commands.log"
+        self.logger.session_name = "workflow"
+
+    def _state(self, **kwargs):
+        return BisectState(
+            triton_dir="/unused",
+            test_script="/unused/test.py",
+            good_commit="a" * 40,
+            bad_commit="b" * 40,
+            log_dir=str(self.log_dir),
+            **kwargs,
+        )
+
+    def test_incomplete_triton_bisect_stops_before_llvm_detection(self):
+        for status, phase in (
+            ("ambiguous", BisectPhase.AMBIGUOUS),
+            ("aborted", BisectPhase.ABORTED),
+            ("error", BisectPhase.FAILED),
+        ):
+            with self.subTest(status=status):
+                candidates = ["a" * 40, "b" * 40] if status == "ambiguous" else []
+                result = BisectResult(
+                    status=status,
+                    candidates=candidates,
+                    message=f"{status}\n" + "\n".join(candidates),
+                )
+                state = self._state()
+                with (
+                    patch("tritonparse.bisect.ui.print_final_summary") as summary,
+                    patch(
+                        "tritonparse.bisect.triton_bisector.TritonBisector"
+                    ) as bisector,
+                    patch(
+                        "tritonparse.bisect.commit_detector.CommitDetector"
+                    ) as detector,
+                    patch(
+                        "tritonparse.bisect.executor.ShellExecutor.run_command"
+                    ) as command,
+                ):
+                    bisector.return_value.run.side_effect = TritonBisectError(
+                        result.message, result=result
+                    )
+                    self.assertEqual(
+                        _orchestrate_workflow(state, self.ui, self.logger), 1
+                    )
+                detector.assert_not_called()
+                command.assert_not_called()
+                self.assertEqual(state.phase, phase)
+                self.assertIsNone(state.triton_culprit)
+                self.assertIsNone(summary.call_args.kwargs["culprits"])
+                self.assertEqual(state.triton_bisect_result, result.to_dict())
+                restored = BisectState.load(self.log_dir / "workflow_state.json")
+                self.assertEqual(restored.phase, phase)
+                self.assertEqual(
+                    restored.to_report()["triton_bisect_result"], result.to_dict()
+                )
+
+    def test_llvm_ambiguity_keeps_the_confirmed_triton_result(self):
+        state = self._state(
+            phase=BisectPhase.LLVM_BISECT,
+            triton_culprit="c" * 40,
+            is_llvm_bump=True,
+            good_llvm="d" * 40,
+            bad_llvm="e" * 40,
+        )
+        result = BisectResult(
+            status="ambiguous",
+            candidates=["d" * 40, "e" * 40],
+            message="LLVM candidate set",
+        )
+        with (
+            patch("tritonparse.bisect.ui.print_final_summary") as summary,
+            patch("tritonparse.bisect.llvm_bisector.LLVMBisector") as bisector,
+        ):
+            bisector.return_value.run.side_effect = LLVMBisectError(
+                result.message, result=result
+            )
+            self.assertEqual(_orchestrate_workflow(state, self.ui, self.logger), 1)
+        self.assertEqual(state.phase, BisectPhase.AMBIGUOUS)
+        self.assertIsNone(state.llvm_culprit)
+        self.assertEqual(state.to_report()["llvm_bisect_result"], result.to_dict())
+        self.assertEqual(summary.call_args.kwargs["culprits"], {"triton": "c" * 40})
+
+    def test_unique_result_is_saved_before_llvm_detection(self):
+        state = self._state()
+        result = BisectResult(status="found", culprit="b" * 40, exit_code=0)
+        with (
+            patch("tritonparse.bisect.ui.print_final_summary"),
+            patch("tritonparse.bisect.triton_bisector.TritonBisector") as bisector,
+            patch("tritonparse.bisect.commit_detector.CommitDetector") as detector,
+        ):
+            bisector.return_value.run.return_value = result.culprit
+            bisector.return_value.result = result
+            detector.return_value.detect.return_value = LLVMBumpInfo(is_llvm_bump=False)
+            self.assertEqual(_orchestrate_workflow(state, self.ui, self.logger), 0)
+        detector.return_value.detect.assert_called_once_with(result.culprit)
+        self.assertEqual(state.phase, BisectPhase.COMPLETED)
+        self.assertEqual(state.triton_bisect_result, result.to_dict())
+
+    def test_resuming_a_stopped_result_does_not_report_completion(self):
+        for phase in (BisectPhase.AMBIGUOUS, BisectPhase.ABORTED, BisectPhase.FAILED):
+            with self.subTest(phase=phase):
+                state = self._state(phase=phase, error_message="prior stop reason")
+                self.ui.reset_mock()
+                with (
+                    patch("tritonparse.bisect.ui.print_final_summary"),
+                    patch(
+                        "tritonparse.bisect.triton_bisector.TritonBisector"
+                    ) as bisector,
+                ):
+                    self.assertEqual(
+                        _orchestrate_workflow(state, self.ui, self.logger), 1
+                    )
+                bisector.assert_not_called()
+                self.assertEqual(state.phase, phase)
+                self.assertNotIn(
+                    unittest.mock.call("Full Workflow Complete!"),
+                    self.ui.append_output.call_args_list,
+                )
+
+    def test_single_mode_ambiguity_is_nonzero_without_a_culprit(self):
+        parser = argparse.ArgumentParser()
+        _add_bisect_args(parser)
+        args = parser.parse_args(
+            [
+                "--triton-dir",
+                "/unused",
+                "--test-script",
+                "/unused/test.py",
+                "--good",
+                "a" * 40,
+                "--bad",
+                "b" * 40,
+            ]
+        )
+        result = BisectResult(
+            status="ambiguous", candidates=["a" * 40, "b" * 40], message="candidate set"
+        )
+        with (
+            patch("tritonparse.bisect.cli._create_logger", return_value=self.logger),
+            patch("tritonparse.bisect.ui.BisectUI", return_value=self.ui),
+            patch("tritonparse.bisect.ui.print_final_summary") as summary,
+            patch("tritonparse.bisect.triton_bisector.TritonBisector") as bisector,
+            patch("tritonparse.bisect.commit_detector.CommitDetector") as detector,
+        ):
+            bisector.return_value.run.side_effect = TritonBisectError(
+                result.message, result=result
+            )
+            self.assertEqual(_handle_triton_bisect(args), 1)
+        detector.assert_not_called()
+        self.assertIsNone(summary.call_args.kwargs["culprits"])
 
 
 if __name__ == "__main__":

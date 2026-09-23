@@ -2,14 +2,19 @@
 
 """Tests for bisect executor module (CPU-only, no GPU required)."""
 
+import io
+import os
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from tritonparse.bisect import BisectLogger, CommandResult, ShellExecutor
-from tritonparse.bisect.executor import _format_duration
+from tritonparse.bisect.executor import _format_duration, ProcessCleanupError
 
 
 class FormatDurationTest(unittest.TestCase):
@@ -106,6 +111,186 @@ class ShellExecutorTest(unittest.TestCase):
         self.assertIn("line1", lines)
         self.assertIn("line2", lines)
         self.assertIn("line3", lines)
+
+    def test_callback_failure_stops_the_child_process(self):
+        child_pids = []
+
+        def fail_on_child(line):
+            if line.startswith("child="):
+                child_pids.append(int(line.split("=")[1]))
+                raise RuntimeError("callback failed")
+
+        result = self.executor.run_command_streaming(
+            ["bash", "-c", 'printf "child=%s\\n" "$$"\nsleep 30'],
+            output_callback=fail_on_child,
+        )
+        self.assertFalse(result.success)
+        self.assertIn("callback failed", result.output)
+        self.assertEqual(len(child_pids), 1)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pids[0], 0)
+
+    def test_cleanup_stops_children_that_ignore_sigterm(self):
+        pipe_path = Path(self.temp_dir) / "child.pipe"
+        os.mkfifo(pipe_path)
+        reader = os.open(pipe_path, os.O_RDONLY | os.O_NONBLOCK)
+        groups = []
+
+        def fail_when_ready(line):
+            if line.startswith("group="):
+                groups.append(int(line.split("=")[1]))
+            elif line == "ready":
+                raise RuntimeError("callback failed")
+
+        try:
+            result = self.executor.run_command_streaming(
+                [
+                    "bash",
+                    "-c",
+                    'printf "group=%s\\n" "$$"\n'
+                    '(trap "" TERM\n'
+                    'exec 3>"$CHILD_PIPE"\n'
+                    'printf "ready\\n"\n'
+                    "sleep 30) &\n"
+                    "wait",
+                ],
+                env={"CHILD_PIPE": str(pipe_path)},
+                output_callback=fail_when_ready,
+            )
+            self.assertFalse(result.success)
+            self.assertEqual(len(groups), 1)
+            # EOF proves every writer in the child group has closed its fd.
+            # Merely reaping the parent leaves the pipe open in its children.
+            ready, _, _ = select.select([reader], [], [], 2)
+            self.assertEqual(ready, [reader], "A child survived bisect cleanup")
+            self.assertEqual(os.read(reader, 1), b"")
+        finally:
+            for group in groups:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            os.close(reader)
+
+    def test_cleanup_waits_are_bounded_when_sigkill_cannot_stop_the_process(self):
+        process = MagicMock()
+        process.pid = 12345
+        process.returncode = None
+        process.stdout = io.StringIO("ready\n")
+
+        def stuck_wait(timeout=None):
+            self.assertIsNotNone(timeout, "Cleanup used an unbounded wait")
+            raise subprocess.TimeoutExpired("stuck process", timeout)
+
+        def fail_when_ready(line):
+            if line == "ready":
+                raise RuntimeError("callback failed")
+
+        process.wait.side_effect = stuck_wait
+        with (
+            patch("subprocess.Popen", return_value=process),
+            patch("os.killpg") as killpg,
+            patch("tritonparse.bisect.executor.time.sleep"),
+            self.assertRaisesRegex(RuntimeError, "did not stop after SIGKILL"),
+        ):
+            self.executor.run_command_streaming(
+                ["test-command"], output_callback=fail_when_ready
+            )
+        self.assertTrue(process.stdout.closed)
+        self.assertEqual(
+            [call.args[1] for call in killpg.call_args_list],
+            [signal.SIGTERM, signal.SIGKILL],
+        )
+
+    def test_group_signals_finish_before_the_leader_pid_is_released(self):
+        process = MagicMock()
+        process.pid = 12345
+        process.returncode = None
+        process.stdout = io.StringIO("ready\n")
+        reaped = False
+        signals = []
+
+        def reap(timeout):
+            nonlocal reaped
+            reaped = True
+            process.returncode = 0
+            return 0
+
+        def signal_owned_group(group, signum):
+            self.assertFalse(reaped, "Signalled a group after releasing its leader PID")
+            signals.append(signum)
+
+        def fail_when_ready(line):
+            if line == "ready":
+                raise RuntimeError("callback failed")
+
+        process.wait.side_effect = reap
+        with (
+            patch("subprocess.Popen", return_value=process),
+            patch("os.killpg", side_effect=signal_owned_group),
+            patch("tritonparse.bisect.executor.time.sleep"),
+        ):
+            result = self.executor.run_command_streaming(
+                ["test-command"], output_callback=fail_when_ready
+            )
+        self.assertFalse(result.success)
+        self.assertTrue(reaped)
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+
+    def test_cleanup_failure_keeps_interrupt_output_and_command_footer(self):
+        process = MagicMock()
+        process.pid = 12345
+        process.returncode = None
+        process.stdout = io.StringIO("build evidence\nready\n")
+
+        def interrupt(line):
+            if line == "ready":
+                raise KeyboardInterrupt()
+
+        with (
+            patch("subprocess.Popen", return_value=process),
+            patch.object(
+                self.executor,
+                "_stop_process_group",
+                side_effect=ProcessCleanupError("cleanup unavailable"),
+            ),
+            self.assertRaises(ProcessCleanupError) as error,
+        ):
+            self.executor.run_command_streaming(
+                ["test-command"], output_callback=interrupt
+            )
+        self.assertIsInstance(error.exception.__cause__, KeyboardInterrupt)
+        result = error.exception.result
+        self.assertEqual(result.exit_code, 130)
+        self.assertIn("build evidence", result.output)
+        self.assertIn("Command interrupted", result.output)
+        self.assertIn("cleanup unavailable", result.output)
+        self.assertTrue(process.stdout.closed)
+        commands = Path(self.logger.command_log_path).read_text()
+        self.assertIn("build evidence", commands)
+        self.assertIn("cleanup unavailable", commands)
+        self.assertIn("Exit code: 130, Duration:", commands)
+
+    def test_cleanup_refuses_to_signal_an_already_reaped_group_leader(self):
+        process = MagicMock()
+        process.pid = 12345
+        process.returncode = 0
+        process.stdout = io.StringIO("ready\n")
+
+        def fail_when_ready(line):
+            if line == "ready":
+                raise RuntimeError("callback failed")
+
+        with (
+            patch("subprocess.Popen", return_value=process),
+            patch("os.killpg") as killpg,
+            self.assertRaisesRegex(RuntimeError, "already reaped"),
+        ):
+            self.executor.run_command_streaming(
+                ["test-command"], output_callback=fail_when_ready
+            )
+        killpg.assert_not_called()
+        self.assertTrue(process.stdout.closed)
 
 
 if __name__ == "__main__":

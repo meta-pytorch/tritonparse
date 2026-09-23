@@ -11,7 +11,9 @@ Provides a unified interface for executing shell commands with:
 """
 
 import os
+import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -71,6 +73,14 @@ class CommandResult:
         return _format_duration(self.duration_seconds)
 
 
+class ProcessCleanupError(RuntimeError):
+    """An owned command could not be stopped, so its checkout must stay intact."""
+
+    def __init__(self, message: str, *, result: Optional[CommandResult] = None) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 class ShellExecutor:
     """
     Shell command executor with logging integration.
@@ -94,6 +104,8 @@ class ShellExecutor:
             logger: BisectLogger instance for logging command execution.
         """
         self.logger = logger
+        self.bisect_log_path: Optional[Path] = None
+        self.bisect_cleanup_errors: List[str] = []
 
     def run_command(
         self,
@@ -229,6 +241,11 @@ class ShellExecutor:
 
         start_time = time.time()
         output_lines: List[str] = []
+        process = None
+        completed = False
+        exit_code = -1
+        interrupted = None
+        cleanup_error = None
 
         # Write header to command log file
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -247,6 +264,7 @@ class ShellExecutor:
                 text=True,
                 shell=shell,
                 bufsize=1,
+                start_new_session=True,
             )
 
             for line in process.stdout:
@@ -261,6 +279,12 @@ class ShellExecutor:
 
             process.wait()
             exit_code = process.returncode
+            completed = True
+
+        except KeyboardInterrupt as error:
+            interrupted = error
+            exit_code = 130
+            output_lines.append("Command interrupted.")
 
         except OSError as e:
             exit_code = -1
@@ -269,8 +293,6 @@ class ShellExecutor:
             self.logger.log_command_output(
                 cmd_str, error_msg + "\n", exit_code, include_wrapper=False
             )
-            if output_callback:
-                output_callback(error_msg)
 
         except Exception as e:
             exit_code = -1
@@ -279,8 +301,31 @@ class ShellExecutor:
             self.logger.log_command_output(
                 cmd_str, error_msg + "\n", exit_code, include_wrapper=False
             )
-            if output_callback:
-                output_callback(error_msg)
+
+        except BaseException as error:  # noqa: B036 - Re-raised after cleanup below.
+            # Defer propagation until cleanup and its command record finish.
+            interrupted = error
+            output_lines.append(f"{type(error).__name__}: command stopped.")
+
+        finally:
+            if process is not None:
+                # Stop Git and its build/test children before a caller resets
+                # the checkout after an interruption or callback failure.
+                try:
+                    if not completed:
+                        self._stop_process_group(process)
+                except ProcessCleanupError as error:
+                    # Finish the command record before propagating cleanup
+                    # failure. In particular, retain an original interruption
+                    # and its output instead of replacing it with an error.
+                    cleanup_error = error
+                    output_lines.append(str(error))
+                    self.logger.log_command_output(
+                        cmd_str, str(error) + "\n", exit_code, include_wrapper=False
+                    )
+                finally:
+                    if process.stdout is not None:
+                        process.stdout.close()
 
         duration = time.time() - start_time
 
@@ -294,13 +339,48 @@ class ShellExecutor:
             f"(exit code: {exit_code})"
         )
 
-        return CommandResult(
+        result = CommandResult(
             command=cmd_str,
             exit_code=exit_code,
             stdout="\n".join(output_lines),
             stderr="",
             duration_seconds=duration,
         )
+        if cleanup_error is not None:
+            cleanup_error.result = result
+            raise cleanup_error from interrupted
+        if interrupted is not None:
+            raise interrupted
+        return result
+
+    @staticmethod
+    def _stop_process_group(process: subprocess.Popen) -> None:
+        if process.returncode is not None:
+            raise ProcessCleanupError(
+                f"Process group leader {process.pid} was already reaped; "
+                "refusing to signal a potentially reused process group."
+            )
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            # Keep the leader unreaped through the grace period, even if it
+            # exits before children that ignore SIGTERM. Its reserved PID
+            # prevents the group ID from being reused before our final signal.
+            time.sleep(5)
+        finally:
+            # Send the last group signal before wait() releases the leader PID.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                raise ProcessCleanupError(
+                    f"Process group {process.pid} did not stop after SIGKILL."
+                ) from error
 
     def run_git_bisect_sequence(
         self,
@@ -319,10 +399,10 @@ class ShellExecutor:
         2. git bisect good <good_commit>
         3. git bisect bad <bad_commit>
         4. git bisect run bash <run_script>
-        5. git bisect reset (always, even on failure)
+        5. Save git bisect log, then reset this attempt (including on failure)
 
-        Note: Git bisect state is persisted in .git/ directory, so multiple
-        subprocess calls work correctly.
+        An existing bisect is left untouched. Git resolves its own state paths,
+        including linked worktrees where .git is a file.
 
         Args:
             repo_path: Path to the git repository (also used as cwd).
@@ -352,10 +432,34 @@ class ShellExecutor:
         self.logger.info(f"Starting git bisect: {good_commit} -> {bad_commit}")
         self.logger.info(f"  Repository: {repo_path}")
         self.logger.info(f"  Run script: {run_script}")
+        self.bisect_log_path = None
+        self.bisect_cleanup_errors = []
 
+        state_path = self.run_command(
+            ["git", "rev-parse", "--git-path", "BISECT_START"], cwd=repo_path
+        )
+        if not state_path.success:
+            return state_path
+        bisect_start = Path(state_path.stdout.strip())
+        if not bisect_start.is_absolute():
+            bisect_start = Path(repo_path) / bisect_start
+        if bisect_start.exists():
+            return CommandResult(
+                command="git bisect start",
+                exit_code=1,
+                stdout="",
+                stderr=f"A bisect is already in progress in {repo_path}; left unchanged.",
+                duration_seconds=0,
+            )
+
+        started = False
+        reset_safe = True
         try:
             # Step 1: git bisect start
             self.logger.info("Step 1/4: git bisect start")
+            # Even a failed start can write BISECT_START and other state.
+            # The pre-check above established that this attempt owns it.
+            started = True
             result = self.run_command(
                 ["git", "bisect", "start"],
                 cwd=repo_path,
@@ -372,7 +476,6 @@ class ShellExecutor:
             )
             if not result.success:
                 self.logger.error(f"git bisect good failed: {result.stderr}")
-                self._bisect_reset(repo_path)
                 return result
             # Pass output to callback for TUI parsing (e.g., "roughly N steps")
             if output_callback:
@@ -388,7 +491,6 @@ class ShellExecutor:
             )
             if not result.success:
                 self.logger.error(f"git bisect bad failed: {result.stderr}")
-                self._bisect_reset(repo_path)
                 return result
             # Pass output to callback for TUI parsing (e.g., "roughly N steps")
             if output_callback:
@@ -407,11 +509,63 @@ class ShellExecutor:
 
             return result
 
-        finally:
-            # Always reset bisect state
-            self._bisect_reset(repo_path)
+        except ProcessCleanupError as error:
+            reset_safe = False
+            self.bisect_cleanup_errors.append(
+                "Git bisect state was preserved because command cleanup failed; "
+                f"stop remaining processes before resetting the repository. {error}"
+            )
+            if error.result is not None:
+                return error.result
+            raise
 
-    def _bisect_reset(self, repo_path: str) -> None:
+        finally:
+            if started:
+                try:
+                    self._save_bisect_log(repo_path)
+                except Exception as error:
+                    self.bisect_cleanup_errors.append(
+                        f"Cannot save git bisect log: {error}"
+                    )
+                if reset_safe:
+                    try:
+                        reset = self._bisect_reset(repo_path)
+                        if not reset.success:
+                            self.bisect_cleanup_errors.append(
+                                f"Cannot reset git bisect: {reset.output}"
+                            )
+                    except Exception as error:
+                        self.bisect_cleanup_errors.append(
+                            f"Cannot reset git bisect: {error}"
+                        )
+                for error in self.bisect_cleanup_errors:
+                    self.logger.warning(error)
+
+    def _save_bisect_log(self, repo_path: str) -> None:
+        result = self.run_command(["git", "bisect", "log"], cwd=repo_path)
+        if not result.success:
+            raise RuntimeError(result.output)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix=f"{self.logger.session_name}_",
+                suffix="_git_bisect.log.tmp",
+                dir=self.logger.log_dir,
+                delete=False,
+            ) as output:
+                temporary_path = Path(output.name).resolve()
+                output.write(result.stdout)
+                path = temporary_path.with_suffix("")
+            temporary_path.replace(path)
+        except OSError:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
+        self.bisect_log_path = path
+        self.logger.info(f"Git bisect log saved to: {path}")
+
+    def _bisect_reset(self, repo_path: str) -> CommandResult:
         """
         Reset git bisect state.
 
@@ -422,7 +576,7 @@ class ShellExecutor:
             repo_path: Path to the git repository.
         """
         self.logger.debug("Resetting git bisect state")
-        self.run_command(
+        return self.run_command(
             ["git", "bisect", "reset"],
             cwd=repo_path,
         )

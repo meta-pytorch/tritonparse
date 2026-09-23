@@ -111,6 +111,7 @@ class TorchBisectorRunTest(unittest.TestCase):
     @patch.object(TorchBisector, "_run_bisect")
     def test_run_wraps_bisect_error(self, mock_run: MagicMock) -> None:
         from tritonparse.bisect.base_bisector import BisectError
+        from tritonparse.bisect.result import BisectResult
 
         logger = MagicMock()
         logger.log_dir = Path("/tmp/logs")
@@ -120,10 +121,12 @@ class TorchBisectorRunTest(unittest.TestCase):
             conda_env="test_env",
             logger=logger,
         )
-        mock_run.side_effect = BisectError("something failed")
+        result = BisectResult(status="aborted", message="something failed")
+        mock_run.side_effect = BisectError("something failed", result=result)
         with self.assertRaises(TorchBisectError) as ctx:
             bisector.run("good", "bad")
         self.assertIn("something failed", str(ctx.exception))
+        self.assertIs(ctx.exception.result, result)
 
 
 if __name__ == "__main__":

@@ -7,19 +7,25 @@ This module provides the abstract base class that defines the common structure
 and behavior for all bisector implementations (Triton, LLVM, etc.).
 """
 
-import re
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
+from tritonparse._json_compat import dumps
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
+from tritonparse.bisect.result import BisectResult
 
 
 class BisectError(Exception):
     """Base exception for bisect related errors."""
 
-    pass
+    def __init__(
+        self, message: str = "", *, result: Optional[BisectResult] = None
+    ) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 class BaseBisector(ABC):
@@ -90,6 +96,7 @@ class BaseBisector(ABC):
         self.executor = ShellExecutor(logger)
         self.per_commit_log = per_commit_log
         self.build_fail_action = self._validate_build_fail_action(build_fail_action)
+        self.result: Optional[BisectResult] = None
 
     @staticmethod
     def _validate_build_fail_action(value: str) -> str:
@@ -224,13 +231,8 @@ class BaseBisector(ABC):
         if not git_dir.exists():
             raise BisectError(f"Not a git repository: {target_dir}")
 
-        # Check for in-progress bisect
-        bisect_start = target_dir / ".git" / "BISECT_START"
-        if bisect_start.exists():
-            raise BisectError(
-                f"A bisect is already in progress in {target_dir}. "
-                f"Run 'cd {target_dir} && git bisect reset' first."
-            )
+        # The executor checks Git's BISECT_START path before starting; unlike
+        # ".git/BISECT_START", that also works for linked worktrees.
 
         # Check test script exists
         if not self.test_script.exists():
@@ -273,123 +275,19 @@ class BaseBisector(ABC):
             env["BUILD_COMMAND"] = self.build_command
         return env
 
-    def _parse_bisect_result(self, output: str) -> str:
-        """
-        Parse the culprit commit from git bisect output.
+    @staticmethod
+    def _require_culprit(result: BisectResult) -> str:
+        if result.status == "found" and result.culprit:
+            return result.culprit
+        raise BisectError(result.message, result=result)
 
-        Handles two normal completion shapes:
-
-        1. Single first-bad found:
-               "<40-char-hash> is the first bad commit"
-
-        2. Some commits were skipped, so git can only narrow it down to a
-           candidate set:
-               "There are only 'skip'ped commits left to test."
-               "The first bad commit could be any of:"
-               "<hash1>"
-               "<hash2>"
-               ...
-               "We cannot bisect more!"
-           In this case we return the FIRST candidate (the most recent
-           non-skipped good->bad transition boundary on the bisected range)
-           and also surface a warning listing all candidates so the user
-           knows the bisect was approximate.
-
-        Args:
-            output: The stdout from git bisect run.
-
-        Returns:
-            The culprit commit hash. If multiple candidates exist (case 2),
-            the first listed is returned.
-
-        Raises:
-            BisectError: If neither pattern matches.
-        """
-        # Case 1: clean single-commit result.
-        pattern_full = r"([a-f0-9]{40}) is the first bad commit"
-        match = re.search(pattern_full, output)
-        if match:
-            return match.group(1)
-
-        pattern_short = r"([a-f0-9]{7,12}) is the first bad commit"
-        match = re.search(pattern_short, output)
-        if match:
-            return match.group(1)
-
-        # Case 2: result narrowed to a set because some commits were skipped
-        # (typically because they failed to build and we asked git bisect to
-        # skip them). Parse the candidate list.
-        candidates = self._parse_skip_candidates(output)
-        if candidates:
-            self.logger.warning(
-                "git bisect could not converge on a single first-bad commit "
-                "because some commits in the range were skipped (most likely "
-                "due to build failures). Narrowed it down to "
-                f"{len(candidates)} candidate(s):"
-            )
-            for sha in candidates:
-                self.logger.warning(f"  - {sha}")
-            self.logger.warning(
-                "Returning the first candidate as the culprit. To get a "
-                "precise result, fix the build error on the skipped commits "
-                "(or set --build-fail-action=abort to stop on the first build "
-                "failure) and re-run bisect."
-            )
-            return candidates[0]
-
-        # If we can't find any pattern, raise an error with context
-        raise BisectError(
-            f"Cannot parse bisect result. Expected '<hash> is the first bad commit' "
-            f"or a 'could be any of' candidate list in output:\n{output[-500:]}"
-        )
+    def _parse_bisect_result(self, output: str, exit_code: int = 0) -> str:
+        """Return only a unique result; incomplete results raise with evidence."""
+        return self._require_culprit(BisectResult.from_output(output, exit_code))
 
     @staticmethod
-    def _parse_skip_candidates(output: str) -> list:
-        """
-        Parse the candidate list from a 'could be any of' bisect result.
-
-        Looks for output of the form:
-            The first bad commit could be any of:
-            <hash1>
-            <hash2>
-            ...
-            We cannot bisect more!
-
-        Args:
-            output: The stdout from git bisect run.
-
-        Returns:
-            List of candidate commit hashes (full 40-char SHAs only).
-            Empty list if no such block is present in the output.
-        """
-        marker = "first bad commit could be any of"
-        idx = output.find(marker)
-        if idx < 0:
-            return []
-
-        # Walk lines after the marker, collect 40-char hex SHAs until we hit
-        # a blank line or the trailing "We cannot bisect more!" sentinel.
-        candidates: list = []
-        sha_re = re.compile(r"^([a-f0-9]{40})$")
-        for line in output[idx:].splitlines()[1:]:
-            stripped = line.strip()
-            if not stripped:
-                # Blank line ends the candidate block.
-                if candidates:
-                    break
-                # Skip leading blanks.
-                continue
-            if "cannot bisect" in stripped.lower():
-                break
-            m = sha_re.match(stripped)
-            if m:
-                candidates.append(m.group(1))
-            elif candidates:
-                # Non-SHA, non-blank line after we already started collecting
-                # means the candidate block has ended.
-                break
-
-        return candidates
+    def _parse_skip_candidates(output: str) -> list[str]:
+        return BisectResult.parse_skip_candidates(output)
 
     def _log_completion(self, culprit: str) -> None:
         """
@@ -403,71 +301,109 @@ class BaseBisector(ABC):
         self.logger.info(f"Culprit commit: {culprit}")
         self.logger.info("=" * 60)
 
+    def _save_result(self) -> None:
+        assert self.result is not None
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix=f"{self.logger.session_name}_",
+                suffix="_bisect_result.json.tmp",
+                dir=self.logger.log_dir,
+                delete=False,
+            ) as output:
+                temporary_path = Path(output.name).resolve()
+                result_path = temporary_path.with_suffix("")
+                payload = self.result.to_dict()
+                payload["result_file"] = str(result_path)
+                output.write(dumps(payload, indent=True))
+            temporary_path.replace(result_path)
+            self.result.result_file = str(result_path)
+        except OSError as error:
+            self.result.result_file = None
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    self.result.message += (
+                        f"\nCannot remove incomplete result {temporary_path}: "
+                        f"{cleanup_error}"
+                    )
+            if self.result.status == "found":
+                self.result.candidates = (
+                    [self.result.culprit] if self.result.culprit else []
+                )
+                self.result.culprit = None
+                self.result.status = "error"
+            self.result.message += f"\nCannot save bisect result: {error}"
+            raise BisectError(self.result.message, result=self.result) from error
+        self.logger.info(f"Bisect result saved to: {self.result.result_file}")
+
     def _run_bisect(
         self,
         good_commit: str,
         bad_commit: str,
         output_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
-        """
-        Execute the git bisect sequence.
+        """Run bisect and persist its outcome, returning only a unique culprit."""
+        self.result = None
+        sequence_started = False
+        cause = None
+        try:
+            self._log_header(good_commit, bad_commit)
+            self._prepare_before_bisect()
+            self._pre_bisect_check()
+            script_path = str(self._get_bisect_script())
+            self.logger.info(f"Using bisect script: {script_path}")
+            env = self._get_base_env_vars()
+            env.update(self._get_extra_env_vars())
 
-        This is the core template method that defines the bisect workflow.
+            sequence_started = True
+            command = self.executor.run_git_bisect_sequence(
+                repo_path=str(self.target_repo_dir),
+                good_commit=good_commit,
+                bad_commit=bad_commit,
+                run_script=script_path,
+                env=env,
+                output_callback=output_callback,
+            )
+            # Git can return nonzero for a skipped candidate set. Classify the
+            # complete output before deciding whether this attempt succeeded.
+            self.result = BisectResult.from_output(command.output, command.exit_code)
+        except KeyboardInterrupt as error:
+            cause = error
+            self.result = BisectResult(
+                status="aborted", exit_code=130, message="Git bisect interrupted."
+            )
+        except Exception as error:
+            cause = error
+            self.result = (
+                error.result
+                if isinstance(error, BisectError) and error.result is not None
+                else BisectResult(status="error", message=str(error))
+            )
 
-        Args:
-            good_commit: Known good commit hash.
-            bad_commit: Known bad commit hash.
-            output_callback: Optional callback for real-time output.
+        self.result.repository = str(self.target_repo_dir)
+        self.result.good_commit = good_commit
+        self.result.bad_commit = bad_commit
+        self.result.command_log = str(self.logger.command_log_path.resolve())
+        if sequence_started:
+            if self.executor.bisect_log_path is not None:
+                self.result.git_bisect_log = str(self.executor.bisect_log_path)
+            if self.executor.bisect_cleanup_errors:
+                if self.result.status == "found":
+                    self.result.candidates = (
+                        [self.result.culprit] if self.result.culprit else []
+                    )
+                    self.result.culprit = None
+                    self.result.status = "error"
+                self.result.message += "\n" + "\n".join(
+                    self.executor.bisect_cleanup_errors
+                )
 
-        Returns:
-            The culprit commit hash.
-
-        Raises:
-            BisectError: If bisect fails.
-        """
-        # Step 1: Log header
-        self._log_header(good_commit, bad_commit)
-
-        # Step 2: Prepare before bisect (hook for subclasses)
-        self._prepare_before_bisect()
-
-        # Step 3: Pre-bisect validation
-        self._pre_bisect_check()
-
-        # Step 4: Get the bisect script
-        script_path = str(self._get_bisect_script())
-        self.logger.info(f"Using bisect script: {script_path}")
-
-        # Step 5: Set up environment variables
-        env = self._get_base_env_vars()
-        env.update(self._get_extra_env_vars())
-
-        # Log bisect range for debugging
-        self.logger.info("")
-        self.logger.info("=" * 40)
-        self.logger.info("BISECT RANGE")
-        self.logger.info(f"  Good: {good_commit}")
-        self.logger.info(f"  Bad:  {bad_commit}")
-        self.logger.info("=" * 40)
-        self.logger.info("")
-
-        # Step 6: Execute git bisect sequence
-        result = self.executor.run_git_bisect_sequence(
-            repo_path=str(self.target_repo_dir),
-            good_commit=good_commit,
-            bad_commit=bad_commit,
-            run_script=script_path,
-            env=env,
-            output_callback=output_callback,
-        )
-
-        if not result.success:
-            raise BisectError(f"{self.bisect_name} failed: {result.stderr}")
-
-        # Step 7: Parse the culprit commit
-        culprit = self._parse_bisect_result(result.stdout)
-
-        # Step 8: Log completion
+        self._save_result()
+        if self.result.status != "found":
+            raise BisectError(self.result.message, result=self.result) from cause
+        culprit = self._require_culprit(self.result)
         self._log_completion(culprit)
-
         return culprit

@@ -108,4 +108,4 @@ class TritonBisector(BaseBisector):
         try:
             return self._run_bisect(good_commit, bad_commit, output_callback)
         except BisectError as e:
-            raise TritonBisectError(str(e)) from e
+            raise TritonBisectError(str(e), result=e.result) from e

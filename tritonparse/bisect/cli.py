@@ -460,6 +460,7 @@ def _orchestrate_workflow(
     """
     from pathlib import Path
 
+    from .base_bisector import BisectError
     from .commit_detector import CommitDetector, LLVMBumpInfo
     from .executor import ShellExecutor
     from .llvm_bisector import LLVMBisector
@@ -472,9 +473,19 @@ def _orchestrate_workflow(
     culprits: dict[str, str] = {}
     llvm_bump_info = None
     error_msg = None
+    stopped_phases = (
+        BisectPhase.FAILED,
+        BisectPhase.AMBIGUOUS,
+        BisectPhase.ABORTED,
+    )
 
     with ui:
         try:
+            if state.phase in stopped_phases:
+                raise RuntimeError(
+                    state.error_message
+                    or f"Saved workflow is {state.phase.value}; start a new attempt."
+                )
             # Configure logger for TUI mode
             if ui.is_tui_enabled:
                 logger.configure_for_tui(ui.create_output_callback())
@@ -511,6 +522,7 @@ def _orchestrate_workflow(
                     bad_commit=state.bad_commit,
                     output_callback=ui.create_output_callback(),
                 )
+                state.triton_bisect_result = bisector.result.to_dict()
 
                 state.phase = BisectPhase.TYPE_CHECK
                 state.save(session_name=logger.session_name)
@@ -627,6 +639,7 @@ def _orchestrate_workflow(
                     bad_llvm=state.bad_llvm,
                     output_callback=ui.create_output_callback(),
                 )
+                state.llvm_bisect_result = bisector.result.to_dict()
 
                 state.phase = BisectPhase.COMPLETED
                 state.save(session_name=logger.session_name)
@@ -659,13 +672,28 @@ def _orchestrate_workflow(
             error_msg = str(e)
             ui.append_output(f"\nWorkflow failed: {e}")
             if state:
-                state.phase = BisectPhase.FAILED
+                outcome = e.result if isinstance(e, BisectError) else None
+                if outcome is not None:
+                    if state.phase == BisectPhase.TRITON_BISECT:
+                        state.triton_bisect_result = outcome.to_dict()
+                        state.triton_culprit = None
+                    elif state.phase == BisectPhase.LLVM_BISECT:
+                        state.llvm_bisect_result = outcome.to_dict()
+                        state.llvm_culprit = None
+                if state.phase not in stopped_phases:
+                    state.phase = {
+                        "ambiguous": BisectPhase.AMBIGUOUS,
+                        "aborted": BisectPhase.ABORTED,
+                    }.get(outcome.status if outcome else "error", BisectPhase.FAILED)
                 state.error_message = error_msg
                 state.save(session_name=logger.session_name)
-            # Cleanup git bisect state on failure
-            _cleanup_bisect_state(state, logger)
+            # The executor snapshots and resets only the bisect it started.
 
     # TUI has exited, print final summary
+    if state.triton_culprit:
+        culprits["triton"] = state.triton_culprit
+    if state.llvm_culprit:
+        culprits["llvm"] = state.llvm_culprit
     print_final_summary(
         mode=SummaryMode.FULL_WORKFLOW,
         culprits=culprits if culprits else None,
@@ -680,38 +708,6 @@ def _orchestrate_workflow(
     )
 
     return 0 if state and state.phase == BisectPhase.COMPLETED else 1
-
-
-def _cleanup_bisect_state(state: "BisectState", logger: "BisectLogger") -> None:
-    """
-    Clean up git bisect state on failure.
-
-    Resets the git bisect state in both Triton and LLVM repositories
-    to avoid leaving the repos in an inconsistent state.
-
-    Args:
-        state: BisectState containing repository paths.
-        logger: BisectLogger for logging.
-    """
-    from pathlib import Path
-
-    from .executor import ShellExecutor
-
-    executor = ShellExecutor(logger)
-
-    # Reset Triton repo bisect state
-    executor.run_command(
-        ["git", "bisect", "reset"],
-        cwd=state.triton_dir,
-    )
-
-    # Reset LLVM repo bisect state (if it exists)
-    llvm_dir = Path(state.triton_dir) / "llvm-project"
-    if llvm_dir.exists():
-        executor.run_command(
-            ["git", "bisect", "reset"],
-            cwd=str(llvm_dir),
-        )
 
 
 def _handle_resume(args: argparse.Namespace) -> int:

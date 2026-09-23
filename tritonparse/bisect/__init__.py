@@ -23,6 +23,7 @@ from tritonparse.bisect.pair_tester import (
     PairTesterError,
     PairTestResult,
 )
+from tritonparse.bisect.result import BisectResult
 from tritonparse.bisect.state import BisectPhase, BisectState, StateManager
 from tritonparse.bisect.torch_bisector import TorchBisectError, TorchBisector
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
@@ -39,6 +40,7 @@ __all__ = [
     "BisectLogger",
     "BisectPhase",
     "BisectProgress",
+    "BisectResult",
     "BisectState",
     "BisectUI",
     "CommandResult",

@@ -28,6 +28,8 @@ class BisectPhase(Enum):
     4. LLVM_BISECT: Find culprit LLVM commit (if LLVM bump)
     5. COMPLETED: Workflow finished successfully
     6. FAILED: Workflow failed with error
+    7. AMBIGUOUS: Skipped commits prevent a unique result
+    8. ABORTED: Bisect stopped before reaching a result
     """
 
     TRITON_BISECT = "triton_bisect"
@@ -36,6 +38,8 @@ class BisectPhase(Enum):
     LLVM_BISECT = "llvm_bisect"
     COMPLETED = "completed"
     FAILED = "failed"
+    AMBIGUOUS = "ambiguous"
+    ABORTED = "aborted"
 
 
 @dataclass
@@ -91,6 +95,7 @@ class BisectState:
 
     # Phase 1 results (Triton bisect)
     triton_culprit: Optional[str] = None
+    triton_bisect_result: Optional[Dict[str, Any]] = None
 
     # Phase 2 results (Type check)
     is_llvm_bump: Optional[bool] = None
@@ -107,6 +112,7 @@ class BisectState:
 
     # Phase 4 results (LLVM bisect)
     llvm_culprit: Optional[str] = None
+    llvm_bisect_result: Optional[Dict[str, Any]] = None
 
     # Error handling
     error_message: Optional[str] = None
@@ -216,6 +222,10 @@ class BisectState:
         }
         if self.llvm_comparison is not None:
             report["llvm_comparison"] = self.llvm_comparison
+        if self.triton_bisect_result is not None:
+            report["triton_bisect_result"] = self.triton_bisect_result
+        if self.llvm_bisect_result is not None:
+            report["llvm_bisect_result"] = self.llvm_bisect_result
 
         if self.is_llvm_bump:
             report["llvm_culprit"] = self.llvm_culprit
@@ -416,6 +426,16 @@ class StateManager:
         # Results
         print("Results:")
         print(f"  Triton Culprit:  {state.triton_culprit or 'N/A'}")
+        for name, result in (
+            ("Triton", state.triton_bisect_result),
+            ("LLVM", state.llvm_bisect_result),
+        ):
+            if result is not None:
+                print(f"  {name} bisect outcome: {result['status']}")
+                for candidate in result.get("candidates", []):
+                    print(f"    Candidate: {candidate}")
+                if result.get("result_file"):
+                    print(f"    Result file: {result['result_file']}")
 
         if state.is_llvm_bump is not None:
             bump_str = "Yes" if state.is_llvm_bump else "No"

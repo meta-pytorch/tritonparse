@@ -151,4 +151,4 @@ class TorchBisector(BaseBisector):
         try:
             return self._run_bisect(good_commit, bad_commit, output_callback)
         except BisectError as e:
-            raise TorchBisectError(str(e)) from e
+            raise TorchBisectError(str(e), result=e.result) from e
