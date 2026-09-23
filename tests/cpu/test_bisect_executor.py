@@ -65,12 +65,12 @@ class ShellExecutorTest(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir)
         self.logger = BisectLogger(self.temp_dir)
+        for handler in self.logger.logger.handlers:
+            self.addCleanup(handler.close)
+            self.addCleanup(self.logger.logger.removeHandler, handler)
         self.executor = ShellExecutor(self.logger)
-
-    def tearDown(self):
-        """Clean up test fixtures."""
-        shutil.rmtree(self.temp_dir)
 
     def test_run_command_success(self):
         """Test run_command executes command and returns result."""

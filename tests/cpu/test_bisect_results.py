@@ -142,6 +142,7 @@ class GitBisectResultTest(unittest.TestCase):
         self.logger = BisectLogger(str(self.root / "logs"))
         for handler in self.logger.logger.handlers:
             self.addCleanup(handler.close)
+            self.addCleanup(self.logger.logger.removeHandler, handler)
         self.executor = ShellExecutor(self.logger)
         self._git("init", "-q")
         self._git("config", "user.name", "Tritonparse test")
