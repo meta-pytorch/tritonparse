@@ -10,8 +10,10 @@ function references passed as arguments to higher-order functions
 """
 
 import ast
+import itertools
 import os
 import tempfile
+import textwrap
 import unittest
 
 from tritonparse.reproducer.ast_analyzer import CallGraph
@@ -219,6 +221,185 @@ def kernel(data):
 
         # Assert: _scalar_op should still be detected despite tl. being filtered
         self.assertIn("_scalar_op", dep_short_names)
+
+
+class TestForwardHelperDependencies(unittest.TestCase):
+    def _analyze(self, source: str) -> CallGraph:
+        source = textwrap.dedent(source)
+        graph = CallGraph(
+            filename="example.py",
+            module_name="example",
+            backends=["kernel"],
+            callee_prefix_filters=["triton.", "tl."],
+        )
+        graph.source_code = source
+        graph.visit(ast.parse(source))
+        return graph
+
+    def test_transitive_helpers_are_independent_of_definition_order(self) -> None:
+        functions = [
+            "@triton.jit\ndef kernel(x):\n    return helper(x)\n",
+            "@triton.jit\ndef helper(x):\n    return leaf(x) + 1\n",
+            "@triton.jit\ndef leaf(x):\n    return x * 2\n",
+        ]
+        expected = {
+            "example.helper": ast.dump(ast.parse(functions[1])),
+            "example.leaf": ast.dump(ast.parse(functions[2])),
+        }
+        for ordered in itertools.permutations(functions):
+            with self.subTest(order=[ast.parse(f).body[0].name for f in ordered]):
+                graph = self._analyze("\n".join(ordered))
+                extracted = graph.get_dependent_functions_source_code()
+                self.assertEqual(
+                    {
+                        name: ast.dump(ast.parse(code))
+                        for name, code in extracted.items()
+                    },
+                    expected,
+                )
+
+    def test_later_helper_as_higher_order_argument(self) -> None:
+        for call in (
+            "tl.map_elementwise(helper, x)",
+            "tl.map_elementwise(x, fn=helper)",
+        ):
+            with self.subTest(call=call):
+                graph = self._analyze(
+                    f"def kernel(x):\n    return {call}\n\n"
+                    "def helper(x):\n    return leaf(x)\n\n"
+                    "def leaf(x):\n    return x\n"
+                )
+                self.assertEqual(
+                    set(graph.get_dependent_functions_source_code()),
+                    {"example.helper", "example.leaf"},
+                )
+
+    def test_nested_helpers_do_not_resolve_to_same_named_outer_function(self) -> None:
+        graph = self._analyze("""
+            def kernel(x):
+                def invoke():
+                    return helper(x)
+                def helper(y):
+                    return leaf(y)
+                return invoke()
+
+            def helper(x):
+                return unrelated(x)
+
+            def leaf(x):
+                return x
+
+            def unrelated(x):
+                return x
+        """)
+        self.assertEqual(
+            set(graph.get_dependent_functions_source_code()),
+            {"example.kernel.invoke", "example.kernel.helper", "example.leaf"},
+        )
+
+    def test_parameters_shadow_module_helpers(self) -> None:
+        for parameters in ("helper", "helper, /", "*, helper", "*helper", "**helper"):
+            with self.subTest(parameters=parameters):
+                graph = self._analyze(
+                    f"def kernel({parameters}):\n    return apply(helper)\n\n"
+                    "def helper(x):\n    return x\n"
+                )
+                self.assertEqual(graph.get_dependent_functions_source_code(), {})
+
+    def test_lambda_parameter_shadows_module_helper(self) -> None:
+        graph = self._analyze("""
+            def kernel(callback):
+                invoke = lambda helper: helper(1)
+                return invoke(callback)
+            def helper(x):
+                return x
+        """)
+        self.assertNotIn("example.helper", graph.get_dependent_functions())
+
+    def test_unknown_assignments_shadow_module_helpers(self) -> None:
+        for assignment in (
+            "helper = factory()",
+            "helper: object = factory()",
+            "helper, extra = factory()",
+            "helper = None",
+        ):
+            with self.subTest(assignment=assignment):
+                graph = self._analyze(
+                    f"def kernel(x):\n    {assignment}\n    return apply(helper, x)\n\n"
+                    "def helper(x):\n    return x\n"
+                )
+                self.assertEqual(graph.get_dependent_functions_source_code(), {})
+
+    def test_explicit_import_binding_takes_precedence(self) -> None:
+        graph = self._analyze("""
+            def kernel(x):
+                from external import helper
+                return helper(x)
+            def helper(x):
+                return x
+        """)
+        self.assertIn("external.helper", graph.get_dependent_functions())
+        self.assertEqual(graph.get_dependent_functions_source_code(), {})
+
+    def test_alias_to_later_helper_is_extracted(self) -> None:
+        graph = self._analyze("""
+            def kernel(x):
+                callback = helper
+                return callback(x)
+            def helper(x):
+                return x
+        """)
+        self.assertEqual(
+            set(graph.get_dependent_functions_source_code()), {"example.helper"}
+        )
+
+    def test_defaults_resolve_before_parameter_binding(self) -> None:
+        graph = self._analyze("""
+            def helper(x):
+                return x
+            def kernel(helper=helper(1)):
+                return helper
+        """)
+        self.assertEqual(
+            set(graph.get_dependent_functions_source_code()), {"example.helper"}
+        )
+
+    def test_recursive_helpers_terminate(self) -> None:
+        graph = self._analyze("""
+            def kernel(x):
+                return helper(x) if x else 0
+            def helper(x):
+                return kernel(x - 1)
+        """)
+        self.assertEqual(
+            set(graph.get_dependent_functions_source_code()), {"example.helper"}
+        )
+
+    def test_conditional_definitions_stay_in_the_enclosing_scope(self) -> None:
+        graph = self._analyze("""
+            def kernel(x):
+                return helper(x)
+            if enabled:
+                def helper(x):
+                    return x
+        """)
+        self.assertEqual(
+            set(graph.get_dependent_functions_source_code()), {"example.helper"}
+        )
+
+    def test_class_definitions_do_not_leak_into_module_declarations(self) -> None:
+        graph = self._analyze("""
+            def kernel(x):
+                return helper(x)
+            class Other:
+                def helper(self, x):
+                    return unrelated(x)
+            def helper(x):
+                return x
+        """)
+        self.assertEqual(
+            set(graph.get_dependent_functions_source_code()), {"example.helper"}
+        )
 
 
 if __name__ == "__main__":

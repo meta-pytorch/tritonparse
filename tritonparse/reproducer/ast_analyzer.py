@@ -55,6 +55,10 @@ class CallGraph(ast.NodeVisitor):
     - Function calls and their call sites
     - Import statements and name bindings
     - Lambda expressions
+
+    Module and function definitions are indexed before calls are resolved, so
+    later helpers can be extracted. Explicit imports, aliases and parameters
+    take precedence over forward declarations in their lexical scope.
     """
 
     def __init__(
@@ -79,6 +83,9 @@ class CallGraph(ast.NodeVisitor):
         self.module_name = module_name
 
         self.bindings_stack: List[Dict[str, str]] = [dict()]
+        # Forward declarations are fallbacks; explicit bindings (including
+        # parameters and aliases) must take precedence within the same scope.
+        self.declarations_stack: List[Dict[str, str]] = [{}]
         self.local_functions: Set[str] = set()
 
         # Track functions in the call chain for transitive closure
@@ -113,10 +120,12 @@ class CallGraph(ast.NodeVisitor):
     def _push_scope(self, name: str) -> None:
         self.scope_stack.append(name)
         self.bindings_stack.append({})
+        self.declarations_stack.append({})
 
     def _pop_scope(self) -> None:
         self.scope_stack.pop()
         self.bindings_stack.pop()
+        self.declarations_stack.pop()
 
     def _bind(self, name: str, target: str) -> None:
         self.bindings_stack[-1][name] = target
@@ -131,10 +140,45 @@ class CallGraph(ast.NodeVisitor):
         )
 
     def _resolve_name(self, id_: str) -> str:
-        for env in reversed(self.bindings_stack):
+        for env, declarations in zip(
+            reversed(self.bindings_stack), reversed(self.declarations_stack)
+        ):
             if id_ in env:
                 return env[id_]
+            if id_ in declarations:
+                return declarations[id_]
         return id_
+
+    def _declare_scope_functions(self, body: List[ast.stmt]) -> None:
+        """Index functions before resolving calls, without entering child scopes.
+
+        Definitions inside control-flow blocks belong to the current scope.
+        Nested functions are indexed when their enclosing function is visited.
+        This also makes later helpers visible to higher-order argument tracking.
+        """
+
+        def declare(node: ast.AST) -> None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                scope = self._cur_scope()
+                qual = f"{scope}.{node.name}" if scope else node.name
+                self.declarations_stack[-1][node.name] = qual
+                self.local_functions.add(qual)
+                self.func_nodes[qual] = node
+            elif not isinstance(node, (ast.ClassDef, ast.Lambda)):
+                for child in ast.iter_child_nodes(node):
+                    declare(child)
+
+        for statement in body:
+            declare(statement)
+
+    def _bind_arguments(self, args: ast.arguments) -> None:
+        parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        if args.vararg:
+            parameters.append(args.vararg)
+        if args.kwarg:
+            parameters.append(args.kwarg)
+        for parameter in parameters:
+            self._bind(parameter.arg, parameter.arg)
 
     def _resolve_func_descriptor(self, id_: str) -> Optional[FuncDescriptor]:
         for env in reversed(self.bindings_stack):
@@ -400,6 +444,10 @@ class CallGraph(ast.NodeVisitor):
         self.generic_visit(node)
 
     # ---------- defs ----------
+    def visit_Module(self, node: ast.Module) -> None:
+        self._declare_scope_functions(node.body)
+        self.generic_visit(node)
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return self._visit_function_like(node)
 
@@ -451,7 +499,19 @@ class CallGraph(ast.NodeVisitor):
         self._push_scope(node.name)
         if node.name in self.backends:
             self._record_call(node.name, node, maybe_triton=False, caller=node.name)
-        self.generic_visit(node)
+        # Defaults, decorators and annotations resolve in the enclosing scope.
+        # Attribute their dependencies to this function before binding locals.
+        self.visit(node.args)
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for parameter in getattr(node, "type_params", []):
+            self.visit(parameter)
+        self._declare_scope_functions(node.body)
+        self._bind_arguments(node.args)
+        for statement in node.body:
+            self.visit(statement)
         self._pop_scope()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -471,39 +531,44 @@ class CallGraph(ast.NodeVisitor):
         # Enter a readable, stable scope name
         scope_name = lid.split(".")[-1]  # "<lambda>@line:col"
         self._push_scope(scope_name)
+        self.visit(node.args)
+        self._bind_arguments(node.args)
         # The lambda body is a single expression; visit it so nested Calls are captured
         self.visit(node.body)
         self._pop_scope()
         # Do not call generic_visit (we already visited body)
 
-    def visit_Assign(self, node: ast.Assign) -> None:
-        def rhs_symbol(n: ast.AST) -> Optional[str]:
-            if isinstance(n, ast.Name):
-                return self._resolve_name(n.id)
-            if isinstance(n, ast.Attribute):
-                return self._resolve_attr(n)
-            if isinstance(n, ast.Lambda):
-                return self._lambda_id(n)
-            return None
+    def _assignment_symbol(self, node: ast.AST) -> Optional[str]:
+        if isinstance(node, ast.Name):
+            return self._resolve_name(node.id)
+        if isinstance(node, ast.Attribute):
+            return self._resolve_attr(node)
+        if isinstance(node, ast.Lambda):
+            return self._lambda_id(node)
+        return None
 
-        sym = rhs_symbol(node.value)
-        if sym:
-            for t in node.targets:
-                if isinstance(t, ast.Name):
-                    self._bind(t.id, sym)
+    def _bind_assignment_target(
+        self, target: ast.AST, symbol: Optional[str] = None
+    ) -> None:
+        if isinstance(target, ast.Name):
+            # Unknown values still shadow helpers from an enclosing scope.
+            self._bind(target.id, symbol or target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                self._bind_assignment_target(element)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        symbol = self._assignment_symbol(node.value)
+        # Evaluate calls in the RHS before rebinding their names.
         self.generic_visit(node)
+        for target in node.targets:
+            self._bind_assignment_target(target, symbol)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        # a: T = lambda ...
-        if node.value is not None:
-            if isinstance(node.target, ast.Name):
-                if isinstance(node.value, ast.Lambda):
-                    self._bind(node.target.id, self._lambda_id(node.value))
-                elif isinstance(node.value, ast.Name):
-                    self._bind(node.target.id, self._resolve_name(node.value.id))
-                elif isinstance(node.value, ast.Attribute):
-                    self._bind(node.target.id, self._resolve_attr(node.value))
+        symbol = self._assignment_symbol(node.value) if node.value is not None else None
         self.generic_visit(node)
+        if node.value is not None:
+            self._bind_assignment_target(node.target, symbol)
 
     # ---------- call sites ----------
     def visit_Call(self, node: ast.Call) -> None:

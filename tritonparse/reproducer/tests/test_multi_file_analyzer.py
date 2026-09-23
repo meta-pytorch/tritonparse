@@ -8,10 +8,15 @@ This test suite validates the multi-file call graph analysis functionality,
 including cross-file dependency tracking, import resolution, and result consolidation.
 """
 
+import ast
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tritonparse.reproducer.multi_file_analyzer import MultiFileCallGraphAnalyzer
+from tritonparse.reproducer.placeholder_replacer import get_dependent_source_map
 
 
 class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
@@ -19,9 +24,10 @@ class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up test fixtures."""
-        # Get code root (4 levels up from this test file)
-        test_file = Path(__file__).resolve()
-        self.code_root = str(test_file.parents[4])
+        # Get the directory containing the tritonparse package.
+        # Keep the same import tree as importlib, including Buck's link tree.
+        test_file = Path(__file__).absolute()
+        self.code_root = str(test_file.parents[3])
 
         # Test artifacts directory
         self.artifacts_dir = test_file.parent / "artifacts"
@@ -35,6 +41,7 @@ class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
         analyzer = MultiFileCallGraphAnalyzer(
             entry_file=self.utils_file,
             entry_function="add_values",
+            code_roots=self.code_root,
         )
 
         # Execute: Run analysis
@@ -60,6 +67,7 @@ class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
         analyzer = MultiFileCallGraphAnalyzer(
             entry_file=self.entry_file,
             entry_function="main_kernel",
+            code_roots=self.code_root,
         )
 
         # Execute: Run analysis
@@ -111,6 +119,65 @@ class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
         # Verify short names are correctly extracted
         self.assertEqual(result.function_short_names[scale_kernel_name], "scale_kernel")
         self.assertEqual(result.function_short_names[add_values_name], "add_values")
+
+
+class TestForwardHelperCopy(unittest.TestCase):
+    def test_copy_and_regenerate_preserves_helpers_and_their_ast(self) -> None:
+        kernel = "def kernel(x):\n    return helper(x) + 1\n"
+        helpers = (
+            "def helper(x):\n    return leaf(x) * 2\n\ndef leaf(x):\n    return x + 3\n"
+        )
+        expected = {node.name: ast.dump(node) for node in ast.parse(helpers).body}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(sys, "path", sys.path.copy()),
+        ):
+            root = Path(directory)
+            (root / "pyproject.toml").write_text("")
+            source = root / "original.py"
+            source.write_text(kernel + "\n" + helpers)
+            # The copy path emits the entry before its helpers. Treat that
+            # output as the next capture's source, then generate a second copy.
+            for generation in range(2):
+                with self.subTest(generation=generation):
+                    result = get_dependent_source_map("kernel", str(source))
+                    self.assertIsNotNone(result)
+                    extracted = {
+                        ast.parse(code).body[0].name: ast.dump(ast.parse(code).body[0])
+                        for code in result.functions.values()
+                    }
+                    self.assertEqual(extracted, expected)
+                    generated = kernel + "\n" + "\n\n".join(result.functions.values())
+                    namespace = {}
+                    exec(compile(generated, str(source), "exec"), namespace)
+                    self.assertEqual(namespace["kernel"](4), 15)
+                    source = root / f"copy_{generation}.py"
+                    source.write_text(generated)
+
+    def test_imported_helper_can_call_another_later_helper(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(sys, "path", sys.path.copy()),
+        ):
+            root = Path(directory)
+            (root / "forward_helpers_fixture.py").write_text(
+                "def helper(x):\n    return leaf(x)\n\ndef leaf(x):\n    return x * 2\n"
+            )
+            source = root / "entry.py"
+            source.write_text(
+                "from forward_helpers_fixture import helper\n\n"
+                "def kernel(x):\n    return helper(x)\n"
+            )
+            result = MultiFileCallGraphAnalyzer(
+                entry_file=str(source),
+                entry_function="kernel",
+                code_roots=str(root),
+            ).analyze()
+            self.assertEqual(
+                set(result.functions),
+                {"forward_helpers_fixture.helper", "forward_helpers_fixture.leaf"},
+            )
+            self.assertEqual(result.stats.total_files_analyzed, 2)
 
 
 if __name__ == "__main__":
