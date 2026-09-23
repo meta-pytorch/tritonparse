@@ -8,9 +8,16 @@ into the main tritonparse bisect CLI for automatic environment setup.
 
 import argparse
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from tritonparse.bisect.cli import _add_bisect_args, bisect_command
+from tritonparse.bisect.cli import (
+    _add_bisect_args,
+    _handle_triton_bisect,
+    _orchestrate_workflow,
+    bisect_command,
+)
+from tritonparse.bisect.commit_detector import CommitDetectorError, LLVMBumpInfo
+from tritonparse.bisect.state import BisectPhase, BisectState
 
 
 class CLIArgumentParsingTest(unittest.TestCase):
@@ -241,6 +248,71 @@ class CLIDispatchTest(unittest.TestCase):
 
         self.assertEqual(result, 7)
         mock_torch.assert_called_once_with(args)
+
+
+class LLVMDescriptorWorkflowTest(unittest.TestCase):
+    def setUp(self):
+        self.ui = MagicMock()
+        self.ui.is_tui_enabled = False
+        self.ui._rich_enabled = False
+        self.ui.progress.elapsed_seconds = 0
+        self.logger = MagicMock()
+
+    def test_descriptor_failure_is_not_success_after_finding_triton_commit(self):
+        parser = argparse.ArgumentParser()
+        _add_bisect_args(parser)
+        args = parser.parse_args(
+            [
+                "--triton-dir",
+                "/unused",
+                "--test-script",
+                "/unused/test.py",
+                "--good",
+                "a" * 40,
+                "--bad",
+                "b" * 40,
+            ]
+        )
+        with (
+            patch("tritonparse.bisect.cli._create_logger", return_value=self.logger),
+            patch("tritonparse.bisect.ui.BisectUI", return_value=self.ui),
+            patch("tritonparse.bisect.ui.print_final_summary") as summary,
+            patch("tritonparse.bisect.triton_bisector.TritonBisector") as bisector,
+            patch("tritonparse.bisect.commit_detector.CommitDetector") as detector,
+        ):
+            bisector.return_value.run.return_value = "b" * 40
+            detector.return_value.detect.side_effect = CommitDetectorError(
+                "invalid JSON"
+            )
+            self.assertEqual(_handle_triton_bisect(args), 1)
+        self.assertIn("invalid JSON", summary.call_args.kwargs["error_msg"])
+
+    def test_artifact_only_update_does_not_enter_llvm_pair_testing(self):
+        state = BisectState(
+            triton_dir="/unused",
+            test_script="/unused/test.py",
+            good_commit="a" * 40,
+            bad_commit="b" * 40,
+            phase=BisectPhase.TYPE_CHECK,
+            triton_culprit="b" * 40,
+        )
+        info = LLVMBumpInfo(
+            is_llvm_bump=False,
+            old_hash="c" * 40,
+            new_hash="c" * 40,
+            artifact_changed=True,
+        )
+        with (
+            patch.object(state, "save"),
+            patch("tritonparse.bisect.ui.print_final_summary"),
+            patch("tritonparse.bisect.commit_detector.CommitDetector") as detector,
+            patch("tritonparse.bisect.pair_tester.PairTester") as tester,
+        ):
+            detector.return_value.detect.return_value = info
+            self.assertEqual(_orchestrate_workflow(state, self.ui, self.logger), 0)
+        self.assertEqual(state.phase, BisectPhase.COMPLETED)
+        self.assertEqual(state.llvm_comparison, info.to_dict())
+        tester.assert_not_called()
 
 
 if __name__ == "__main__":

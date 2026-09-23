@@ -96,6 +96,8 @@ class BisectState:
     is_llvm_bump: Optional[bool] = None
     old_llvm_hash: Optional[str] = None
     new_llvm_hash: Optional[str] = None
+    # Includes source/artifact metadata even when the source hash is unchanged.
+    llvm_comparison: Optional[Dict[str, Any]] = None
 
     # Phase 3 results (Pair test)
     failing_pair_index: Optional[int] = None
@@ -212,6 +214,8 @@ class BisectState:
             "triton_culprit": self.triton_culprit,
             "is_llvm_bump": self.is_llvm_bump,
         }
+        if self.llvm_comparison is not None:
+            report["llvm_comparison"] = self.llvm_comparison
 
         if self.is_llvm_bump:
             report["llvm_culprit"] = self.llvm_culprit

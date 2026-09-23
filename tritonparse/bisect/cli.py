@@ -533,10 +533,14 @@ def _orchestrate_workflow(
                 state.is_llvm_bump = bump_info.is_llvm_bump
                 state.old_llvm_hash = bump_info.old_hash
                 state.new_llvm_hash = bump_info.new_hash
+                state.llvm_comparison = bump_info.to_dict()
+                ui.append_output(bump_info.describe())
 
                 if not bump_info.is_llvm_bump:
                     ui.append_output("")
-                    ui.append_output("Commit is NOT an LLVM bump. Workflow complete.")
+                    ui.append_output(
+                        "No LLVM source bump; skipping LLVM source bisect."
+                    )
                     state.phase = BisectPhase.COMPLETED
                 else:
                     ui.append_output("")
@@ -854,6 +858,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
                 logger=logger,
             )
             llvm_bump_info = detector.detect(culprit)
+            ui.append_output(llvm_bump_info.describe())
 
             # Show result in TUI
             ui.append_output("")
@@ -895,7 +900,7 @@ def _handle_triton_bisect(args: argparse.Namespace) -> int:
         use_rich=ui._rich_enabled,
     )
 
-    return 0 if culprit else 1
+    return 0 if culprit and error_msg is None else 1
 
 
 def _handle_torch_bisect(args: argparse.Namespace) -> int:

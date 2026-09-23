@@ -168,6 +168,27 @@ class BisectStateTest(unittest.TestCase):
         self.assertIn("error", report)
         self.assertEqual(report["error"], "Something went wrong")
 
+    def test_artifact_only_comparison_survives_state_and_report(self):
+        comparison = {
+            "is_llvm_bump": False,
+            "old_hash": "a" * 40,
+            "new_hash": "a" * 40,
+            "artifact_changed": True,
+            "new_descriptor": {"build_number": 2},
+        }
+        state = BisectState(
+            triton_dir="/path",
+            test_script="/test.py",
+            good_commit="v1",
+            bad_commit="v2",
+            is_llvm_bump=False,
+            llvm_comparison=comparison,
+        )
+        restored = BisectState.from_dict(state.to_dict())
+        self.assertEqual(restored.llvm_comparison, comparison)
+        self.assertEqual(restored.to_report()["llvm_comparison"], comparison)
+        self.assertNotIn("llvm_range", restored.to_report())
+
 
 class StateManagerTest(unittest.TestCase):
     """Tests for StateManager class."""

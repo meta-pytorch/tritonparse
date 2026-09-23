@@ -1,284 +1,217 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
-"""
-Commit type detector for Triton bisect workflow.
+"""Compare the LLVM source and artifact descriptors used by Triton revisions."""
 
-This module provides the CommitDetector class which implements Phase 2 of the
-Triton/LLVM bisect workflow. It detects whether a given Triton commit is an
-LLVM bump by checking if the cmake/llvm-hash.txt file was modified.
-"""
-
+import json
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional
 
 from tritonparse.bisect.executor import ShellExecutor
 from tritonparse.bisect.logger import BisectLogger
 
 
 class CommitDetectorError(Exception):
-    """Exception raised for commit detection errors."""
+    """The LLVM descriptors could not be read or compared reliably."""
 
-    pass
+
+@dataclass
+class LLVMDescriptor:
+    """LLVM source and optional prebuilt-artifact metadata at one Git revision."""
+
+    revision: str
+    llvm_hash: str
+    source_file: str
+    build_number: Optional[int] = None
+    sha256sum: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class LLVMBumpInfo:
-    """
-    Information about an LLVM bump commit.
+    """A source bump is distinct from an artifact-only update.
 
-    Attributes:
-        is_llvm_bump: Whether the commit modifies LLVM hash.
-        old_hash: Previous LLVM commit hash (if bump detected).
-        new_hash: New LLVM commit hash (if bump detected).
-        triton_commit: The Triton commit that was analyzed.
+    ``artifact_changed=None`` means artifact equality is unknown, for example
+    when a legacy descriptor has no checksums or the platform is unspecified.
+    Only ``is_llvm_bump`` permits proceeding to LLVM source pair testing.
     """
 
     is_llvm_bump: bool
     old_hash: Optional[str] = None
     new_hash: Optional[str] = None
     triton_commit: Optional[str] = None
+    old_descriptor: Optional[LLVMDescriptor] = None
+    new_descriptor: Optional[LLVMDescriptor] = None
+    artifact_changed: Optional[bool] = None
+    artifact_platform: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def describe(self) -> str:
+        if self.is_llvm_bump:
+            return f"LLVM source changed: {self.old_hash} -> {self.new_hash}"
+        if self.artifact_changed:
+            return "LLVM source is unchanged; prebuilt artifact metadata changed."
+        if self.artifact_changed is None:
+            return (
+                "LLVM source is unchanged; artifact equality could not be determined."
+            )
+        return "LLVM source and known artifact checksums are unchanged."
 
 
 class CommitDetector:
-    """
-    Detects the type of a Triton commit.
+    """Read both descriptor formats and compare against the first parent.
 
-    This class implements Phase 2 of the bisect workflow - determining whether
-    a Triton commit is an LLVM bump by checking if cmake/llvm-hash.txt was
-    modified in the commit.
-
-    Example:
-        >>> logger = BisectLogger("./logs")
-        >>> executor = ShellExecutor(logger)
-        >>> detector = CommitDetector(
-        ...     triton_dir=Path("/path/to/triton"),
-        ...     executor=executor,
-        ...     logger=logger,
-        ... )
-        >>> info = detector.detect(commit="abc123")
-        >>> if info.is_llvm_bump:
-        ...     print(f"LLVM bump: {info.old_hash} -> {info.new_hash}")
+    A caller may select another parent explicitly with ``detect(parent=...)``.
+    ``artifact_platform`` selects a key in ``sha256sum`` and defaults to the
+    explicit ``TRITON_LLVM_SYSTEM_SUFFIX`` override, when set. Without a selected
+    platform, differing checksum maps do not prove the local artifact changed.
     """
 
     LLVM_HASH_FILE = "cmake/llvm-hash.txt"
+    LLVM_INFO_FILE = "cmake/llvm-info.json"
 
     def __init__(
         self,
         triton_dir: Path,
         executor: ShellExecutor,
         logger: BisectLogger,
+        artifact_platform: Optional[str] = None,
     ) -> None:
-        """
-        Initialize the commit detector.
-
-        Args:
-            triton_dir: Path to the Triton repository.
-            executor: ShellExecutor instance for running git commands.
-            logger: BisectLogger instance for logging.
-        """
         self.triton_dir = triton_dir
         self.executor = executor
         self.logger = logger
-
-    def detect(self, commit: str) -> LLVMBumpInfo:
-        """
-        Detect whether a Triton commit is an LLVM bump.
-
-        A commit is considered an LLVM bump if it modifies the
-        cmake/llvm-hash.txt file.
-
-        Args:
-            commit: The Triton commit hash to analyze.
-
-        Returns:
-            LLVMBumpInfo with detection results and hash changes if applicable.
-
-        Raises:
-            CommitDetectorError: If detection fails due to git errors.
-        """
-        self.logger.info(f"Detecting commit type for: {commit}")
-
-        # Check if this commit modifies the LLVM hash file
-        if not self._is_llvm_bump_commit(commit):
-            self.logger.info(f"Commit {commit[:7]} is NOT an LLVM bump")
-            return LLVMBumpInfo(
-                is_llvm_bump=False,
-                triton_commit=commit,
-            )
-
-        # Get the old and new LLVM hashes
-        old_hash, new_hash = self._get_llvm_hash_change(commit)
-
-        self.logger.info(f"Commit {commit[:7]} IS an LLVM bump")
-        self.logger.info(f"  LLVM hash change: {old_hash[:7]} -> {new_hash[:7]}")
-
-        return LLVMBumpInfo(
-            is_llvm_bump=True,
-            old_hash=old_hash,
-            new_hash=new_hash,
-            triton_commit=commit,
+        self.artifact_platform = artifact_platform or os.environ.get(
+            "TRITON_LLVM_SYSTEM_SUFFIX"
         )
 
-    def _is_llvm_bump_commit(self, commit: str) -> bool:
-        """
-        Check if a commit modifies the LLVM hash file.
-
-        Args:
-            commit: The commit hash to check.
-
-        Returns:
-            True if the commit modifies cmake/llvm-hash.txt, False otherwise.
-        """
-        result = self.executor.run_command(
-            ["git", "diff", "--name-only", f"{commit}~1", commit],
-            cwd=str(self.triton_dir),
-        )
-
+    def _git(self, *args: str) -> str:
+        result = self.executor.run_command(["git", *args], cwd=str(self.triton_dir))
         if not result.success:
-            self.logger.warning(
-                f"Failed to get changed files for {commit}: {result.stderr}"
+            raise CommitDetectorError(
+                f"Cannot read LLVM descriptor (git {' '.join(args)}): {result.stderr}"
             )
-            # Try alternative approach: check if file exists at both commits
-            return self._is_llvm_bump_commit_fallback(commit)
+        return result.stdout
 
-        changed_files = result.stdout.strip().split("\n")
-        return self.LLVM_HASH_FILE in changed_files
+    def read_llvm_descriptor(self, commit: str) -> LLVMDescriptor:
+        """Read modern JSON first, falling back only when that file is absent.
 
-    def _is_llvm_bump_commit_fallback(self, commit: str) -> bool:
+        Invalid revisions, unreadable objects and malformed JSON are errors,
+        never evidence that LLVM is unchanged. Reading the tree distinguishes
+        an absent JSON file from a failed ``git show``.
         """
-        Fallback method to check for LLVM bump when diff fails.
-
-        This can happen for merge commits or the first commit.
-
-        Args:
-            commit: The commit hash to check.
-
-        Returns:
-            True if LLVM hash changed, False otherwise.
-        """
-        try:
-            # Get hash at commit
-            result_at = self.executor.run_command(
-                ["git", "show", f"{commit}:{self.LLVM_HASH_FILE}"],
-                cwd=str(self.triton_dir),
+        revision = self._git(
+            "rev-parse", "--verify", "--end-of-options", f"{commit}^{{commit}}"
+        ).strip()
+        files = self._git(
+            "ls-tree",
+            "--name-only",
+            revision,
+            "--",
+            self.LLVM_INFO_FILE,
+            self.LLVM_HASH_FILE,
+        ).splitlines()
+        if self.LLVM_INFO_FILE in files:
+            content = self._git("show", f"{revision}:{self.LLVM_INFO_FILE}")
+            try:
+                info = json.loads(content)
+            except ValueError as error:
+                raise CommitDetectorError(
+                    f"Invalid {self.LLVM_INFO_FILE} at {revision}: {error}"
+                ) from error
+            if not isinstance(info, dict):
+                raise CommitDetectorError(
+                    f"LLVM descriptor at {revision} must be an object"
+                )
+            llvm_hash = info.get("llvm_hash")
+            if not isinstance(llvm_hash, str) or not re.fullmatch(
+                r"[0-9a-fA-F]{40}", llvm_hash
+            ):
+                raise CommitDetectorError(f"Invalid LLVM source hash at {revision}")
+            build_number = info.get("build_number")
+            if build_number is not None and (
+                type(build_number) is not int or build_number < 0
+            ):
+                raise CommitDetectorError(f"Invalid LLVM build_number at {revision}")
+            checksums = info.get("sha256sum", {})
+            if not isinstance(checksums, dict) or any(
+                not isinstance(platform, str)
+                or not platform
+                or not isinstance(checksum, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", checksum)
+                for platform, checksum in checksums.items()
+            ):
+                raise CommitDetectorError(f"Invalid LLVM sha256sum at {revision}")
+            return LLVMDescriptor(
+                revision=revision,
+                llvm_hash=llvm_hash.lower(),
+                source_file=self.LLVM_INFO_FILE,
+                build_number=build_number,
+                sha256sum={key: value.lower() for key, value in checksums.items()},
             )
-            if not result_at.success:
-                return False
-
-            # Get hash at parent
-            result_parent = self.executor.run_command(
-                ["git", "show", f"{commit}~1:{self.LLVM_HASH_FILE}"],
-                cwd=str(self.triton_dir),
+        if self.LLVM_HASH_FILE in files:
+            return LLVMDescriptor(
+                revision=revision,
+                llvm_hash=self._extract_hash_from_content(
+                    self._git("show", f"{revision}:{self.LLVM_HASH_FILE}")
+                ),
+                source_file=self.LLVM_HASH_FILE,
             )
-            if not result_parent.success:
-                return False
+        raise CommitDetectorError(
+            f"No {self.LLVM_INFO_FILE} or {self.LLVM_HASH_FILE} at {revision}"
+        )
 
-            # Compare hashes
-            hash_at = self._extract_hash_from_content(result_at.stdout)
-            hash_parent = self._extract_hash_from_content(result_parent.stdout)
+    def detect(self, commit: str, *, parent: Optional[str] = None) -> LLVMBumpInfo:
+        """Compare descriptors; only a source-hash change is an LLVM bump."""
+        new = self.read_llvm_descriptor(commit)
+        old = self.read_llvm_descriptor(parent or f"{new.revision}^")
+        if len(old.llvm_hash) != 40 or len(new.llvm_hash) != 40:
+            raise CommitDetectorError(
+                "Comparing LLVM revisions requires full 40-character source hashes; "
+                "abbreviated hashes cannot establish source equality."
+            )
+        info = LLVMBumpInfo(
+            is_llvm_bump=old.llvm_hash != new.llvm_hash,
+            old_hash=old.llvm_hash,
+            new_hash=new.llvm_hash,
+            triton_commit=new.revision,
+            old_descriptor=old,
+            new_descriptor=new,
+            artifact_changed=self._artifact_changed(old, new),
+            artifact_platform=self.artifact_platform,
+        )
+        self.logger.info(info.describe())
+        return info
 
-            return hash_at != hash_parent
-
-        except Exception as e:
-            self.logger.debug(f"Fallback detection failed: {e}")
+    def _artifact_changed(
+        self, old: LLVMDescriptor, new: LLVMDescriptor
+    ) -> Optional[bool]:
+        if (
+            old.build_number is not None
+            and new.build_number is not None
+            and old.build_number != new.build_number
+        ):
+            return True
+        if self.artifact_platform:
+            old_sum = old.sha256sum.get(self.artifact_platform)
+            new_sum = new.sha256sum.get(self.artifact_platform)
+            if old_sum is not None and new_sum is not None:
+                return old_sum != new_sum
+            return None
+        if old.sha256sum and old.sha256sum == new.sha256sum:
             return False
-
-    def _get_llvm_hash_change(self, commit: str) -> Tuple[str, str]:
-        """
-        Get the old and new LLVM hashes from a bump commit.
-
-        Args:
-            commit: The LLVM bump commit hash.
-
-        Returns:
-            Tuple of (old_hash, new_hash).
-
-        Raises:
-            CommitDetectorError: If unable to extract hashes.
-        """
-        # Get hash at parent commit
-        result_parent = self.executor.run_command(
-            ["git", "show", f"{commit}~1:{self.LLVM_HASH_FILE}"],
-            cwd=str(self.triton_dir),
-        )
-
-        if not result_parent.success:
-            raise CommitDetectorError(
-                f"Failed to get LLVM hash at {commit}~1: {result_parent.stderr}"
-            )
-
-        old_hash = self._extract_hash_from_content(result_parent.stdout)
-
-        # Get hash at commit
-        result_at = self.executor.run_command(
-            ["git", "show", f"{commit}:{self.LLVM_HASH_FILE}"],
-            cwd=str(self.triton_dir),
-        )
-
-        if not result_at.success:
-            raise CommitDetectorError(
-                f"Failed to get LLVM hash at {commit}: {result_at.stderr}"
-            )
-
-        new_hash = self._extract_hash_from_content(result_at.stdout)
-
-        return old_hash, new_hash
+        return None
 
     def _extract_hash_from_content(self, content: str) -> str:
-        """
-        Extract the LLVM commit hash from file content.
-
-        The llvm-hash.txt file typically contains just a commit hash,
-        possibly with whitespace or comments.
-
-        Args:
-            content: Content of the llvm-hash.txt file.
-
-        Returns:
-            The extracted LLVM commit hash.
-
-        Raises:
-            CommitDetectorError: If no valid hash found.
-        """
-        # Remove whitespace and comments
-        lines = content.strip().split("\n")
-        for line in lines:
+        """Read legacy hashes, preserving support for abbreviated lookup results."""
+        for line in content.splitlines():
             line = line.strip()
-            # Skip empty lines and comments
-            if not line or line.startswith("#"):
-                continue
-            # Validate it looks like a git hash (hex string, 7-40 chars)
-            if re.match(r"^[0-9a-fA-F]{7,40}$", line):
-                return line
-
+            if re.fullmatch(r"[0-9a-fA-F]{7,40}", line):
+                return line.lower()
         raise CommitDetectorError(f"No valid hash found in content: {content[:100]}")
 
     def get_llvm_hash_at_commit(self, commit: str) -> str:
-        """
-        Get the LLVM hash at a specific Triton commit.
-
-        This is useful for finding the LLVM version used by any Triton commit,
-        not just bump commits.
-
-        Args:
-            commit: The Triton commit hash.
-
-        Returns:
-            The LLVM commit hash used at that Triton commit.
-
-        Raises:
-            CommitDetectorError: If unable to get the hash.
-        """
-        result = self.executor.run_command(
-            ["git", "show", f"{commit}:{self.LLVM_HASH_FILE}"],
-            cwd=str(self.triton_dir),
-        )
-
-        if not result.success:
-            raise CommitDetectorError(
-                f"Failed to get LLVM hash at {commit}: {result.stderr}"
-            )
-
-        return self._extract_hash_from_content(result.stdout)
+        """Return the LLVM source hash from either supported descriptor format."""
+        return self.read_llvm_descriptor(commit).llvm_hash
