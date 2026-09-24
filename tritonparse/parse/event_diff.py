@@ -1,7 +1,10 @@
 #  Copyright (c) Meta Platforms, Inc. and affiliates.
 
+import ast
+import hashlib
+import re
 from collections import defaultdict, OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tritonparse._json_compat import dumps, loads
 
@@ -108,9 +111,715 @@ def _dedup_compilations_by_hash(
     return deduped
 
 
+def _is_tensor_arg_value(arg_val: Any) -> bool:
+    """True when an extracted arg value describes a plain tensor argument."""
+    return isinstance(arg_val, dict) and arg_val.get("type") == "tensor"
+
+
+def _is_tensor_like_value(arg_val: Any) -> bool:
+    """True for tensor args including descriptors and foreign wrappers.
+
+    Covers plain tensors plus TMA TensorDescriptors and triton_kernels
+    Tensor/Storage wrappers, which nest backing-tensor metadata.
+    """
+    if not isinstance(arg_val, dict):
+        return False
+    arg_type = arg_val.get("type", "")
+    return (
+        arg_type == "tensor"
+        or arg_type == "TensorDescriptor"
+        or (isinstance(arg_type, str) and arg_type.startswith("triton_kernels.tensor."))
+    )
+
+
+def _extract_scalar_value(arg_val: Any) -> Any:
+    """Unwrap {"type": ..., "value": ...} scalar wrappers, if present.
+
+    Falls back to the "repr" payload for values recorded without a
+    structured value (None, tuples, other objects), so config values
+    such as "None" still compare against best_config spellings.
+    """
+    if isinstance(arg_val, dict) and "type" in arg_val and "value" in arg_val:
+        return arg_val["value"]
+    if isinstance(arg_val, dict) and "repr" in arg_val:
+        return arg_val["repr"]
+    return arg_val
+
+
+def _is_note_only_launch(extracted: Dict[str, Any]) -> bool:
+    """True when a launch carries no extractable arguments.
+
+    During CUDA graph capture, argument extraction is skipped and the
+    launch records {"_note": ...} instead of real args. Such launches
+    carry no key information (a plain string marker, never a wrapped
+    {"type", "value"} kernel parameter), so key partitioning ignores
+    them; the same round's warmup launches outside capture still carry
+    the full arguments.
+    """
+    return isinstance(extracted.get("_note"), str)
+
+
+def _drop_data_ptrs(value: Any) -> Any:
+    """Recursively drop data_ptr fields from extracted argument values.
+
+    Tensor descriptors and foreign tensor wrappers nest backing-tensor
+    metadata (including volatile data_ptrs) inside the argument dict.
+    Dropping data_ptrs keeps signatures stable across reallocations
+    while retaining identity metadata (shapes, dtypes, block shapes).
+    """
+    if isinstance(value, dict):
+        return {k: _drop_data_ptrs(v) for k, v in value.items() if k != "data_ptr"}
+    if isinstance(value, list):
+        return [_drop_data_ptrs(v) for v in value]
+    return value
+
+
+def _fingerprint_value(value: Any) -> str:
+    """Stable fingerprint of one config-detection leaf value."""
+    try:
+        return dumps(_drop_data_ptrs(value), sort_keys=True)
+    except TypeError:
+        return dumps(str(value))
+
+
+def _config_leaf_fingerprints(arg_val: Any) -> List[Tuple[Tuple[str, ...], str]]:
+    """Locate config correlation at (path, fingerprint) granularity.
+
+    Nested dicts (descriptors, foreign wrappers) are fingerprinted per
+    leaf path so a config-shaped nested field (e.g. block_shape) does
+    not drag key-shaped siblings (e.g. shape) out of the signature.
+    Lists are leaves: per-index splits are contrived, and whole-list
+    comparison already matches the legacy behavior when a list mixes
+    key/config content. data_ptr entries are skipped everywhere since
+    they are volatile across reallocations.
+    """
+    if not isinstance(arg_val, dict):
+        return [((), _fingerprint_value(arg_val))]
+    flattened: List[Tuple[Tuple[str, ...], str]] = []
+    stack: List[Tuple[Dict[str, Any], Tuple[str, ...]]] = [(arg_val, ())]
+    while stack:
+        current, path = stack.pop()
+        for key in sorted(current, key=str):
+            if key == "data_ptr":
+                continue
+            child = current[key]
+            child_path = path + (key,)
+            if isinstance(child, dict):
+                stack.append((child, child_path))
+            else:
+                flattened.append((child_path, _fingerprint_value(child)))
+    return flattened
+
+
+def _mask_config_paths(
+    value: Dict[str, Any], config_paths: Set[Tuple[str, ...]]
+) -> Dict[str, Any]:
+    """Copy a nested arg value with config-correlated leaves removed.
+
+    data_ptr fields are dropped first (see _drop_data_ptrs); paths that
+    are absent in this launch's shape are skipped.
+    """
+    masked = _drop_data_ptrs(value)
+    for path in config_paths:
+        current = masked
+        for step in path[:-1]:
+            if not isinstance(current, dict) or step not in current:
+                current = None
+                break
+            current = current[step]
+        if path and isinstance(current, dict):
+            current.pop(path[-1], None)
+    return masked
+
+
+# Marks a nested path missing from a launch's arg shape during config
+# detection. Presence/absence correlated with compilation is itself a
+# config signal (e.g. "value" vs "repr" in None/int scalar wrappers).
+_ABSENT: Any = object()
+
+
+def _find_config_args(
+    group_infos: List[Tuple[str, Optional[str], Dict[str, Any]]],
+) -> Dict[str, Optional[Set[Tuple[str, ...]]]]:
+    """Find launch args (or nested fields) determined by compilation hash.
+
+    A (arg, path) pair is config-correlated when every compilation hash
+    in the session shows exactly one fingerprint for it, while distinct
+    hashes disagree (e.g. BLOCK_SIZE_M). Tensor args never participate.
+    Launches without a compilation hash cannot be attributed, so they
+    are skipped here.
+
+    Returns a mapping of arg name to the config-correlated paths within
+    it, or None when the whole arg is config-correlated (scalars and
+    fully config-shaped descriptors).
+    """
+    values_by_path: Dict[Tuple[str, Tuple[str, ...]], Dict[str, Set[Any]]] = (
+        defaultdict(lambda: defaultdict(set))
+    )
+    paths_by_arg: Dict[str, Set[Tuple[str, ...]]] = defaultdict(set)
+    hash_universe: Set[str] = set()
+    for _group_hash, comp_hash, extracted in group_infos:
+        if not comp_hash:
+            continue
+        hash_universe.add(comp_hash)
+        for arg_name, arg_val in extracted.items():
+            # Plain tensors never participate: tensor identity is key-like
+            # (shapes group rounds), never config-like. Descriptors and
+            # foreign wrappers DO participate on data_ptr-free content, so
+            # config-shaped fields (e.g. a pre-hook rewriting block_shape
+            # per config) are still recognized as config params.
+            if _is_tensor_arg_value(arg_val):
+                continue
+            for path, fingerprint in _config_leaf_fingerprints(arg_val):
+                paths_by_arg[arg_name].add(path)
+                values_by_path[(arg_name, path)][comp_hash].add(fingerprint)
+    for (_arg_name, path), per_hash in values_by_path.items():
+        if not path:
+            continue
+        # A nested path missing under a hash counts as a distinct value;
+        # otherwise a field present under only one hash would escape
+        # config detection and split the session by config.
+        for comp_hash in hash_universe:
+            if comp_hash not in per_hash:
+                per_hash[comp_hash] = {_ABSENT}
+    config_paths_by_arg: Dict[str, Set[Tuple[str, ...]]] = defaultdict(set)
+    for (arg_name, path), per_hash in values_by_path.items():
+        if len(per_hash) <= 1:
+            continue
+        if not all(len(values) == 1 for values in per_hash.values()):
+            continue
+        # The values must actually disagree across hashes; a constant
+        # field is not a config param even though it trivially has "one
+        # value per hash".
+        if len(set().union(*per_hash.values())) > 1:
+            config_paths_by_arg[arg_name].add(path)
+    config_args: Dict[str, Optional[Set[Tuple[str, ...]]]] = {}
+    for arg_name, paths in config_paths_by_arg.items():
+        if paths and paths == paths_by_arg[arg_name]:
+            config_args[arg_name] = None
+        else:
+            config_args[arg_name] = paths
+    return config_args
+
+
+def _launch_key_signature(
+    extracted: Dict[str, Any],
+    config_args: Dict[str, Optional[Set[Tuple[str, ...]]]],
+) -> str:
+    """Stable signature of a launch's autotune-key arguments.
+
+    Covers all scalar args except autotune config params, plus tensor
+    identity metadata (dtype/shape/strides; data_ptr excluded since it
+    changes on every allocation). Launches from one key invocation share a
+    signature; different keys differ in at least one runtime arg.
+    """
+    payload: Dict[str, Any] = {}
+    for arg_name in sorted(extracted):
+        arg_val = extracted[arg_name]
+        if arg_name in config_args:
+            paths = config_args[arg_name]
+            if paths is None or not isinstance(arg_val, dict):
+                continue
+            # Mixed key/config descriptor: mask only the config paths so
+            # key-shaped nested fields still separate key rounds.
+            payload[arg_name] = _mask_config_paths(arg_val, paths)
+        elif _is_tensor_arg_value(arg_val):
+            payload[arg_name] = {
+                key: arg_val.get(key)
+                for key in ("dtype", "shape", "stride", "strides", "numel")
+                if key in arg_val
+            }
+        elif isinstance(arg_val, dict):
+            # Descriptors and foreign wrappers: keep identity metadata
+            # but drop volatile nested data_ptrs for stability.
+            payload[arg_name] = _drop_data_ptrs(arg_val)
+        else:
+            payload[arg_name] = arg_val
+    try:
+        serialized = dumps(payload, sort_keys=True)
+    except TypeError:
+        serialized = dumps(str(payload))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+
+
+def _split_session_by_launch_key(
+    session_id: str,
+    session_data: Dict[str, Any],
+    launch_by_group_hash: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Partition one call-site session into per-autotune-key sub-sessions.
+
+    Repeated ``Autotuner.run()`` invocations at the same call site (e.g. a
+    loop over problem sizes) share one call-site session id. Each invocation
+    benchmarks with identical runtime args, so grouping launches by key
+    signature recovers the original invocations.
+
+    Single-partition sessions keep the plain coarse session id so their
+    output is unchanged; split sessions get "{session_id}:{full_sig}"
+    ids (the full 16-char signature: truncating it could collide and
+    silently drop a key round). Partitions are ordered by first
+    occurrence for stable output. Each partition carries
+    launch_group_hashes (ordered as the legacy path orders them) and
+    benchmark/winner occurrence ids.
+
+    Limitation: launches without distinguishing arguments cannot be
+    attributed to a key (``extracted_args`` is optional in the launch
+    schema). Distinct listener keys alone cannot partition
+    indistinguishable launches, so such rounds share one partition and
+    only the latest listener result is attached. Likewise, an autotune
+    key on a tl.constexpr/specialized argument is misread as a config
+    param (one value per compilation hash) whenever tensor shapes do
+    not already separate the rounds; deriving config fields from
+    best_config is impossible on traces without listener events, and
+    compilation metadata does not record constexpr values. Note-only
+    launches in a split session stay unattributed: their occurrence ids
+    are excluded from every partition since no key can be derived for
+    them. Result matching is heuristic as well: a result matches when
+    every best_config pair resolvable against the winner launch agrees,
+    so rounds whose distinguishing config fields are all unresolvable
+    are told apart by shared fields and file order only.
+    """
+    all_occurrences = session_data.get("launch_occurrences", []) or []
+    group_hashes = session_data.get("launch_group_hashes", set()) or set()
+
+    group_infos: List[Tuple[str, Optional[str], Dict[str, Any]]] = []
+    skipped_note_groups = set()
+    for group_hash in group_hashes:
+        launch = launch_by_group_hash.get(group_hash, {})
+        comp_hash = launch.get("compilation_metadata", {}).get("hash")
+        extracted = launch.get("extracted_args", {}) or {}
+        # Launches captured inside CUDA graphs carry a _note marker
+        # instead of real args. They hold no key information and would
+        # pool unrelated rounds into one partition, so key derivation
+        # ignores them; emission still counts their occurrences whenever
+        # no attribution choice is needed (see below).
+        if _is_note_only_launch(extracted):
+            skipped_note_groups.add(group_hash)
+            continue
+        group_infos.append((group_hash, comp_hash, extracted))
+    occurrences = [
+        record
+        for record in all_occurrences
+        if record.get("launch_group_hash") not in skipped_note_groups
+    ]
+
+    def _single_partition(
+        benchmark_ids: List[int], winner_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        ordered = sorted(
+            (info[0] for info in group_infos),
+            key=lambda h: launch_by_group_hash.get(h, {}).get("occurrence_id", 0),
+        )
+        return [
+            {
+                "sub_session_id": session_id,
+                "launch_group_hashes": ordered,
+                "benchmark_occurrence_ids": benchmark_ids,
+                "winner_occurrence_ids": winner_ids,
+            }
+        ]
+
+    if not group_infos:
+        # Nothing attributable to split on: either a compilations-only
+        # session (benchmark launches untraced) or an all-note session
+        # (every launch captured inside CUDA graphs). Preserve the coarse
+        # session verbatim (legacy parity): the groups keep output-file
+        # lookup and the neither-compilations-nor-launches guard working
+        # when the kernels compiled outside this call site, and the coarse
+        # occurrence ids keep the real launches instead of reporting an
+        # empty, cache-looking session.
+        ordered = sorted(
+            group_hashes,
+            key=lambda h: launch_by_group_hash.get(h, {}).get("occurrence_id", 0),
+        )
+        return [
+            {
+                "sub_session_id": session_id,
+                "launch_group_hashes": ordered,
+                "benchmark_occurrence_ids": list(
+                    session_data.get("benchmark_occurrence_ids", [])
+                ),
+                "winner_occurrence_ids": list(
+                    session_data.get("winner_occurrence_ids", [])
+                ),
+            }
+        ]
+    if not occurrences:
+        # Defensive: same-process ingest always records occurrences, but
+        # keep emission working (with coarse occurrence lists) if absent.
+        return _single_partition(
+            list(session_data.get("benchmark_occurrence_ids", [])),
+            list(session_data.get("winner_occurrence_ids", [])),
+        )
+
+    config_args = _find_config_args(group_infos)
+    signature_by_group = {
+        group_hash: _launch_key_signature(extracted, config_args)
+        for group_hash, _comp_hash, extracted in group_infos
+    }
+    grouped: Dict[str, List[str]] = defaultdict(list)
+    for group_hash, _comp_hash, _extracted in group_infos:
+        grouped[signature_by_group[group_hash]].append(group_hash)
+
+    if len(grouped) == 1:
+        # One key round: no attribution choice, so note occurrences join
+        # the emission (their arg payload stays excluded from the groups
+        # above, keeping _note markers out of the varies table).
+        bench_ids = [
+            record["occurrence_id"]
+            for record in all_occurrences
+            if record.get("is_benchmark")
+        ]
+        winner_ids = [
+            record["occurrence_id"]
+            for record in all_occurrences
+            if not record.get("is_benchmark")
+        ]
+        return _single_partition(bench_ids, winner_ids)
+
+    def _partition_min_occurrence(sig: str) -> int:
+        member_groups = set(grouped[sig])
+        occs = [
+            record["occurrence_id"]
+            for record in occurrences
+            if record.get("launch_group_hash") in member_groups
+        ]
+        return min(occs) if occs else 0
+
+    partitions = []
+    for sig in sorted(grouped, key=_partition_min_occurrence):
+        member_groups = set(grouped[sig])
+        bench_ids = []
+        winner_ids = []
+        for record in occurrences:
+            if record.get("launch_group_hash") not in member_groups:
+                continue
+            if record.get("is_benchmark"):
+                bench_ids.append(record["occurrence_id"])
+            else:
+                winner_ids.append(record["occurrence_id"])
+        ordered = sorted(
+            grouped[sig],
+            key=lambda h: launch_by_group_hash.get(h, {}).get("occurrence_id", 0),
+        )
+        partitions.append(
+            {
+                "sub_session_id": f"{session_id}:{sig}",
+                "launch_group_hashes": ordered,
+                "benchmark_occurrence_ids": bench_ids,
+                "winner_occurrence_ids": winner_ids,
+            }
+        )
+    return partitions
+
+
+def _resolve_partition_winner(
+    winner_occurrence_ids: List[int],
+    occurrence_to_group: Dict[int, str],
+    launch_by_group_hash: Dict[str, Dict[str, Any]],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve (selected launch_group_hash, winner compilation hash).
+
+    Mirrors the legacy last-non-benchmark-launch rule, scoped to one
+    partition: the latest winner occurrence whose launch carries a hash.
+    """
+    for occurrence_id in reversed(winner_occurrence_ids):
+        group_hash = occurrence_to_group.get(occurrence_id)
+        if not group_hash:
+            continue
+        launch = launch_by_group_hash.get(group_hash, {})
+        comp_hash = launch.get("compilation_metadata", {}).get("hash")
+        if comp_hash:
+            return group_hash, comp_hash
+    return None, None
+
+
+# A value runs until the next "name:" pair (or end of string), so tuple/list
+# values containing commas are kept intact.
+_BEST_CONFIG_PAIR_RE = re.compile(
+    r"([A-Za-z_]\w*)\s*:\s*(.*?)(?=,\s*[A-Za-z_]\w*\s*:|$)"
+)
+
+
+def _parse_best_config(best_config: Any) -> Dict[str, str]:
+    """Parse Triton Config str form ("BLOCK_SIZE_M: 16, num_warps: 1, ...")."""
+    if not isinstance(best_config, str):
+        return {}
+    return {
+        match.group(1): match.group(2).strip()
+        for match in _BEST_CONFIG_PAIR_RE.finditer(best_config)
+    }
+
+
+def _parse_sequence_literal(text: str) -> Optional[List[Any]]:
+    """Parse a best_config sequence spelling ("(2, 1, 1)") into a list."""
+    try:
+        value = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return None
+
+
+def _config_value_matches(expected: str, actual: Any) -> bool:
+    """Compare a parsed best_config value against a launch value.
+
+    Int-aware first (exact for large ints; also accepts hex), then
+    sequences (best_config prints tuples while JSON round-trips turn
+    them into lists), then numeric, then string fallback. Bools compare
+    against true/false/1/0 spellings.
+    """
+    text = expected.strip()
+    if actual is None:
+        return text in ("None", "null", "")
+    if isinstance(actual, bool):
+        normalized = text.lower()
+        if normalized in ("1", "true"):
+            return actual is True
+        if normalized in ("0", "false"):
+            return actual is False
+        return False
+    if isinstance(actual, int):
+        try:
+            return int(text, 0) == actual
+        except ValueError:
+            pass
+    if isinstance(actual, (list, tuple)):
+        parsed = _parse_sequence_literal(text)
+        return parsed is not None and parsed == list(actual)
+    try:
+        return float(text) == float(actual)
+    except (TypeError, ValueError):
+        return text == str(actual)
+
+
+def _match_autotune_result(
+    results: List[Dict[str, Any]],
+    winner_launch: Dict[str, Any],
+    skip_indices: Set[int],
+    winner_warps_base: Optional[int] = None,
+) -> Optional[int]:
+    """Match listener results to a partition via its winner launch.
+
+    Every best_config pair resolvable against the winner's config values
+    (extracted scalar args, then compilation metadata) must agree.
+    Tensor-like extracted args are skipped (a config name can never
+    denote a tensor). Under warp specialization the launch metadata
+    carries the expanded num_warps while best_config prints the
+    requested one, so num_warps compares against winner_warps_base when
+    the compilation payload recovered one. Returns the index of the
+    first match in file order that is not in skip_indices, so each
+    result is consumed by at most one partition.
+
+    This is heuristic: pairs unresolvable against the winner (e.g. BLOCK
+    sizes, which are neither kernel args nor compilation metadata) are
+    skipped, so a match on shared fields alone can misattribute results
+    when file order disagrees with round order.
+    """
+    extracted = winner_launch.get("extracted_args", {}) or {}
+    compilation_metadata = winner_launch.get("compilation_metadata", {}) or {}
+    for index, result in enumerate(results):
+        if index in skip_indices:
+            continue
+        pairs = _parse_best_config(result.get("best_config"))
+        compared = 0
+        matched = 0
+        for name, expected in pairs.items():
+            if name == "num_warps" and winner_warps_base is not None:
+                actual = winner_warps_base
+            elif name in extracted and not _is_tensor_like_value(extracted[name]):
+                actual = _extract_scalar_value(extracted[name])
+            elif name in compilation_metadata:
+                actual = compilation_metadata[name]
+            else:
+                continue
+            compared += 1
+            if _config_value_matches(expected, actual):
+                matched += 1
+        if compared > 0 and matched == compared:
+            return index
+    return None
+
+
+def _globally_referenced_hashes(
+    partitions: List[Dict[str, Any]],
+    launch_by_group_hash: Dict[str, Dict[str, Any]],
+) -> Set[str]:
+    """Compilation hashes referenced by any partition's launches."""
+    referenced = set()
+    for part in partitions:
+        for group_hash in part["launch_group_hashes"]:
+            launch = launch_by_group_hash.get(group_hash, {})
+            comp_hash = launch.get("compilation_metadata", {}).get("hash")
+            if comp_hash:
+                referenced.add(comp_hash)
+    return referenced
+
+
+def _partition_compilations(
+    part: Dict[str, Any],
+    coarse_compilations: List[Dict[str, Any]],
+    launch_by_group_hash: Dict[str, Dict[str, Any]],
+    unattributed_hashes: Set[str],
+) -> List[Dict[str, Any]]:
+    """Compilations for a partition, in coarse order.
+
+    Besides compilations referenced by this partition's launches, this
+    keeps compilations unattributed to any partition (e.g. a candidate
+    whose benchmark launches were never traced), so a split never
+    silently drops a config that the unsplit session would have shown.
+    """
+    referenced = set(unattributed_hashes)
+    for group_hash in part["launch_group_hashes"]:
+        launch = launch_by_group_hash.get(group_hash, {})
+        comp_hash = launch.get("compilation_metadata", {}).get("hash")
+        if comp_hash:
+            referenced.add(comp_hash)
+    return [
+        comp
+        for comp in coarse_compilations
+        if comp.get("payload", {}).get("metadata", {}).get("hash") in referenced
+    ]
+
+
+def _build_sub_session(
+    part: Dict[str, Any],
+    coarse_compilations: List[Dict[str, Any]],
+    occurrence_to_group: Dict[int, str],
+    results: List[Dict[str, Any]],
+    used_result_indices: Set[int],
+    unattributed_hashes: Set[str],
+    single: bool,
+    launch_by_group_hash: Dict[str, Dict[str, Any]],
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Build one expanded sub-session entry plus its selected group hash."""
+    if single:
+        # No split: keep every coarse compilation (including ones no
+        # launch references) so output matches the legacy path.
+        part_compilations = list(coarse_compilations)
+    else:
+        part_compilations = _partition_compilations(
+            part, coarse_compilations, launch_by_group_hash, unattributed_hashes
+        )
+
+    selected_group, winner_hash = _resolve_partition_winner(
+        part["winner_occurrence_ids"],
+        occurrence_to_group,
+        launch_by_group_hash,
+    )
+
+    matched_result: Optional[Dict[str, Any]] = None
+    if results:
+        if single:
+            # Legacy parity: ingest used to keep only the last result.
+            matched_result = results[-1]
+        elif selected_group:
+            # Warp-specialized kernels record the requested num_warps
+            # as num_warps_base on the compilation payload; the launch
+            # metadata only carries the expanded count.
+            winner_warps_base = None
+            if winner_hash:
+                for comp in part_compilations:
+                    comp_meta = comp.get("payload", {}).get("metadata", {})
+                    if comp_meta.get("hash") == winner_hash:
+                        winner_warps_base = comp_meta.get("num_warps_base")
+                        break
+            match_index = _match_autotune_result(
+                results,
+                launch_by_group_hash.get(selected_group, {}),
+                used_result_indices,
+                winner_warps_base,
+            )
+            if match_index is not None:
+                used_result_indices.add(match_index)
+                matched_result = results[match_index]
+
+    sub_data: Dict[str, Any] = {
+        "compilations": part_compilations,
+        "launch_group_hashes": set(part["launch_group_hashes"]),
+        "benchmark_occurrence_ids": part["benchmark_occurrence_ids"],
+        "winner_occurrence_ids": part["winner_occurrence_ids"],
+    }
+    if matched_result:
+        sub_data["autotune_result"] = matched_result
+    return sub_data, selected_group
+
+
+def _expand_sessions_by_launch_key(
+    autotune_sessions: Dict[str, Dict[str, Any]],
+    session_stacks: Dict[str, List[Dict[str, Any]]],
+    launch_by_group_hash: Dict[str, Dict[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str], Dict[str, List[Dict[str, Any]]]]:
+    """Expand call-site sessions into per-autotune-key sub-sessions.
+
+    Returns (expanded_sessions, expanded_winners, expanded_stacks) with the
+    same shapes the emission passes already consume: each sub-session keeps
+    compilations, launch_group_hashes, and occurrence id lists; winners map
+    to the selected launch_group_hash; stacks still describe the shared
+    call site. Each sub-session also carries its own "autotune_result"
+    (matched by best config with each result consumed at most once, or
+    the last result when no split happened).
+    """
+    expanded_sessions: Dict[str, Dict[str, Any]] = {}
+    expanded_winners: Dict[str, str] = {}
+    expanded_stacks: Dict[str, List[Dict[str, Any]]] = {}
+
+    for session_id, session_data in autotune_sessions.items():
+        if not session_data:
+            continue
+        partitions = _split_session_by_launch_key(
+            session_id, session_data, launch_by_group_hash
+        )
+        if not partitions:
+            continue
+        occurrence_to_group = {
+            record["occurrence_id"]: record.get("launch_group_hash", "")
+            for record in session_data.get("launch_occurrences", []) or []
+        }
+        # Deduped coarse compilations define the reference order; shared
+        # compilations legitimately appear in several partitions.
+        coarse_compilations = _dedup_compilations_by_hash(
+            session_data.get("compilations", [])
+        )
+        results = list(session_data.get("autotune_results", []) or [])
+        legacy_single = session_data.get("autotune_result")
+        if legacy_single and not results:
+            results = [legacy_single]
+        single = len(partitions) == 1
+        used_result_indices: Set[int] = set()
+        # Compilations no partition's launches reference cannot be
+        # attributed to a key round; promote them to every partition so
+        # a split never drops them (single-partition sessions already
+        # keep all coarse compilations).
+        unattributed_hashes = {
+            comp.get("payload", {}).get("metadata", {}).get("hash")
+            for comp in coarse_compilations
+        } - _globally_referenced_hashes(partitions, launch_by_group_hash)
+        unattributed_hashes.discard(None)
+
+        for part in partitions:
+            sub_id = part["sub_session_id"]
+            sub_data, selected_group = _build_sub_session(
+                part,
+                coarse_compilations,
+                occurrence_to_group,
+                results,
+                used_result_indices,
+                unattributed_hashes,
+                single,
+                launch_by_group_hash,
+            )
+            expanded_sessions[sub_id] = sub_data
+            if selected_group:
+                expanded_winners[sub_id] = selected_group
+            expanded_stacks[sub_id] = session_stacks.get(session_id, [])
+
+    return expanded_sessions, expanded_winners, expanded_stacks
+
+
 def _generate_autotune_analysis_events(
     autotune_sessions: Dict[str, Dict[str, Any]],
-    autotune_winners: Dict[str, str],
     compilations_by_hash: Dict[str, Any],
     session_stacks: Dict[str, List[Dict[str, Any]]],
     launch_by_group_hash: Dict[str, Dict[str, Any]],
@@ -118,11 +827,15 @@ def _generate_autotune_analysis_events(
     """
     Generates autotune_analysis events from grouped compilation sessions.
 
+    Call-site sessions are first expanded into per-autotune-key
+    sub-sessions (see _expand_sessions_by_launch_key); every pass below
+    then operates on sub-sessions. Unsplit sessions keep their plain
+    session id and behave exactly as before.
+
     Args:
         autotune_sessions: Dict mapping session_id to
-            {"compilations": [...], "launch_group_hashes": set([...])}.
-        autotune_winners: Dict mapping session_id to the selected launch_group_hash
-            (the winning compilation hash is derived from the launch event).
+            {"compilations": [...], "launch_group_hashes": set([...]),
+             "launch_occurrences": [...], "autotune_results": [...]}.
         compilations_by_hash: Dict containing processed kernel data,
             used to find output files.
         session_stacks: Dict mapping session_id to the user call stack.
@@ -134,6 +847,15 @@ def _generate_autotune_analysis_events(
     """
     output_events: Dict[str, List[str]] = defaultdict(list)
 
+    # Expand each call-site session into per-autotune-key sub-sessions.
+    # Winners are resolved per sub-session from occurrence records, and
+    # each sub-session carries its own matched autotune result.
+    expanded_sessions, expanded_winners, expanded_stacks = (
+        _expand_sessions_by_launch_key(
+            autotune_sessions, session_stacks, launch_by_group_hash
+        )
+    )
+
     # Pre-compute hash-deduped compilations per session. Cross-PID merge
     # in parse_single_rank intentionally appends every observation; the
     # analysis below MUST collapse them by hash before counting "configs"
@@ -141,7 +863,7 @@ def _generate_autotune_analysis_events(
     # _dedup_compilations_by_hash for the rationale.
     deduped_compilations: Dict[str, List[Dict[str, Any]]] = {
         sid: _dedup_compilations_by_hash(sd.get("compilations", []) if sd else [])
-        for sid, sd in autotune_sessions.items()
+        for sid, sd in expanded_sessions.items()
     }
 
     # First pass: Build hash → groups mapping from sessions with benchmarks
@@ -149,7 +871,7 @@ def _generate_autotune_analysis_events(
     # This allows cached sessions to be associated with all possible groups
     hash_to_groups: Dict[str, List[List[str]]] = defaultdict(list)
 
-    for _session_id, session_data in autotune_sessions.items():
+    for _session_id, session_data in expanded_sessions.items():
         if not session_data:
             continue
         compilation_events = deduped_compilations[_session_id]
@@ -176,7 +898,7 @@ def _generate_autotune_analysis_events(
                 hash_to_groups[h].append(compilation_hashes)
 
     # Second pass: Generate autotune_analysis events
-    for session_id, session_data in autotune_sessions.items():
+    for session_id, session_data in expanded_sessions.items():
         if not session_data:
             continue
 
@@ -498,7 +1220,7 @@ def _generate_autotune_analysis_events(
 
         # Resolve winner_compilation_hash from selected launch_group_hash
         winner_compilation_hash: Optional[str] = None
-        selected_launch_group_hash = autotune_winners.get(session_id)
+        selected_launch_group_hash = expanded_winners.get(session_id)
         if (
             selected_launch_group_hash
             and selected_launch_group_hash in launch_by_group_hash
@@ -530,9 +1252,9 @@ def _generate_autotune_analysis_events(
         analysis_event: Dict[str, Any] = {
             "event_type": "autotune_analysis",
             "session_id": session_id,
-            "session_stack": session_stacks.get(session_id, []),
+            "session_stack": expanded_stacks.get(session_id, []),
             "name": name,
-            "selected_hash": autotune_winners.get(session_id),
+            "selected_hash": expanded_winners.get(session_id),
             "winner_compilation_hash": winner_compilation_hash,
             "possible_groups": possible_groups,
             "compilation_analysis": compilation_analysis,
@@ -571,14 +1293,14 @@ def _generate_autotune_analysis_events(
     # 1. Winner run after benchmark (winner_occurrence_ids is not empty)
     # 2. Cached winner call (benchmark_occurrence_ids is empty)
     winner_run_counts: Dict[str, int] = defaultdict(int)
-    for session_id, session_data in autotune_sessions.items():
+    for session_id, session_data in expanded_sessions.items():
         if not session_data:
             continue
         winner_occurrence_ids = session_data.get("winner_occurrence_ids", [])
         # Count sessions that have winner runs (either after benchmark or cached)
         if len(winner_occurrence_ids) > 0:
             # Calculate winner_compilation_hash the same way as in Second pass
-            selected_launch_group_hash = autotune_winners.get(session_id)
+            selected_launch_group_hash = expanded_winners.get(session_id)
             if (
                 selected_launch_group_hash
                 and selected_launch_group_hash in launch_by_group_hash
