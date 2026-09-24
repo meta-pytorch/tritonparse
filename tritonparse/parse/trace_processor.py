@@ -819,9 +819,16 @@ def parse_single_rank(
             "launch_group_hashes": set(),
             "benchmark_occurrence_ids": [],
             "winner_occurrence_ids": [],
+            # Per-launch records so analysis can split one call-site session
+            # into per-autotune-key sub-sessions. Each entry maps an
+            # occurrence back to its launch group.
+            "launch_occurrences": [],
+            # One entry per AutotuneListener callback. A list (not a single
+            # dict) because repeated invocations at the same call site with
+            # different keys each emit their own result.
+            "autotune_results": [],
         }
     )
-    autotune_winners: Dict[str, str] = {}
     session_stacks: Dict[str, Any] = {}
     launch_by_group_hash: Dict[str, Dict[str, Any]] = {}
     next_occurrence_id: int = 0
@@ -981,13 +988,18 @@ def parse_single_rank(
                             autotune_sessions[session_id][
                                 "winner_occurrence_ids"
                             ].append(occurrence_id)
+                        autotune_sessions[session_id]["launch_occurrences"].append(
+                            {
+                                "occurrence_id": occurrence_id,
+                                "launch_group_hash": launch_group_hash,
+                                "is_benchmark": is_benchmark,
+                            }
+                        )
 
                     if kernel_hash:
                         kernels_by_hash[kernel_hash]["launches"].append(
                             (parsed_json, global_launch_index)
                         )
-                        if not is_benchmark and session_id:
-                            autotune_winners[session_id] = launch_group_hash
                     global_launch_index += 1
 
                 elif event_type == "autotune":
@@ -999,14 +1011,17 @@ def parse_single_rank(
                     ):
                         continue
                     if session_id:
-                        autotune_sessions[session_id]["autotune_result"] = {
-                            "best_config": parsed_json.get("best_config"),
-                            "configs_timings": parsed_json.get("configs_timings"),
-                            "duration": parsed_json.get("duration"),
-                            "cache_hit": parsed_json.get("cache_hit"),
-                            "cache_key": parsed_json.get("cache_key"),
-                            "kernel_name": parsed_json.get("kernel_name"),
-                        }
+                        autotune_sessions[session_id]["autotune_results"].append(
+                            {
+                                "best_config": parsed_json.get("best_config"),
+                                "configs_timings": parsed_json.get("configs_timings"),
+                                "duration": parsed_json.get("duration"),
+                                "cache_hit": parsed_json.get("cache_hit"),
+                                "cache_key": parsed_json.get("cache_key"),
+                                "kernel_name": parsed_json.get("kernel_name"),
+                                "autotune_key": parsed_json.get("autotune_key"),
+                            }
+                        )
                         if user_stack and session_id not in session_stacks:
                             session_stacks[session_id] = user_stack
 
@@ -1093,7 +1108,6 @@ def parse_single_rank(
 
     autotune_events_by_file = _generate_autotune_analysis_events(
         autotune_sessions,
-        autotune_winners,
         kernels_by_hash,
         session_stacks,
         launch_by_group_hash,
