@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DiffComparisonView from "../components/DiffComparisonView";
 import ShareButton from "../components/ShareButton";
 import { useFileDiffSession } from "../context/FileDiffSession";
@@ -18,6 +18,8 @@ const PARAM_VIEW = "view";
 const PARAM_JSON_B_URL = "json_b_url";
 const PARAM_KERNEL_HASH_A = "kernel_hash_a";
 const PARAM_KERNEL_HASH_B = "kernel_hash_b";
+const PARAM_LABEL_A = "label_a";
+const PARAM_LABEL_B = "label_b";
 const PARAM_MODE = "mode";
 const PARAM_IR = "ir";
 // NOTE: legacy shared links may still carry ignore_ws=0; it is intentionally
@@ -98,6 +100,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   });
   const [irType, setIrType] = useState<string>(() =>
     initialParams.get(PARAM_IR) || ""
+  );
+
+  // Custom diff labels (lazy init from URL params)
+  const [leftLabel, setLeftLabel] = useState<string>(() =>
+    initialParams.get(PARAM_LABEL_A) || ""
+  );
+  const [rightLabel, setRightLabel] = useState<string>(() =>
+    initialParams.get(PARAM_LABEL_B) || ""
   );
 
   // Diff options (lazy init from URL params)
@@ -268,10 +278,14 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
     params.set(PARAM_CONTEXT, String(contextLines));
     params.set(PARAM_WRAP, wordWrap);
     params.set(PARAM_ONLY_CHANGED, onlyChanged ? "1" : "0");
+    if (leftLabel) params.set(PARAM_LABEL_A, leftLabel);
+    else params.delete(PARAM_LABEL_A);
+    if (rightLabel) params.set(PARAM_LABEL_B, rightLabel);
+    else params.delete(PARAM_LABEL_B);
     const newUrl = new URL(window.location.href);
     newUrl.search = params.toString();
     return newUrl.toString();
-  }, [leftArrayResolved, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl]);
+  }, [leftArrayResolved, kernelsRight, leftIdx, rightIdx, rightLoadedUrl, mode, effectiveIrType, contextLines, wordWrap, onlyChanged, leftLoadedFromLocal, leftLoadedUrlLocal, leftLoadedUrl, leftLabel, rightLabel]);
 
   // Update URL on state changes (File Diff owns its params)
   const syncUrl = useCallback(() => {
@@ -284,6 +298,17 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
   const hasLeftShareUrl = !leftLoadedFromLocal && !loadingLeft && !errorLeft && !!(leftLoadedUrlLocal ?? leftLoadedUrl);
   const hasRightShareUrl = !rightLoadedFromLocal && !loadingRight && !errorRight && !!rightLoadedUrl;
   const canShareDiff = hasLeftShareUrl && hasRightShareUrl;
+
+  // Keep the latest sync callback so unmount can flush pending state: if the
+  // user types a label and navigates away (tab switch / reload) within the
+  // 200ms debounce window, the plain cleanup would cancel the pending update
+  // and the final label would never reach the URL. Calling the latest sync
+  // here persists it.
+  const syncUrlRef = useRef(syncUrl);
+  useEffect(() => {
+    syncUrlRef.current = syncUrl;
+  }, [syncUrl]);
+  useEffect(() => () => syncUrlRef.current(), []);
 
   // Debounce URL updates to reduce history churn
   useEffect(() => {
@@ -321,6 +346,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
           key={`single-${leftIdx}-${rightIdx}-${effectiveIrType}`}
           leftContent={leftContent}
           rightContent={rightContent}
+          leftLabel={leftLabel}
+          rightLabel={rightLabel}
           height="calc(100vh - 14rem)"
           language={effectiveIrType === "python" ? "python" : "plaintext"}
           options={{
@@ -363,6 +390,8 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
                     key={`all-${t}-${leftIdx}-${rightIdx}`}
                     leftContent={leftContent}
                     rightContent={rightContent}
+                    leftLabel={leftLabel}
+                    rightLabel={rightLabel}
                     height="calc(100vh - 14rem)"
                     language={t === "python" ? "python" : "plaintext"}
                     options={{
@@ -647,6 +676,28 @@ const FileDiffView: React.FC<FileDiffViewProps> = ({ kernelsLeft, selectedLeftIn
                   <option value="off">off</option>
                   <option value="on">on</option>
                 </select>
+              </label>
+              <label className="inline-flex items-center gap-1 text-sm">
+                <span>A label</span>
+                <input
+                  type="text"
+                  placeholder="Left…"
+                  aria-label="Left diff label"
+                  className="border border-gray-300 rounded px-2 py-1 w-32"
+                  value={leftLabel}
+                  onChange={(e) => setLeftLabel(e.target.value)}
+                />
+              </label>
+              <label className="inline-flex items-center gap-1 text-sm">
+                <span>B label</span>
+                <input
+                  type="text"
+                  placeholder="Right…"
+                  aria-label="Right diff label"
+                  className="border border-gray-300 rounded px-2 py-1 w-32"
+                  value={rightLabel}
+                  onChange={(e) => setRightLabel(e.target.value)}
+                />
               </label>
             </div>
           </div>
