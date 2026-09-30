@@ -1215,7 +1215,11 @@ class TritonJsonFormatter(logging.Formatter):
         log_entry = record.metadata
         payload = record.payload
 
-        log_entry["timestamp"] = self.formatTime(record, "%Y-%m-%dT%H:%M:%S.%fZ")
+        # time.strftime (used by formatTime) does not support %f, so append
+        # microseconds manually.
+        base = self.formatTime(record, "%Y-%m-%dT%H:%M:%S")
+        micros = int(record.created * 1_000_000) % 1_000_000
+        log_entry["timestamp"] = f"{base}.{micros:06d}Z"
         if payload is not None:
             log_entry["payload"] = loads(payload)
         clean_log_entry = convert(log_entry)
