@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# One line identifying the tree being evaluated.
+# One line identifying the source used for a run.
 #
-# During artifact evaluation the reviewers track a *branch*, not a tag, so that fixes we
-# make in response to their reports reach them with a `git pull`.  That convenience costs
-# something: "the main check failed" no longer identifies a tree.  So every run stamps the
-# branch and commit into its own output, and a reviewer who pastes a log tells us exactly
-# what they ran without being asked.
+# Git checkouts report their branch and commit. Source archives do not carry Git
+# metadata; their commit is identified by the archive filename and archival record.
+# Both forms support the default installation from pinned PyPI packages.
 #
 # Source it, then call ae_provenance.
 
@@ -16,9 +14,8 @@ ae_provenance() {
 
     if ! command -v git >/dev/null 2>&1 \
        || ! git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
-        # A zip or a tarball.  Not the supported path -- setuptools-scm needs the git
-        # metadata -- but say so plainly instead of printing nothing.
-        printf 'not a git checkout (see README.md, Getting the artifact)'
+        # Archive installation is supported; report why no Git revision is available.
+        printf 'source archive (no Git metadata)'
         return 0
     fi
 

@@ -3,9 +3,9 @@
 Artifact for **“TritonParse: Multi-IR Provenance and Reproducible Debugging for Triton
 Kernel Compilation”** (ASPLOS'27, submission #461).
 
-Badges claimed: **Artifacts Available** and **Artifacts Evaluated — Functional**.
-[`STATUS.md`](STATUS.md) maps those to the ACM criteria and says why we do not claim
-Results Reproduced.
+Artifact evaluation is complete. The artifact received **Artifacts Available** and
+**Artifacts Evaluated — Functional**. Results Reproduced was not requested and was not
+awarded. [`STATUS.md`](STATUS.md) records the outcome and the scope of the evaluation.
 
 **Contents** — [Quick start](#quick-start) · [Requirements](#requirements) ·
 [What this covers](#what-this-artifact-covers) ·
@@ -20,20 +20,32 @@ Results Reproduced.
 
 ## Getting the artifact
 
+Use a source archive or Git checkout of the **full repository** at the commit cited in
+the paper or identified in the Zenodo record. Keep `asplos2027-ae/`, `tests/`,
+`tritonparse/`, and `website/` together: the artifact scripts use these sibling
+directories. The archive includes the reference trace and measurements.
+
+**ZIP and tar archives are supported.** Extract the archive, enter its repository root,
+and follow the quick start below. The default setup installs `tritonparse==0.5.1` from
+PyPI along with the pinned dependencies, so this path does not need Git metadata.
+The extra version setting described under [Installing TritonParse itself](#installing-tritonparse-itself)
+applies only if you choose to install the library from the unpacked source.
+
+For a Git checkout:
+
 ```bash
 git clone --branch asplos2027-ae https://github.com/meta-pytorch/tritonparse
 cd tritonparse
 ```
 
-Clone; do not download a zip. TritonParse derives its version with `setuptools-scm`,
-which needs git metadata that a zip has no way to carry — see *Installing TritonParse
-itself* below for what that failure looks like.
+To reproduce an archived version after cloning, use `git checkout` with the full commit
+SHA recorded in its metadata. The branch is a convenient access point; the commit
+identifies the fixed source tree. Git-based runs record their branch and commit in the
+logs. Runs from an archive identify it as a source archive; retain its filename and the
+commit recorded in the deposit when reporting results.
 
-For the duration of the artifact evaluation we track the branch `asplos2027-ae` rather
-than a tag, so that anything you report and we fix reaches you with a `git pull`. The
-branch is only ever fast-forwarded, never rewritten, so a pull always applies. Every run
-prints the branch and commit it ran, and records them in `summary.txt` — quoting that
-line in a report tells us exactly what you ran.
+**Reserved archival DOI:** `10.5281/zenodo.21853863`. The DOI becomes publicly
+accessible when the deposit is published; see [archive details in STATUS.md](STATUS.md#artifacts-available).
 
 ## Quick start
 
@@ -41,7 +53,7 @@ line in a report tells us exactly what you ran.
 ./asplos2027-ae/run_all.sh
 ```
 
-That is the entire evaluation: **about 15 minutes** for the required steps, plus a
+That runs the complete workflow: **about 15 minutes** for the required steps, plus a
 minute for the optional interface build. One command, nothing to install first. It builds the environment — downloading and installing conda itself if the host
 has none — then runs every check in order, stopping at the first failure. One ordinary
 NVIDIA GPU (SM80+, ≥ 16 GB) is enough; no H100, MI300X or B200 is required.
@@ -73,13 +85,9 @@ tritonparse/triton/torch versions, GPU and driver — so every log identifies it
 stack. Quoting that block, or attaching `environment.txt`, is the most useful thing you
 can put in a report.
 
-**The files are written to be safe to send us.** You are anonymous to us, and a log full
-of `/home/<your name>/` would not leave you that way, so what lands on disk carries no
-hostname and no home directory: paths under the artifact appear as `<artifact>/…` and
-anything under your home as `~/…`. The environment block reports which *kind* of
-environment ran — the artifact's own conda environment, or one of yours — never where it
-lives. Nothing is collected or sent anywhere; the files are yours, and this only means
-you can attach one without reading it line by line first.
+The logging wrapper replaces repository paths with `<artifact>/…` and home-directory
+paths with `~/…`. The environment header reports the software stack and GPU. Logs and
+results stay on the local machine; the scripts do not upload them.
 
 Useful flags: `--skip-setup` to use an environment you have already activated,
 `--skip-ui` to skip the one step that downloads npm packages, `--keep-going` to run
@@ -91,7 +99,7 @@ A rebuild costs a few minutes; a silently drifted environment costs far more, be
 fails inside the checks and looks like the artifact's fault. Pass
 `AE_KEEP_EXISTING_ENV=1` to keep what you have.
 
-**`00_kick_the_tires.sh` is the “basic test” for the kick-the-tires phase.** It is the
+**`00_kick_the_tires.sh` performs the basic CPU checks.** It is the
 fast one and its checks are offline, so it isolates installation problems before anything
 touches the GPU. It was validated end-to-end inside a stock `python:3.13-slim` container
 with no `git`, no `patch`, no compiler and no network — that run used the virtualenv path
@@ -105,8 +113,8 @@ below, since the container has no conda.
 
 **One NVIDIA GPU**, compute capability 8.0 or later, with at least 16 GB of memory — an
 A100, L4, L40S, RTX 30xx/40xx/50xx or H100 all work. The hardware the paper was measured
-on (an H100 *and* an MI300X, plus a B200 for §5.2) is **not** required, and the badges we
-claim do not depend on it.
+on (an H100 *and* an MI300X, plus a B200 for §5.2) is **not** required for the artifact's
+checks.
 
 One detail is worth knowing before you read C9's output. The PTX in the paper's Listing 2
 is not uniformly portable: the Triton 3.3 sequence uses `mul.bf16`, which `ptxas` accepts
@@ -283,28 +291,21 @@ Both required scripts pass under either environment; we ran them under both. Onl
 
 ### Installing TritonParse itself
 
-⚠️ **Do not run a bare `pip install .` from an unpacked zip.** TritonParse derives its
-version with `setuptools-scm`, which needs git metadata. A Zenodo archive or a GitHub
-"Download ZIP" has no `.git`, so the build fails with:
+**The default setup already installs the library.** `requirements-pinned.txt` includes
+`tritonparse==0.5.1` from PyPI, and both conda and virtualenv installation use that file.
+No additional installation command is needed for a Git checkout or an unpacked archive.
 
-```
-LookupError: setuptools-scm was unable to detect version for <dir>.
-Make sure you're either building from a fully intact git repository or PyPI tarballs.
-```
-
-Use one of these instead:
+**Optional source installation.** To install the library from this source snapshot
+after setting up the pinned dependencies, run the following from the repository root:
 
 ```bash
-# (a) from this snapshot — keeps the library in sync with the bundled tests/
-SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRITONPARSE=0.5.1 pip install <repo-root>
-
-# (b) from PyPI — simplest, no build step
-pip install tritonparse==0.5.1
+SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRITONPARSE=0.5.1 pip install .
 ```
 
-`requirements-pinned.txt` uses (b). `00_kick_the_tires.sh` also runs the repository's
-`tests/cpu` suite; if you want those tests to match the installed library exactly, use
-(a) against the snapshot you are reviewing.
+The source build uses `setuptools-scm`, which normally reads Git metadata to determine
+the version. The explicit version above is required when `.git` is absent; a bare
+`pip install .` from an archive can otherwise fail with `setuptools-scm was unable to
+detect version`. This affects manual source installation, not the default PyPI path.
 
 ### Choosing the right CUDA wheel
 
@@ -342,9 +343,8 @@ Any of these works; only the driver floor differs.
 | GPUs | NVIDIA H100 98 GB, AMD Instinct MI300X 192 GB | any single SM80+ NVIDIA GPU |
 | OS | CentOS Stream 9 | any recent x86-64 Linux |
 
-TritonParse has evolved substantially since submission, and the paper's stack no longer
-installs cleanly against current drivers. Pinning released, currently-installable
-versions makes the artifact *more* likely to run on a reviewer's machine, not less.
+The artifact was validated with the released versions above. These pins preserve its
+tested software stack, which differs from the stack used for the paper's measurements.
 
 **Consequence:** absolute numbers produced by these scripts differ from the paper. The
 scripts therefore report both their own measurement and the paper's, and judge on
@@ -360,8 +360,10 @@ scripts therefore report both their own measurement and the paper's, and judge o
 Every script prints its own measurement next to the paper's and judges on mechanism and
 order of magnitude.
 
-**2. `pip install .` from an unpacked zip fails.** `setuptools-scm` needs git metadata
-that a Zenodo/GitHub zip does not carry. See *Installing TritonParse itself* above.
+**2. Manual source installation from a ZIP needs an explicit version.** The default
+setup installs the pinned PyPI package and supports archives without Git metadata.
+If you choose to run `pip install .`, use the version setting in
+[Installing TritonParse itself](#installing-tritonparse-itself).
 
 **3. C6's middle row does not match the paper, and we say why.** The paper reports
 runtime compression at 21.9 % of raw; we measure ~50 % on our microbenchmark.
@@ -443,7 +445,7 @@ read locally — nothing is uploaded.
 ```
 asplos2027-ae/
 ├── README.md                 you are here: quick start, requirements, claim map
-├── STATUS.md                 badges claimed, mapped to the ACM criteria
+├── STATUS.md                 awarded badges, archive details, and evaluation scope
 ├── run_all.sh                THE ENTRY POINT: environment + every check, ~15 min
 ├── setup_env.sh              installs conda if needed, then builds the environment
 ├── environment.yml           conda manifest: interpreter, Node, and the pins below
@@ -480,7 +482,7 @@ asplos2027-ae/
 | `CondaToSNonInteractiveError` during `conda env create` | Anaconda's Terms of Service for the built-in `defaults` channels. Accept them once; see [Environment manager](#environment-manager). |
 | `no CUDA device visible` but `nvidia-smi` shows one | Check `CUDA_VISIBLE_DEVICES`; it may point at an index that does not exist. |
 | torch imports but `torch.cuda.is_available()` is `False` | The wheel's CUDA build is newer than your driver. Install a `cu126`/`cu129` build — see *Choosing the right CUDA wheel*. |
-| `setuptools-scm was unable to detect version` | You ran `pip install .` from a zip. See note 2 above. |
+| `setuptools-scm was unable to detect version` | Manual source installation needs an explicit version when Git metadata is absent. The default setup uses PyPI; see note 2 above. |
 | `ModuleNotFoundError: No module named 'parameterized'` | Test-only dependency; it is in `requirements-pinned.txt`. |
 | `reference trace not found` | It ships under `traces/reference/`. If you deleted it, `scripts/make_reference_trace.py` records an equivalent one on your GPU. |
 | A script fails | Every script prints the path of its scratch directory, which is kept on exit and holds the full log of each step. |
@@ -488,4 +490,5 @@ asplos2027-ae/
 ## Contact
 
 Issues and questions: <https://github.com/meta-pytorch/tritonparse/issues>.
-During artifact evaluation, please route questions through the AE chairs / HotCRP.
+Include the artifact commit (from the Git checkout or archive record), the environment
+header, and the failing check when reporting an issue.

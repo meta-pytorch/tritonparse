@@ -1,13 +1,18 @@
-# Badges claimed
+# Artifact evaluation outcome
 
 For **“TritonParse: Multi-IR Provenance and Reproducible Debugging for Triton Kernel
 Compilation”**, ASPLOS'27 submission #461.
 
-| Badge | Claimed | |
-|---|---|---|
-| **Artifacts Available** | ✅ yes | |
-| **Artifacts Evaluated — Functional** | ✅ yes | |
-| Results Reproduced | ❌ no | see below |
+Artifact evaluation is complete. The final awards are:
+
+| Badge | Outcome |
+|---|---|
+| **Artifacts Available** | Awarded |
+| **Artifacts Evaluated — Functional** | Awarded |
+| Results Reproduced | Not requested; not awarded |
+
+The supplied workloads demonstrate core functionality at a smaller scale than the
+paper's experiments. The coverage and limits below describe what the artifact checks.
 
 ---
 
@@ -17,24 +22,22 @@ TritonParse is developed in the open at
 <https://github.com/meta-pytorch/tritonparse> under a BSD-3-Clause licence, and is
 published on PyPI as `tritonparse`.
 
-**During evaluation** reviewers work from the branch
-[`asplos2027-ae`](https://github.com/meta-pytorch/tritonparse/tree/asplos2027-ae), so
-that anything they report and we fix reaches them with a `git pull` rather than through a
-new tag they have to be told about. The branch is only ever fast-forwarded, and every run
-stamps the branch and commit it ran into its own output, so a reviewer's log identifies
-the tree without our having to ask.
+The [`asplos2027-ae`](https://github.com/meta-pytorch/tritonparse/tree/asplos2027-ae)
+branch contains the artifact. Use the full commit cited in the paper or identified in
+the Zenodo record to select a fixed version.
 
-**For the badge** an archival deposit with a DOI is required — a git host alone does not
-qualify — and that deposit is made *after* evaluation, so that what is archived is what
-was evaluated, fixes included:
+- **Reserved archival DOI:** `10.5281/zenodo.21853863`. The DOI becomes publicly
+  accessible when the deposit is published.
+- **Archive contents:** the complete source tree at a fixed commit, including
+  `asplos2027-ae/`, its reference trace and measurements, `tests/`, `tritonparse/`,
+  and `website/`. Dependencies are installed as described in the README.
+- **Version identification:** record the full Git commit SHA in the Zenodo metadata
+  and preserve it in the archive filename. An unpacked ZIP/tar archive is supported by
+  the default installation; Git metadata is not required.
 
-- **Reserved DOI:** `10.5281/zenodo.21853863` — reserved, not yet published; the record
-  is empty until the deposit is made.
-- **Contents:** the tree of the tag cut at that point — full source plus this
-  `asplos2027-ae/` directory, reference trace included, self-contained.
-
-We would rather name the timing plainly than print a DOI that does not resolve yet and
-let a reviewer discover the gap by clicking it.
+Updates after evaluation correct the optional UI packaging and the archival
+instructions. The computational checks, acceptance criteria, and reference data are
+unchanged.
 
 ## Artifacts Evaluated — Functional
 
@@ -63,11 +66,9 @@ machine is often "not exactly", a difference is reported as `DIFF` and summarise
 changing are compared at all: the autotuner's benchmark-loop length is not one of them,
 so trace-record counts are printed and not gated.
 
-Both the console output and the log files are written on the assumption that a reviewer
-may paste them to us, and that reviewers are anonymous to authors: no hostname is
-recorded, paths under the artifact are rewritten to `<artifact>/…` and paths under a home
-directory to `~/…`, and the environment block names the *kind* of environment rather than
-its location.
+Runs record their software versions, GPU, driver, and source identifier. The logging
+wrapper rewrites repository paths to `<artifact>/…` and home-directory paths to `~/…`.
+Logs and measurements remain local; the scripts do not upload them.
 
 **Complete.** The two required scripts cover claims C1, C2, C3, C4, C6, C8 and C9 as
 live experiments, and an optional third builds the Review interface of §3.3 so the one
@@ -79,7 +80,7 @@ than left implicit:
 
 - **Recording overhead (§4.2)** is a hardware-specific measurement across 37
   TritonBench operators on an H100 *and* an MI300X. Running a handful of operators on a
-  reviewer's GPU would produce a percentage that cannot substantiate the paper's, so we
+  different GPU would produce a percentage that cannot substantiate the paper's, so we
   ship no such check rather than one that looks like evidence but is not.
 - **§5.2 (MoE regression and LLVM bisection)** requires an NVIDIA B200, vLLM, and a
   bisection that rebuilds LLVM. It is out of reach for an artifact and is not attempted.
@@ -89,11 +90,10 @@ than left implicit:
 
 **Exercisable.** `run_all.sh` is the single entry point: it builds the environment and
 runs every check in order, stopping at the first failure, in about 15 minutes.
-Its steps also run standalone and each exits non-zero on failure. Both were validated from a fresh clone of
-the published tag, under an environment built by `setup_env.sh` on a host with no usable
-conda *and* under a plain virtualenv, so neither install path rests on the other. The basic test additionally
-passes inside a stock `python:3.13-slim` container with no `git`, no `patch` and no
-network at all.
+Its steps also run standalone and each exits non-zero on failure. The two required
+scripts were validated under an environment built by `setup_env.sh` and under a plain
+virtualenv. The basic test was also validated inside a stock `python:3.13-slim`
+container with no `git`, no `patch`, and no network access.
 
 **Evidence of verification and validation.** Beyond the artifact scripts, the project
 carries a continuously-run test suite — 501 CPU tests, run by `00_kick_the_tires.sh`,
@@ -101,9 +101,12 @@ and 28 GPU tests, run by `01_gpu_core.sh` — which GitHub Actions also runs on 
 (`.github/workflows/test.yml`, CPU on `ubuntu-latest` and GPU on
 `linux.g5.4xlarge.nvidia.gpu`).
 
-## Why not Results Reproduced
+## Results Reproduced: scope of the submission
 
-The paper's measurements require hardware we cannot expect a reviewer to have:
+Only Artifacts Available and Artifacts Evaluated — Functional were requested and
+awarded. Results Reproduced was not requested. The artifact checks functionality and
+numerical mechanisms; it does not reproduce all of the paper's experiments, which
+have the following additional requirements:
 
 - **§4.2 and §4.3** were measured across 37 TritonBench operators on **both** an
   NVIDIA H100 and an AMD Instinct MI300X.
@@ -112,10 +115,10 @@ The paper's measurements require hardware we cannot expect a reviewer to have:
 - **§5.1** requires **Triton 3.2**, which current TritonParse cannot instrument at all
   (`triton > 3.3.1` is required).
 
-Rather than ask reviewers for that, the artifact reproduces each claim's *mechanism* at a
-scale that runs on one ordinary GPU and reports its numbers against the paper's. Where
-even the mechanism is out of reach — §4.2 and §5.2 — the artifact says so instead
-of shipping a check that cannot support the claim.
+The supplied workloads exercise the supported mechanisms on one NVIDIA GPU and report
+their measurements alongside the paper's. Recording overhead (§4.2) and the MoE
+regression and LLVM bisection (§5.2) are outside the supplied checks, as documented in
+the README and paper appendix.
 
 ## Licence
 

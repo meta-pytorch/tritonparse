@@ -9,8 +9,8 @@
 # Validated 2026-08-06 on Linux x86_64 / NVIDIA H100 / driver 580.126.09 / Python 3.13,
 # under both a conda environment built from environment.yml and a plain virtualenv.
 #
-# These are RELEASED versions, deliberately not nightlies: a reviewer installing this
-# in September must get the same stack we tested in August.  Do not relax to `>=`.
+# These are released versions that preserve the stack validated for this artifact.
+# Do not relax the pins to `>=`.
 #
 # NOTE ON VERSIONS: the paper's measurements (Table 1) were taken on PyTorch 2.9.0 /
 # Triton 3.4.0 / CUDA 12.8 / ROCm 6.4.0.  The artifact pins a newer released stack
@@ -37,7 +37,7 @@ triton==3.7.1
 # fails at import time even though torch itself is installed.
 #
 # 2.4.1 rather than the newest: numpy 2.5 requires Python >= 3.12, which would silently
-# exclude reviewers on 3.11.  2.4.1 needs >= 3.11 and is what sets this artifact's
+# exclude Python 3.11 installations.  2.4.1 needs >= 3.11 and is what sets this artifact's
 # Python floor -- everything else pinned here accepts 3.10.
 numpy==2.4.1
 
@@ -47,25 +47,23 @@ numpy==2.4.1
 # an error even though the library itself is fine.
 parameterized==0.9.0
 
-# --- optional, improves reviewer experience ----------------------------------------
+# --- optional reproducer formatting ------------------------------------------------
 # Without black, the reproducer generator logs
 #   "black library not available, code formatting will be skipped"
 # and emits unformatted (still correct, but harder to read) Python.
 black==26.5.1
 
 # --- TritonParse itself -------------------------------------------------------------
-# Two supported options; pick ONE.
+# The default setup installs the pinned PyPI package below. This works in Git checkouts
+# and unpacked ZIP/tar archives, without building the library or reading Git metadata.
 #
-# (a) From PyPI — simplest, no build step:
+# Default PyPI installation (already included by this requirements file):
 #         pip install tritonparse==0.5.1
 #
-# (b) From this artifact snapshot — keeps the library and the bundled tests/ in sync.
-#     REQUIRED WORKAROUND: the project versions itself with setuptools-scm, which needs
-#     git metadata.  A Zenodo/GitHub zip has no .git, so a plain `pip install .` fails
-#     with "setuptools-scm was unable to detect version".  Pretend the version instead:
+# Optional source installation, after setting up these dependencies: run from the
+# repository root. setuptools-scm needs an explicit version when .git is absent:
 #
-#         SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRITONPARSE=0.5.1 pip install <repo-root>
+#         SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRITONPARSE=0.5.1 pip install .
 #
-# Option (b) is what the AE scripts assume, because 00_kick_the_tires.sh also runs the
-# repository's own tests/cpu suite and those must match the installed library.
+# This source-build workaround is not needed for the default PyPI installation.
 tritonparse==0.5.1
