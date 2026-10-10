@@ -6,8 +6,8 @@
 # (`tritonparseoss diff` produces the per-IR-stage comparison and the per-Python-line
 # attribution).  What they cannot check is the thing paper 3.3 actually describes: an
 # interactive interface for inspecting a kernel across IR levels.  That is a visual
-# claim, so this script does the part a machine can do -- build the interface from source
-# and prove the build is usable -- and then hands you the file to look at.
+# claim, so this script builds the interface from source and checks that the output
+# exists. Browser rendering and trace inspection are separate, manual checks below.
 #
 # Optional.  Needs Node.js and npm; nothing else in the artifact does.  environment.yml
 # installs them, so under the conda environment there is nothing extra to do.  If you
@@ -96,59 +96,52 @@ if ! (cd "$WEBSITE" && npm ci --no-audit --no-fund) >/tmp/tp-ui-install.log 2>&1
 fi
 ok "dependencies installed"
 
-# build:single inlines the whole application into one HTML file, so what you open has
-# no local server and no external assets behind it.
-if ! (cd "$WEBSITE" && npm run build:single) >/tmp/tp-ui-build.log 2>&1; then
+# Use the normal Vite build and serve its complete output over HTTP. The single-file
+# packager runs the application before the page's root element exists (React #299).
+if ! (cd "$WEBSITE" && npm run build) >/tmp/tp-ui-build.log 2>&1; then
     bad "build failed — see /tmp/tp-ui-build.log"
     tail -20 /tmp/tp-ui-build.log | sed 's/^/    /'
     exit 1
 fi
 
-HTML="$WEBSITE/dist/standalone.html"
-if [[ ! -f "$HTML" ]]; then
-    bad "build reported success but $HTML is missing"
+HTML="$WEBSITE/dist/index.html"
+if [[ ! -s "$HTML" ]] || ! compgen -G "$WEBSITE/dist/assets/*.js" >/dev/null; then
+    bad "build reported success but index.html or JavaScript assets are missing"
     exit 1
 fi
-SIZE=$(stat -c%s "$HTML" 2>/dev/null || stat -f%z "$HTML")
-if [[ "$SIZE" -lt 200000 ]]; then
-    bad "standalone.html is only $SIZE bytes — the application does not look inlined"
-    exit 1
-fi
-ok "standalone.html built ($(numfmt --to=iec "$SIZE" 2>/dev/null || echo "$SIZE B"))"
-
-# Self-containment is the property that makes this openable straight from disk.
-EXTERNAL=$(grep -oE '(src|href)="(\./|/|assets/)[^"]*"' "$HTML" 2>/dev/null | wc -l)
-if [[ "$EXTERNAL" -gt 0 ]]; then
-    echo "  note: $EXTERNAL relative asset reference(s) remain; serve dist/ over HTTP if"
-    echo "        opening the file directly does not work."
-else
-    ok "self-contained — no local assets to serve alongside it"
-fi
+ok "multi-file site built in $WEBSITE/dist (index.html and assets/)"
 
 # ------------------------------------------------------------------------- inspect
 step "3/3" "What to look at"
 
 cat <<INSPECT
-  Open this file in a browser:
+  Start the local HTTP server and leave that terminal running:
 
-      file://$HTML
+      npm --prefix "$WEBSITE" run preview -- --host 127.0.0.1 --port 4173 --strictPort
+
+  Open this URL in a browser on the same machine:
+
+      http://127.0.0.1:4173/
+
+  If the server is remote, forward port 4173 to your browser's machine first.
+  Keep the complete dist/ directory together; opening index.html with file:// is
+  blocked by browser CORS rules. The PASS above checks the build output, not rendering.
 
   Then load the trace that ships with the artifact:
 
       ${TRACE:-<trace not found — run 00_kick_the_tires.sh first>}
 
-  Paper 3.3 claims the Review stage lets a developer inspect one kernel across every
-  IR level at once.  Things to check, and where they appear in the paper:
+  Paper 3.3 describes inspecting a kernel across IR levels. Check these interactions
+  in the browser:
 
-    * the IR panes -- Python source, TTIR, TTGIR, LLIR and PTX for the same kernel,
-      side by side  (3.3, and the pipeline figure in 2)
+    * IR Code -- select TTIR, TTGIR, LLIR and PTX in the two IR selectors, alongside
+      the Python source for the same kernel  (3.3, and the pipeline figure in 2)
     * click a line in one pane and see the corresponding lines highlight in the
       others -- this is the source mapping the Reconstruct stage builds  (3.2, 3.3)
     * the launch view -- the five compilations in this trace, with their differing
       constexpr values and launch counts  (3.3)
-    * the diff view -- select two compilations of matmul_kernel and compare them; the
-      same comparison 00_kick_the_tires.sh prints on the console is what drives the
-      two case studies in 5.1 and 5.2
+    * File Diff -- load the shipped trace on both sides, select two different
+      compilations of matmul_kernel and compare their IRs  (3.3, 5.1, 5.2)
 
   Nothing is uploaded: the file is a static page and the trace is read locally.
 

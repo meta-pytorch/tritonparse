@@ -181,7 +181,7 @@ should see.
 |----|-------------|-------|--------------|-----------------|
 | **C1** | A single capture yields TTIR → TTGIR → LLIR → PTX/AMDGCN plus launch metadata | §3.1 | `01_gpu_core.sh` step 1 | every compilation carries all 4 stages; per-stage line counts printed |
 | **C2** | Reconstruct turns raw logs into a compact, IR-mapped archive | §3.2 | `00_kick_the_tires.sh` steps 1–2 | archive + `log_file_list.json`; kernel/launch inventory |
-| **C3** | Review compares compilations across IR levels (the mechanism behind both case studies) | §3.3, §5.1, §5.2 | `00_kick_the_tires.sh` step 3 (data layer), `02_review_ui.sh` (interface) | per-stage IR diff (TTIR/TTGIR/LLIR/PTX) and per-Python-line attribution; the interface builds to one self-contained HTML file you open on the shipped trace |
+| **C3** | Review compares compilations across IR levels (the mechanism behind both case studies) | §3.3, §5.1, §5.2 | `00_kick_the_tires.sh` step 3 (data layer), `02_review_ui.sh` (interface) | per-stage IR diff (TTIR/TTGIR/LLIR/PTX) and per-Python-line attribution; serve the built interface over HTTP and open the shipped trace |
 | **C4** | A generated reproducer is minimal and runs standalone | §3.4 | `00_kick_the_tires.sh` step 4 (generate), `01_gpu_core.sh` step 3 (execute) | a single file of roughly 750–780 lines, no import of the original workload, exits 0 from a clean directory |
 | **C6** | Two-stage log-size reduction, 57.4× on NVIDIA | §4.3, Fig. 3 | `01_gpu_core.sh` step 2 | reconstruct ratio in the same order of magnitude (we measure 74–77× on an H100) |
 | **C8** | assert / IMA / hang all reproduce (15/15 mutations) | §4.4, Listing 1 | `01_gpu_core.sh` step 4 | 3/3 bug classes reproduced at miniature scale |
@@ -404,11 +404,29 @@ visual. The artifact splits it:
   `tritonparseoss diff`, which produces the per-IR-stage comparison and the
   per-Python-line attribution that the interface renders — and that both case studies
   in §5.1 and §5.2 rely on.
-- **The interface you build and look at.** `./asplos2027-ae/02_review_ui.sh` builds it
-  from `website/` into a single self-contained `standalone.html` (~1 min once npm has a
-  cache; the first run also downloads ~300 MB of npm packages), verifies the build is
-  usable, and tells you which trace to load and what to look for. Node.js is the only
-  dependency in the whole artifact that this needs; `environment.yml` supplies it.
+- **The interface you build and look at.** `./asplos2027-ae/02_review_ui.sh` runs the
+  default `npm run build` in `website/`, producing `dist/index.html` and its assets
+  (~1 min once npm has a cache; the first run also downloads ~300 MB of npm packages).
+  It checks that the build output exists and prints the trace to load and the browser
+  interactions to inspect. A build PASS does not verify rendering. Node.js is the only
+  additional dependency this step needs; `environment.yml` supplies it.
+
+From the repository root, start the local HTTP server and leave it running:
+
+```bash
+npm --prefix website run preview -- --host 127.0.0.1 --port 4173 --strictPort
+```
+
+Open <http://127.0.0.1:4173/> and load the reference trace printed by the build script.
+Keep the complete `website/dist/` directory together. Directly opening `index.html`
+with `file://` blocks script loading under browser CORS rules. If the server runs on
+a remote machine, forward port 4173 to the machine running your browser.
+The File Diff view loads Monaco from `cdn.jsdelivr.net`, so that host must be reachable
+when using the diff editor. Trace contents are processed locally in the browser.
+
+Use this multi-file build for the artifact. The single-file packager used by
+`build:single` starts React before the page's root element exists, producing a blank
+page with React error #299 even when `standalone.html` is served over HTTP.
 
 The same interface is hosted at **<https://meta-pytorch.org/tritonparse/>** if you would
 rather not build it. Either way, all processing happens in your browser and the trace is
