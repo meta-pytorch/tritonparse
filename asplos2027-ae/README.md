@@ -411,9 +411,13 @@ visual. The artifact splits it:
   interactions to inspect. A build PASS does not verify rendering. Node.js is the only
   additional dependency this step needs; `environment.yml` supplies it.
 
-From the repository root, start the local HTTP server and leave it running:
+From the repository root, activate the artifact environment in the current terminal,
+then start the local HTTP server and leave it running. The build script activates the
+environment only for its own process, so this step makes the environment's Node.js
+available to the preview command as well:
 
 ```bash
+source ./asplos2027-ae/scripts/activate_env.sh
 npm --prefix website run preview -- --host 127.0.0.1 --port 4173 --strictPort
 ```
 

@@ -115,8 +115,10 @@ ok "multi-file site built in $WEBSITE/dist (index.html and assets/)"
 step "3/3" "What to look at"
 
 cat <<INSPECT
-  Start the local HTTP server and leave that terminal running:
+  Activate the artifact environment in this terminal, then start the HTTP server
+  and leave it running:
 
+      source "$HERE/scripts/activate_env.sh"
       npm --prefix "$WEBSITE" run preview -- --host 127.0.0.1 --port 4173 --strictPort
 
   Open this URL in a browser on the same machine:
