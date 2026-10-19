@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from enum import Enum
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -119,6 +119,7 @@ set_runtime_sass_dump_override(
 
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
+_restore_jit_call_hook: Optional[Callable[[], None]] = None
 # Set once the first oversized launch "function" handle is summarized, so the
 # message is emitted once per process instead of once per kernel launch.
 _logged_oversized_launch_function = False
@@ -542,7 +543,7 @@ def convert(obj):
         A serializable version of the input object where dataclasses are converted to dictionaries
     """
     import torch
-    from triton.language.core import dtype
+    from triton.language.core import constexpr, dtype
 
     # 1. primitives that JSON already supports  -------------------------------
     if obj is None or isinstance(obj, (bool, int, str)):
@@ -591,6 +592,9 @@ def convert(obj):
         return layout_info
 
     # 4. Common Triton constexpr objects
+    if isinstance(obj, constexpr):
+        return convert(obj.value)
+
     if isinstance(obj, dtype):
         return f"triton.language.core.dtype('{str(obj)}')"
 
@@ -1661,14 +1665,20 @@ def extract_arg_info(arg_dict):
         Dictionary with extracted argument information including tensor properties
     """
     import torch
+    from triton.language.core import constexpr
 
     extracted_args = {}
 
     for arg_name, arg_value in arg_dict.items():
         arg_info = {}
 
+        # Record a tl.constexpr object's wrapped value like a plain argument,
+        # flagged so the reproducer wraps it again.
+        if isinstance(arg_value, constexpr):
+            arg_info = extract_arg_info({arg_name: arg_value.value})[arg_name]
+            arg_info["constexpr"] = True
         # Check if it's a PyTorch tensor
-        if isinstance(arg_value, torch.Tensor):
+        elif isinstance(arg_value, torch.Tensor):
             arg_info["type"] = "tensor"
             arg_info.update(_log_torch_tensor_info(arg_value))
         # Handle custom Tensor/Storage types from triton_kernels
@@ -1843,20 +1853,23 @@ class JITHookImpl:
         Returns:
             True to continue with compilation, None/False to skip
         """
+        return self._set_launch_metadata(
+            getattr(fn, "jit_function", fn),
+            fn.name if _KERNEL_ALLOWLIST_PATTERNS is not None else None,
+            inductor_args,
+        )
+
+    def _set_launch_metadata(self, function, kernel_name, inductor_args=None):
         # Check kernel allowlist early to avoid unnecessary work
         if _KERNEL_ALLOWLIST_PATTERNS is not None:
-            kernel_name = fn.name
             if not should_trace_kernel(kernel_name, _KERNEL_ALLOWLIST_PATTERNS):
                 # Skip overriding launch_metadata if kernel is not in allowlist
                 return True
 
-        # Get the current launch_metadata function if it exists
-        function = getattr(fn, "jit_function", fn)
-
         current_launch_metadata = getattr(function, "launch_metadata", None)
         if current_launch_metadata is not None:
             log.warning(
-                f"fn {fn} launch_metadata is not None: {current_launch_metadata}. It will be overridden by tritonparse."
+                f"fn {function} launch_metadata is not None: {current_launch_metadata}. It will be overridden by tritonparse."
             )
         metadata_fn = partial(add_launch_metadata, inductor_args=inductor_args)
         function.launch_metadata = metadata_fn
@@ -2053,12 +2066,67 @@ def maybe_enable_trace_launch():
         patch_profiler_schedule()
 
 
+def _patch_jit_call_hook(jit_hook: JITHookImpl) -> Callable[[], None]:
+    """Work around Triton's pre-callback JSON serialization for launch tracing.
+
+    JITFunction._call_hook calls serialize_specialization_data before invoking
+    the registered hook. Serialization failures therefore happen before
+    JITHookImpl or convert can handle the arguments; a fix there is too late.
+    The fbsource channel versions checked when adding this adapter differ:
+
+    * legacy (3.5.0+fb) cannot serialize even tl.constexpr(4).
+    * 3.8 (3.8.0+fb) and beta (3.9.0+fb) support scalar constexpr values, but
+      tl.constexpr(tl.float32) still fails. Their serializer emits
+      {"constexpr": value.value} without recursively converting the nested
+      dtype, so json.dumps raises TypeError. The scalar fix in 3.8 is not
+      sufficient to retire this adapter.
+
+    TritonParse's hook only installs launch_metadata; it does not consume the
+    specialization JSON. Bypass serialization only for this exact hook object
+    and forward every other hook to Triton's original implementation. This
+    leaves the compiler's arguments and constexpr wrappers intact, preserving
+    specialization semantics without changing Triton's source or the global
+    JSON encoder.
+
+    This still replaces a process-wide private Triton method whenever launch
+    tracing is enabled, on every supported channel; it is not scoped to a
+    thread, kernel, or problematic argument. Recheck the private hook contract
+    when upgrading Triton. Cleanup restores the original method only if our
+    wrapper is still installed, to avoid overwriting a later wrapper.
+
+    TODO: Remove this adapter once the minimum supported Triton version handles
+    both scalar constexpr and constexpr-wrapped dtype values before calling the
+    hook. No fixed version cutoff is established by the channels above. Before
+    removal, run tests/gpu/test_constexpr_tracing.py on every supported channel
+    with this adapter removed, verifying fresh compilation, capture, and
+    generated replay preserve argument types, values, and compile hashes.
+    """
+    from triton.runtime.jit import JITFunction
+
+    original_call_hook = JITFunction._call_hook
+
+    @wraps(original_call_hook)
+    def call_hook(function, hook, *args, **kwargs):
+        if hook is jit_hook:
+            # Triton's JitFunctionInfo.name is also taken from fn.__qualname__,
+            # so keep the same kernel name for launch-tracing allowlists.
+            return jit_hook._set_launch_metadata(function, function.fn.__qualname__)
+        return original_call_hook(function, hook, *args, **kwargs)
+
+    def restore():
+        if JITFunction._call_hook is call_hook:
+            JITFunction._call_hook = original_call_hook
+
+    JITFunction._call_hook = call_hook
+    return restore
+
+
 def enable_launch_tracing() -> None:
     """
     Enable launch event tracing.
     """
 
-    global _trace_launch_enabled
+    global _trace_launch_enabled, _restore_jit_call_hook
     if _trace_launch_enabled:
         return
 
@@ -2066,6 +2134,7 @@ def enable_launch_tracing() -> None:
 
     launch_hook = LaunchHookImpl()
     jit_hook = JITHookImpl()
+    _restore_jit_call_hook = _patch_jit_call_hook(jit_hook)
     knobs.runtime.jit_post_compile_hook = jit_hook
     knobs.runtime.launch_enter_hook = launch_hook
 
@@ -2122,7 +2191,7 @@ def disable_launch_tracing() -> None:
     """
     Disable launch event tracing.
     """
-    global _trace_launch_enabled
+    global _trace_launch_enabled, _restore_jit_call_hook
     if not _trace_launch_enabled:
         return
 
@@ -2130,6 +2199,9 @@ def disable_launch_tracing() -> None:
 
     knobs.runtime.jit_post_compile_hook = None
     knobs.runtime.launch_enter_hook = None
+    if _restore_jit_call_hook is not None:
+        _restore_jit_call_hook()
+        _restore_jit_call_hook = None
 
     _trace_launch_enabled = False
     log.debug("[tritonparse] Launch tracing disabled")
@@ -2308,6 +2380,7 @@ def clear_logging_config():
     global _trace_launch_enabled
     global TENSOR_BLOB_MANAGER
     global _kernel_run_counts_per_hash, _save_blobs_for_current_launch
+    disable_launch_tracing()
     # 1. Clean up the log handler
     if TRITON_TRACE_HANDLER is not None:
         if TRITON_TRACE_HANDLER in triton_trace_log.handlers:

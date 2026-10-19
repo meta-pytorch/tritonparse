@@ -23,6 +23,14 @@ from types import SimpleNamespace
 import tritonparse.structured_logging as sl
 
 _HOOK_ENV = "TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK"
+_STUBBED_MODULES = (
+    "torch",
+    "torch._inductor",
+    "torch._inductor.config",
+    "triton",
+    "triton.runtime",
+    "triton.runtime.jit",
+)
 
 
 def _install_torch_stub(*, has_attr: bool = True):
@@ -52,17 +60,21 @@ def _install_triton_stub():
     )
     triton_mod = types.ModuleType("triton")
     triton_mod.knobs = knobs
+    runtime_mod = types.ModuleType("triton.runtime")
+    jit_mod = types.ModuleType("triton.runtime.jit")
+    jit_mod.JITFunction = SimpleNamespace(_call_hook=lambda *args, **kwargs: None)
+    runtime_mod.jit = jit_mod
+    triton_mod.runtime = runtime_mod
     sys.modules["triton"] = triton_mod
+    sys.modules["triton.runtime"] = runtime_mod
+    sys.modules["triton.runtime.jit"] = jit_mod
     return knobs
 
 
 class InductorHookConfigTest(unittest.TestCase):
     def setUp(self):
-        self._saved_modules = {
-            name: sys.modules.get(name)
-            for name in ("torch", "torch._inductor", "torch._inductor.config", "triton")
-        }
-        for name in ("torch", "torch._inductor", "torch._inductor.config", "triton"):
+        self._saved_modules = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
+        for name in _STUBBED_MODULES:
             sys.modules.pop(name, None)
         self._saved_env = os.environ.get(_HOOK_ENV)
         os.environ.pop(_HOOK_ENV, None)
@@ -88,7 +100,7 @@ class InductorHookConfigTest(unittest.TestCase):
             sl.clear_logging_config()
         except Exception:
             pass
-        for name in ("torch", "torch._inductor", "torch._inductor.config", "triton"):
+        for name in _STUBBED_MODULES:
             sys.modules.pop(name, None)
         for name, mod in self._saved_modules.items():
             if mod is not None:

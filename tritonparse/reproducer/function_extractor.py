@@ -77,6 +77,7 @@ def extract_utility_functions(embed_context: bool = False) -> str:
         "_apply_stride_and_offset",
         "_create_base_tensor",
         "_create_tensor",
+        "_create_constexpr_arg",
         "_create_arg_from_info",
     ]
 

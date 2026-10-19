@@ -162,7 +162,10 @@ def create_args_from_json(data):
     extracted_args = data.get("extracted_args", {})
 
     for arg_name, arg_info in extracted_args.items():
-        args_dict[arg_name] = _create_arg_from_info(arg_info)
+        try:
+            args_dict[arg_name] = _create_arg_from_info(arg_info)
+        except NotImplementedError as e:
+            raise NotImplementedError(f"Argument {arg_name!r}: {e}") from e
 
     return grid, args_dict
 
@@ -353,6 +356,58 @@ def _create_tensor(arg_info) -> torch.Tensor:
     return _apply_stride_and_offset(tensor, shape, stride, storage_offset)
 
 
+def _create_constexpr_arg(arg_info):
+    """
+    Rebuild an argument that was launched as a ``tl.constexpr`` object.
+
+    Traces record the wrapped value like a plain argument plus
+    ``"constexpr": true``. Older traces kept only its repr, e.g.
+    ``{"type": "constexpr", "repr": "constexpr[4]"}``; type inference assumes
+    an int, float, bool or None only when its printed value matches exactly.
+    This is a best-effort fallback: strings such as ``"4"`` or ``"True"``
+    have the same repr as their corresponding literals. Re-capture these
+    arguments to preserve their string type.
+
+    Args:
+        arg_info (dict): JSON object describing the argument.
+
+    Returns:
+        tl.constexpr: The recorded value, or the inferred literal for a legacy
+            repr, wrapped for kernel specialization.
+
+    Raises:
+        NotImplementedError: When the wrapped value cannot be rebuilt.
+    """
+    if arg_info.get("type") == "constexpr":
+        arg_repr = arg_info.get("repr") or ""
+        text = None
+        if arg_repr.startswith("constexpr[") and arg_repr.endswith("]"):
+            text = arg_repr[len("constexpr[") : -1]
+        literals = {"True": True, "False": False, "None": None}
+        if text in literals:
+            return tl.constexpr(literals[text])
+        for parse in (int, float):
+            try:
+                value = parse(text)
+            except (TypeError, ValueError):
+                continue
+            if str(value) == text:
+                return tl.constexpr(value)
+        raise NotImplementedError(
+            f"Cannot recover the value of tl.constexpr argument {arg_repr!r}: the "
+            "trace recorded only its repr. Re-capture it with a newer tritonparse."
+        )
+
+    value_info = {k: v for k, v in arg_info.items() if k != "constexpr"}
+    value_type = value_info.get("type")
+    if value_type not in ("NoneType", "int", "bool", "float", "str", "dtype"):
+        raise NotImplementedError(
+            f"Unsupported tl.constexpr argument of type {value_type!r}: "
+            f"{value_info.get('repr')!r}"
+        )
+    return tl.constexpr(_create_arg_from_info(value_info))
+
+
 def _create_arg_from_info(arg_info):
     """
     Recursively construct a kernel argument from its JSON schema.
@@ -370,11 +425,19 @@ def _create_arg_from_info(arg_info):
     """
     arg_type = arg_info.get("type")
 
+    if arg_info.get("constexpr") or arg_type == "constexpr":
+        return _create_constexpr_arg(arg_info)
+
     if arg_type == "NoneType":
         return None
 
-    if arg_type in ["int", "bool", "str", "float"]:
+    if arg_type in ["int", "bool", "str"]:
         return arg_info.get("value")
+
+    elif arg_type == "float":
+        # Non-finite floats are stored as the strings "inf", "-inf" and "nan".
+        value = arg_info.get("value")
+        return float(value) if value is not None else None
 
     elif arg_type == "tensor":
         return _create_tensor(arg_info)

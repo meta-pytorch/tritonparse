@@ -167,6 +167,10 @@
         },
         "value": {
           "description": "Scalar value (for int, float, or bool arguments)."
+        },
+        "constexpr": {
+          "type": "boolean",
+          "description": "True when the argument was passed as a triton.language.constexpr object; the other fields describe the wrapped value."
         }
       }
     }
