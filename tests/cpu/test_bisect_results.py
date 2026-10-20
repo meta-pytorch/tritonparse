@@ -6,6 +6,7 @@ import signal
 import tempfile
 import unittest
 from contextlib import contextmanager
+from itertools import product
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,10 +17,10 @@ from tritonparse.bisect.llvm_bisector import LLVMBisectError, LLVMBisector
 from tritonparse.bisect.triton_bisector import TritonBisectError, TritonBisector
 
 
-def candidate_output(*candidates: str) -> str:
+def candidate_output(*candidates: str, term: str = "bad") -> str:
     return (
         "There are only 'skip'ped commits left to test.\n"
-        "The first bad commit could be any of:\n"
+        f"The first {term} commit could be any of:\n"
         + "\n".join(candidates)
         + "\nWe cannot bisect more!\n"
     )
@@ -27,20 +28,22 @@ def candidate_output(*candidates: str) -> str:
 
 class BisectResultParsingTest(unittest.TestCase):
     def test_unique_full_and_abbreviated_hashes(self):
-        for length in (7, 12, 40):
-            with self.subTest(length=length):
+        for term, length in product(("bad", "'bad'"), (7, 12, 40)):
+            with self.subTest(term=term, length=length):
                 commit = "a" * length
-                result = BisectResult.from_output(f"{commit} is the first bad commit\n")
+                result = BisectResult.from_output(
+                    f"{commit} is the first {term} commit\n"
+                )
                 self.assertEqual(result.status, "found")
                 self.assertEqual(result.culprit, commit)
                 self.assertEqual(result.candidates, [])
 
     def test_skip_candidates_survive_nonzero_git_exit(self):
         candidates = ["a" * 40, "b" * 40, "c" * 40]
-        for exit_code in (0, 2):
-            with self.subTest(exit_code=exit_code):
+        for term, exit_code in product(("bad", "'bad'"), (0, 2)):
+            with self.subTest(term=term, exit_code=exit_code):
                 result = BisectResult.from_output(
-                    candidate_output(*candidates), exit_code
+                    candidate_output(*candidates, term=term), exit_code
                 )
                 self.assertEqual(result.status, "ambiguous")
                 self.assertIsNone(result.culprit)
@@ -49,29 +52,42 @@ class BisectResultParsingTest(unittest.TestCase):
                     self.assertIn(candidate, result.message)
 
     def test_single_skip_candidate_is_still_not_a_confirmed_culprit(self):
-        result = BisectResult.from_output(candidate_output("a" * 40), 2)
-        self.assertEqual(result.status, "ambiguous")
-        self.assertIsNone(result.culprit)
+        for term in ("bad", "'bad'"):
+            with self.subTest(term=term):
+                result = BisectResult.from_output(
+                    candidate_output("a" * 40, term=term), 2
+                )
+                self.assertEqual(result.status, "ambiguous")
+                self.assertIsNone(result.culprit)
+                self.assertEqual(result.candidates, ["a" * 40])
 
     def test_ambiguity_takes_precedence_over_an_earlier_first_bad_line(self):
-        result = BisectResult.from_output(
-            f"{'c' * 40} is the first bad commit\n"
-            + candidate_output("a" * 40, "b" * 40)
-        )
-        self.assertEqual(result.status, "ambiguous")
-        self.assertEqual(result.candidates, ["a" * 40, "b" * 40])
-        self.assertIsNone(result.culprit)
+        for first_term, skip_term in product(("bad", "'bad'"), repeat=2):
+            with self.subTest(first_term=first_term, skip_term=skip_term):
+                result = BisectResult.from_output(
+                    f"{'c' * 40} is the first {first_term} commit\n"
+                    + candidate_output("a" * 40, "b" * 40, term=skip_term)
+                )
+                self.assertEqual(result.status, "ambiguous")
+                self.assertEqual(result.candidates, ["a" * 40, "b" * 40])
+                self.assertIsNone(result.culprit)
 
     def test_failed_command_does_not_promote_a_first_bad_line(self):
-        result = BisectResult.from_output(f"{'a' * 40} is the first bad commit\n", 1)
-        self.assertEqual(result.status, "error")
-        self.assertIsNone(result.culprit)
+        for term in ("bad", "'bad'"):
+            with self.subTest(term=term):
+                result = BisectResult.from_output(
+                    f"{'a' * 40} is the first {term} commit\n", 1
+                )
+                self.assertEqual(result.status, "error")
+                self.assertIsNone(result.culprit)
 
     def test_conflicting_or_unparseable_output_is_an_error(self):
         for output in (
             "",
             "a build completed",
             f"{'a' * 40} is the first bad commit\n{'b' * 40} is the first bad commit\n",
+            f"{'a' * 40} is the first 'bad' commit\n{'b' * 40} is the first 'bad' commit\n",
+            f"{'a' * 40} is the first bad commit\n{'b' * 40} is the first 'bad' commit\n",
         ):
             with self.subTest(output=output):
                 result = BisectResult.from_output(output)

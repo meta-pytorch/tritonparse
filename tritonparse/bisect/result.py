@@ -70,7 +70,7 @@ class BisectResult:
         matches = list(
             dict.fromkeys(
                 re.findall(
-                    r"^([a-f0-9]{7,40}) is the first bad commit\s*$",
+                    r"^([a-f0-9]{7,40}) is the first (?:bad|'bad') commit\s*$",
                     output,
                     flags=re.MULTILINE,
                 )
@@ -94,7 +94,7 @@ class BisectResult:
     def parse_skip_candidates(output: str) -> list[str]:
         markers = list(
             re.finditer(
-                r"^The first bad commit could be any of:\s*$",
+                r"^The first (?:bad|'bad') commit could be any of:\s*$",
                 output,
                 flags=re.MULTILINE,
             )
