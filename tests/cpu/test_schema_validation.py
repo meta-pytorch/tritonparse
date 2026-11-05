@@ -177,6 +177,15 @@ class ValidateRecordTest(unittest.TestCase):
                     "before_stage": "ttir",
                     "optimized": False,
                 },
+                "compiler_identity": {
+                    "triton_version": "3.8.0",
+                    "src_hash": "source-hash",
+                    "fb_version_info": {
+                        "internal_version_label": "beta",
+                        "oss_version": "20261008",
+                        "upstream_hash": "upstream-hash",
+                    },
+                },
             },
         }
         is_valid, errors = validate_record(record)

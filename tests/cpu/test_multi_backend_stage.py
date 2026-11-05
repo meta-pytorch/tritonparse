@@ -1,9 +1,12 @@
+import copy
+import importlib.util
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from tritonparse.backend import (
@@ -1127,6 +1130,136 @@ class TestStageParserContract(unittest.TestCase):
                     checked.add(stage.name)
         self.assertIn("llir", checked, "llir not exercised by this fixture")
         self.assertGreaterEqual(len(checked), 3, f"only checked {checked}")
+
+
+class TestCompilerIdentity(unittest.TestCase):
+    def _load_package(self, package_dir: Path, name: str) -> ModuleType:
+        spec = importlib.util.spec_from_file_location(
+            name,
+            package_dir / "__init__.py",
+            submodule_search_locations=[str(package_dir)],
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        self.addCleanup(sys.modules.pop, name, None)
+        spec.loader.exec_module(module)
+        return module
+
+    def _write_package(self, root: Path, name: str = "fake_triton_pkg") -> Path:
+        package_dir = root / "triton"
+        package_dir.mkdir(parents=True)
+        (package_dir / "__init__.py").write_text(
+            '__version__ = "3.8.0"\n', encoding="utf-8"
+        )
+        return package_dir
+
+    def test_reads_packaged_identity_from_real_package(self):
+        from tritonparse import compiler_identity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = self._write_package(Path(tmp))
+            (package_dir / "src_hash.txt").write_text("source-hash\n", encoding="utf-8")
+            (package_dir / "fb_version_info.json").write_text(
+                json.dumps(
+                    {
+                        "internal_version_label": "beta",
+                        "oss_version": "20261008",
+                        "upstream_hash": "upstream-hash",
+                        "ignored": "not part of the contract",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            triton_module = self._load_package(package_dir, "fake_triton_pkg")
+            identity = compiler_identity._build_compiler_identity(triton_module)
+
+        self.assertEqual(
+            identity,
+            {
+                "triton_version": "3.8.0",
+                "src_hash": "source-hash",
+                "fb_version_info": {
+                    "internal_version_label": "beta",
+                    "oss_version": "20261008",
+                    "upstream_hash": "upstream-hash",
+                },
+            },
+        )
+
+    def test_unreadable_packaged_files_drop_only_their_fields(self):
+        from tritonparse import compiler_identity
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = self._write_package(Path(tmp), "fake_triton_bad_pkg")
+            (package_dir / "src_hash.txt").write_bytes(b"\xff\xfe not utf-8")
+            (package_dir / "fb_version_info.json").write_text(
+                "{not json", encoding="utf-8"
+            )
+            triton_module = self._load_package(package_dir, "fake_triton_bad_pkg")
+            identity = compiler_identity._build_compiler_identity(triton_module)
+
+        self.assertEqual(identity, {"triton_version": "3.8.0"})
+
+    def test_missing_version_is_unknown(self):
+        from tritonparse import compiler_identity
+
+        triton_module = ModuleType("triton")
+        triton_module.__file__ = "/nonexistent/triton/__init__.py"
+
+        self.assertEqual(
+            compiler_identity._build_compiler_identity(triton_module),
+            {"triton_version": "unknown"},
+        )
+
+    def test_identity_is_computed_once_and_returned_by_value(self):
+        from tritonparse import compiler_identity
+
+        compiler_identity._get_compiler_identity.cache_clear()
+        triton_module = ModuleType("triton")
+        expected = {"triton_version": "test", "fb_version_info": {"x": "y"}}
+        try:
+            with (
+                patch.dict(sys.modules, {"triton": triton_module}),
+                patch.object(
+                    compiler_identity,
+                    "_build_compiler_identity",
+                    side_effect=lambda module: copy.deepcopy(expected),
+                ) as build_identity,
+            ):
+                first = compiler_identity.get_compiler_identity()
+                first["fb_version_info"]["x"] = "changed"
+                second = compiler_identity.get_compiler_identity()
+
+            build_identity.assert_called_once_with(triton_module)
+            self.assertEqual(second, expected)
+        finally:
+            compiler_identity._get_compiler_identity.cache_clear()
+
+    def test_failed_identity_is_cached_as_unknown(self):
+        from tritonparse import compiler_identity
+
+        compiler_identity._get_compiler_identity.cache_clear()
+        triton_module = ModuleType("triton")
+        try:
+            with (
+                patch.dict(sys.modules, {"triton": triton_module}),
+                patch.object(
+                    compiler_identity,
+                    "_build_compiler_identity",
+                    side_effect=RuntimeError("probe failed"),
+                ) as build_identity,
+            ):
+                with self.assertLogs(compiler_identity.log, level="WARNING"):
+                    first = compiler_identity.get_compiler_identity()
+                second = compiler_identity.get_compiler_identity()
+
+            build_identity.assert_called_once_with(triton_module)
+            self.assertEqual(first, {"triton_version": "unknown"})
+            self.assertEqual(second, {"triton_version": "unknown"})
+        finally:
+            compiler_identity._get_compiler_identity.cache_clear()
 
 
 if __name__ == "__main__":

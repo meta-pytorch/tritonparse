@@ -28,6 +28,7 @@ import zstandard as zstd  # @manual=fbsource//third-party/pypi/zstandard:zstanda
 # a top-level `import torch` here would create a circular import. See D100891381
 # for the original incident and D105172002 for the torch-side workaround.
 from tritonparse._json_compat import dumps, loads
+from tritonparse.compiler_identity import get_compiler_identity
 from tritonparse.kernel_filter import (
     first_matching_kernel_pattern,
     parse_kernel_patterns,
@@ -1682,6 +1683,7 @@ def maybe_trace_triton(
 
     # Initialize a dictionary with defaultdict to avoid key errors
     trace_data = defaultdict(dict)
+    trace_data["compiler_identity"] = get_compiler_identity()
     # Add cache_hit to metadata
     trace_data["metadata"]["cache_hit"] = cache_hit
     if not metadata:

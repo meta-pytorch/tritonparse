@@ -155,6 +155,10 @@
           "$ref": "#/definitions/InputIR",
           "description": "Input artifact for a compilation that starts from IR rather than an AST."
         },
+        "compiler_identity": {
+          "$ref": "#/definitions/CompilerIdentity",
+          "description": "Build identity of the Triton compiler that produced this event."
+        },
         "python_source": {
           "$ref": "#/definitions/PythonSource",
           "description": "Python source code of the Triton kernel function."
@@ -292,6 +296,30 @@
         "ir_kind": { "type": "string" },
         "producer": { "type": "string" },
         "language": { "type": "string" }
+      }
+    },
+    "CompilerIdentity": {
+      "type": "object",
+      "description": "Version and content hashes that identify a Triton compiler build.",
+      "required": ["triton_version"],
+      "additionalProperties": false,
+      "properties": {
+        "triton_version": {
+          "type": "string"
+        },
+        "src_hash": {
+          "type": "string",
+          "description": "SHA-256 identity generated from the Triton source tree."
+        },
+        "fb_version_info": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "internal_version_label": { "type": "string" },
+            "oss_version": { "type": "string" },
+            "upstream_hash": { "type": "string" }
+          }
+        }
       }
     },
     "PtInfo": {
