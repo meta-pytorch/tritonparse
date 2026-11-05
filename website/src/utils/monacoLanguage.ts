@@ -1,4 +1,4 @@
-import { getIRStageDescriptor, type IRStageDescriptor } from "./dataLoader";
+import { getIRStageDescriptor, type IRStageDescriptor } from "./dataLoader.ts";
 
 /**
  * Monaco language ids provided by the IR migration (§4.6).
@@ -61,13 +61,21 @@ export function mapFileToMonacoLanguage(
   }
 
   const lower = filename.toLowerCase();
-  if (lower.endsWith("ttgir") || lower.endsWith("ttir")) {
+  if (
+    lower.endsWith("ttgir") ||
+    lower.endsWith("ttir") ||
+    lower.endsWith("mlir")
+  ) {
     return MONACO_LANGUAGE_IDS.mlir;
   } else if (lower.endsWith("llir")) {
     return MONACO_LANGUAGE_IDS.llvm;
   } else if (lower.endsWith("ptx")) {
     return MONACO_LANGUAGE_IDS.ptx;
-  } else if (lower.endsWith("amdgcn") || lower.endsWith("sass")) {
+  } else if (
+    lower.endsWith("amdgcn") ||
+    lower.endsWith("sass") ||
+    lower.endsWith("cubin")
+  ) {
     return MONACO_LANGUAGE_IDS.asm;
   } else if (lower === "python") {
     return MONACO_LANGUAGE_IDS.python;

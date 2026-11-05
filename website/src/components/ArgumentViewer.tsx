@@ -219,6 +219,9 @@ const ArgumentRow: React.FC<{
         );
     }
     // Case 3: This is a simple argument (in the "Sames" table)
+    const displayValue = argData.value !== undefined
+        ? argData.value
+        : (argData.repr ?? argData);
     return (
         <div className="flex items-start space-x-4 p-2 border-b border-gray-200 last:border-b-0">
             <div className="w-48 flex-shrink-0 font-semibold text-gray-800 break-all">
@@ -228,8 +231,8 @@ const ArgumentRow: React.FC<{
                 {argData.type}
             </div>
             <div className="flex-1 font-mono text-sm">
-                {typeof argData.value !== "object" || argData.value === null ? (
-                    <span>{String(argData.value)}</span>
+                {typeof displayValue !== "object" || displayValue === null ? (
+                    <span>{String(displayValue)}</span>
                 ) : (
                     <pre className="text-xs whitespace-pre-wrap break-all">
                         {JSON.stringify(argData, null, 2)}

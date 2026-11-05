@@ -96,13 +96,15 @@ test("legacy extension fallback without stages (old traces)", () => {
     ["k.ttgir", MONACO_LANGUAGE_IDS.mlir],
     ["k.ttir", MONACO_LANGUAGE_IDS.mlir],
     ["K.TTGIR", MONACO_LANGUAGE_IDS.mlir],
+    ["k.mlir", MONACO_LANGUAGE_IDS.mlir],
+    ["K.MLIR", MONACO_LANGUAGE_IDS.mlir],
     ["k.llir", MONACO_LANGUAGE_IDS.llvm],
     ["k.ptx", MONACO_LANGUAGE_IDS.ptx],
     ["k.amdgcn", MONACO_LANGUAGE_IDS.asm],
     ["k.sass", MONACO_LANGUAGE_IDS.asm],
     ["python", MONACO_LANGUAGE_IDS.python],
     ["k.json", MONACO_LANGUAGE_IDS.plaintext],
-    ["k.cubin", MONACO_LANGUAGE_IDS.plaintext],
+    ["k.cubin", MONACO_LANGUAGE_IDS.asm],
     ["k.unknown", MONACO_LANGUAGE_IDS.plaintext],
   ];
   for (const [filename, expected] of cases) {

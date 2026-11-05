@@ -318,6 +318,7 @@ export interface ExtractedArg {
     type: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     value?: any; // Dynamic value from trace - type varies
+    repr?: string;
     length?: number;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     [key: string]: any; // Allow additional unknown fields from trace
@@ -741,11 +742,18 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 continue;
             }
 
-            if (!entry.payload.file_path || !entry.payload.file_content) {
+            // Only file_content is required: some backends (e.g. CuTeDSL) emit
+            // IR text from memory with no on-disk file_path, whose values
+            // are unused downstream.
+            if (!entry.payload.file_content) {
                 continue;
             }
 
-            const irFileNames = Object.keys(entry.payload.file_path);
+            // file_content keys are the same IR filenames; use them when the
+            // backend emits no on-disk file_path.
+            const irFileNames = Object.keys(
+                entry.payload.file_path ?? entry.payload.file_content ?? {}
+            );
             let kernelName = "unknown_kernel";
             if (irFileNames.length > 0) {
                 const fileName = irFileNames[0];
@@ -770,7 +778,7 @@ export function processKernelData(logEntries: LogEntry[]): ProcessedKernel[] {
                 ) || [],
                 stack: entry.stack || [],
                 irFiles: entry.payload.file_content,
-                filePaths: entry.payload.file_path,
+                filePaths: entry.payload.file_path ?? {},
                 sourceMappings,
                 pythonSourceInfo: entry.payload.python_source,
                 metadata: pruneRedundantAsm(
