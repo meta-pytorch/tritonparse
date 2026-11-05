@@ -23,8 +23,15 @@ interface CodeViewProps {
 function findDefaultIRFiles(irFiles: string[], irStages?: IRStageDescriptor[]): { left: string; right: string } {
   const defaultPanels = getDefaultPanels(irStages);
 
-  const leftFile = irFiles.find(key => key.toLowerCase().includes(defaultPanels.left));
-  const rightFile = irFiles.find(key => key.toLowerCase().includes(defaultPanels.right));
+  const findStageFile = (stageName: string): string | undefined => {
+    const stage = irStages?.find(candidate => candidate.name === stageName);
+    if (stage) {
+      return irFiles.find(key => key.toLowerCase().endsWith(stage.extension.toLowerCase()));
+    }
+    return irFiles.find(key => key.toLowerCase().includes(stageName));
+  };
+  const leftFile = findStageFile(defaultPanels.left);
+  const rightFile = findStageFile(defaultPanels.right);
 
   const left = leftFile || irFiles[0] || "";
   const right = rightFile || irFiles[1] || irFiles[0] || "";
@@ -76,14 +83,14 @@ const CodeViewInner: React.FC<{
   const leftPanel = useMemo(() => ({
     code: {
       content: kernel.irFiles[leftIR],
-      source_mapping: kernel.sourceMappings?.[getIRType(leftIR)] || {}
+      source_mapping: kernel.sourceMappings?.[getIRType(leftIR, kernel.ir_stages)] || {}
     },
     title: leftIR
   }), [kernel, leftIR]);
   const rightPanel = useMemo(() => ({
     code: {
       content: kernel.irFiles[rightIR],
-      source_mapping: kernel.sourceMappings?.[getIRType(rightIR)] || {}
+      source_mapping: kernel.sourceMappings?.[getIRType(rightIR, kernel.ir_stages)] || {}
     },
     title: rightIR
   }), [kernel, rightIR]);

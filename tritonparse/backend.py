@@ -277,6 +277,22 @@ class CompilationPipelineAdapter(ABC):
                 return stage
         return None
 
+    def get_stage_by_extension(self, extension: str) -> IRStageDescriptor | None:
+        """Resolve a stage by its artifact extension.
+
+        A stage's logical name normally matches its filename extension, but
+        that is not a contract.  In particular, Triton's ``.source`` cache
+        artifact represents pre-optimization IR and therefore has a more
+        descriptive logical stage name.
+        """
+        normalized = extension.lower()
+        if not normalized.startswith("."):
+            normalized = f".{normalized}"
+        for stage in self.list_ir_stages():
+            if stage.extension.lower() == normalized:
+                return stage
+        return None
+
     # -- Parser methods -------------------------------------------------------
 
     def get_parser(self, parser_id: str) -> Callable:
@@ -530,6 +546,16 @@ class NvidiaTritonAdapter(CompilationPipelineAdapter):
         # Pre-initialize stage descriptors (immutable objects, can be reused)
         self._stages = [
             IRStageDescriptor(
+                "pre_opt_ir",
+                ".source",
+                "Pre-optimization IR",
+                0,
+                True,
+                True,
+                "generic_loc",
+                "mlir",
+            ),
+            IRStageDescriptor(
                 "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
             ),
             IRStageDescriptor(
@@ -577,6 +603,16 @@ class AmdTritonAdapter(CompilationPipelineAdapter):
 
         # Pre-initialize stage descriptors (immutable objects, can be reused)
         self._stages = [
+            IRStageDescriptor(
+                "pre_opt_ir",
+                ".source",
+                "Pre-optimization IR",
+                0,
+                True,
+                True,
+                "generic_loc",
+                "mlir",
+            ),
             IRStageDescriptor(
                 "ttir", ".ttir", "TTIR", 10, True, True, "generic_loc", "mlir"
             ),

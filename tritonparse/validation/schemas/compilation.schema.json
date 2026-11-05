@@ -147,6 +147,14 @@
           "description": "Paths to IR artifact files on disk.",
           "additionalProperties": { "type": "string" }
         },
+        "pre_opt_ir": {
+          "$ref": "#/definitions/PreOptimizationIR",
+          "description": "IR emitted by AST lowering before the first backend optimization stage."
+        },
+        "input_ir": {
+          "$ref": "#/definitions/InputIR",
+          "description": "Input artifact for a compilation that starts from IR rather than an AST."
+        },
         "python_source": {
           "$ref": "#/definitions/PythonSource",
           "description": "Python source code of the Triton kernel function."
@@ -234,6 +242,56 @@
           "type": "string",
           "description": "Identifier for the syntax highlighting mode to use."
         }
+      }
+    },
+    "PreOptimizationIR": {
+      "type": "object",
+      "description": "Identity and semantics of Triton's .source cache artifact.",
+      "required": ["file", "stage", "ir_kind", "producer", "language", "before_stage", "optimized"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Filename used as the key in file_content and file_path."
+        },
+        "stage": {
+          "type": "string",
+          "description": "Logical stage name, such as ttir_pre_opt."
+        },
+        "ir_kind": {
+          "type": "string",
+          "description": "IR dialect or stage family produced by AST lowering, such as ttir or ttgir."
+        },
+        "producer": {
+          "type": "string",
+          "description": "Compiler entry point that produced the artifact."
+        },
+        "language": {
+          "type": "string",
+          "description": "Input language, such as triton or gluon."
+        },
+        "before_stage": {
+          "type": "string",
+          "description": "Backend stage whose pass pipeline consumes this artifact."
+        },
+        "optimized": {
+          "type": "boolean",
+          "enum": [false],
+          "description": "False because this artifact precedes the backend stage pass pipeline."
+        }
+      }
+    },
+    "InputIR": {
+      "type": "object",
+      "description": "Identity of an IRSource input artifact.",
+      "required": ["file", "stage", "ir_kind", "producer", "language"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "stage": { "type": "string" },
+        "ir_kind": { "type": "string" },
+        "producer": { "type": "string" },
+        "language": { "type": "string" }
       }
     },
     "PtInfo": {

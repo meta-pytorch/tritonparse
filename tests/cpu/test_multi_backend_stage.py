@@ -1,5 +1,9 @@
+import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tritonparse.backend import (
@@ -15,6 +19,7 @@ from tritonparse.parse.ir_analysis import _generate_ir_analysis
 from tritonparse.parse.trace_processor import (
     _resolve_source_mappable_stage_keys,
     generate_source_mappings,
+    parse_single_trace_content,
 )
 from tritonparse.shared_vars import (
     get_enabled_analyses,
@@ -24,6 +29,155 @@ from tritonparse.shared_vars import (
 
 
 class TestMultiBackendStage(unittest.TestCase):
+    def test_pre_opt_stage_has_a_semantic_name(self):
+        for adapter in (NvidiaTritonAdapter(), AmdTritonAdapter()):
+            stage = adapter.get_stage_by_extension(".source")
+            self.assertIsNotNone(stage)
+            self.assertEqual(stage.name, "pre_opt_ir")
+            self.assertEqual(stage.display_order, 0)
+            self.assertTrue(stage.supports_source_mapping)
+
+    def test_source_artifact_is_captured_and_labeled_as_ttir_pre_opt(self):
+        from tritonparse import structured_logging
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "kernel.source"
+            source_ir = '%0 = arith.muli %arg0, %c4_i32 : i32 loc("k.py":7:8)'
+            source_path.write_text(source_ir, encoding="utf-8")
+            payload = {
+                "metadata": {"backend_name": "cuda"},
+                "file_path": {},
+                "file_content": {},
+            }
+            metadata_group = {"kernel.source": str(source_path)}
+            src = SimpleNamespace(
+                ext="ttir",
+                language=SimpleNamespace(name="TRITON"),
+            )
+
+            with patch.object(structured_logging, "TRITONPARSE_DUMP_SOURCE_IR", True):
+                structured_logging.extract_file_content(payload, metadata_group, "cuda")
+                structured_logging._extract_compilation_input_metadata(
+                    payload, src, metadata_group
+                )
+
+            self.assertEqual(payload["file_content"]["kernel.source"], source_ir)
+            self.assertEqual(
+                payload["pre_opt_ir"],
+                {
+                    "file": "kernel.source",
+                    "stage": "ttir_pre_opt",
+                    "ir_kind": "ttir",
+                    "producer": "SimpleNamespace.make_ir",
+                    "language": "triton",
+                    "before_stage": "ttir",
+                    "optimized": False,
+                },
+            )
+
+    def test_source_artifact_capture_can_be_disabled(self):
+        from tritonparse import structured_logging
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "kernel.source"
+            source_path.write_text("module {}", encoding="utf-8")
+            payload = {
+                "metadata": {"backend_name": "cuda"},
+                "file_path": {},
+                "file_content": {},
+            }
+            metadata_group = {"kernel.source": str(source_path)}
+            src = SimpleNamespace(
+                ext="ttir",
+                language=SimpleNamespace(name="TRITON"),
+            )
+
+            with patch.object(structured_logging, "TRITONPARSE_DUMP_SOURCE_IR", False):
+                structured_logging.extract_file_content(payload, metadata_group, "cuda")
+                structured_logging._extract_compilation_input_metadata(
+                    payload, src, metadata_group
+                )
+
+            self.assertNotIn("kernel.source", payload["file_content"])
+            self.assertNotIn("pre_opt_ir", payload)
+
+    def test_ir_source_is_labeled_as_compilation_input(self):
+        from tritonparse import structured_logging
+
+        payload = {"metadata": {}, "file_path": {}, "file_content": {}}
+        src = SimpleNamespace(
+            ext="ttgir",
+            language=SimpleNamespace(name="TRITON"),
+            path="input.ttgir",
+        )
+
+        structured_logging._extract_compilation_input_metadata(
+            payload, src, {"input.ttgir": "/tmp/input.ttgir"}
+        )
+
+        self.assertEqual(
+            payload["input_ir"],
+            {
+                "file": "input.ttgir",
+                "stage": "ttgir",
+                "ir_kind": "ttgir",
+                "producer": "SimpleNamespace.make_ir",
+                "language": "triton",
+            },
+        )
+
+    def test_processed_source_artifact_uses_logical_stage_name(self):
+        source_ir = "\n".join(
+            [
+                '#loc1 = loc("kernel.py":7:8)',
+                "%0 = arith.muli %arg0, %c4_i32 : i32 loc(#loc1)",
+            ]
+        )
+        entry = {
+            "event_type": "compilation",
+            "payload": {
+                "metadata": {"backend_name": "cuda"},
+                "file_content": {
+                    "kernel.source": source_ir,
+                    "kernel.ttir": source_ir,
+                },
+                "file_path": {},
+                "pre_opt_ir": {
+                    "file": "kernel.source",
+                    "stage": "ttir_pre_opt",
+                    "ir_kind": "ttir",
+                    "producer": "ASTSource.make_ir",
+                    "language": "triton",
+                    "before_stage": "ttir",
+                    "optimized": False,
+                },
+            },
+        }
+
+        stage_keys = _resolve_source_mappable_stage_keys(entry)
+        self.assertEqual(stage_keys["ttir_pre_opt"], "kernel.source")
+        processed = json.loads(parse_single_trace_content(json.dumps(entry)))
+        payload = processed["payload"]
+        self.assertIn("ttir_pre_opt", payload["source_mappings"])
+        source_stage = next(
+            stage for stage in payload["ir_stages"] if stage["extension"] == ".source"
+        )
+        self.assertEqual(source_stage["name"], "ttir_pre_opt")
+        self.assertEqual(source_stage["display_name"], "TTIR (pre-optimization)")
+
+    def test_old_trace_without_source_does_not_advertise_pre_opt_stage(self):
+        entry = {
+            "event_type": "compilation",
+            "payload": {
+                "metadata": {"backend_name": "cuda"},
+                "file_content": {"kernel.ttir": "module {}"},
+                "file_path": {},
+            },
+        }
+        processed = json.loads(parse_single_trace_content(json.dumps(entry)))
+        extensions = {stage["extension"] for stage in processed["payload"]["ir_stages"]}
+        self.assertNotIn(".source", extensions)
+
     def test_legacy_fallback_resolution_order(self):
         # No metadata provided -> use hardcoded fallback order
         file_content = {"a.ptx": "...", "b.ttir": "..."}
@@ -948,7 +1102,7 @@ class TestStageParserContract(unittest.TestCase):
         self.assertTrue(log.is_file(), f"Required example trace not available: {log}")
 
         adapter = NvidiaTritonAdapter()
-        by_stage = {s.name: s for s in adapter.list_ir_stages()}
+        by_extension = {s.extension: s for s in adapter.list_ir_stages()}
         checked = set()
         with log.open() as fh:
             for line in fh:
@@ -956,7 +1110,8 @@ class TestStageParserContract(unittest.TestCase):
                 if event.get("event_type") != "compilation":
                     continue
                 for fname, content in event["payload"]["file_content"].items():
-                    stage = by_stage.get(fname.rsplit(".", 1)[-1])
+                    suffix = f".{fname.rsplit('.', 1)[-1]}"
+                    stage = by_extension.get(suffix)
                     if stage is None or not stage.supports_source_mapping:
                         continue
                     parser = adapter.get_parser(stage.parser_id)

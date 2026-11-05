@@ -186,6 +186,7 @@ def generate_source_mappings(
     ir_type: str,
     other_mappings: List[Any] | None = None,
     metadata: Dict[str, Any] | None = None,
+    ir_extension: str | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Generate source mappings from intermediate representation (IR) content to the source file.
@@ -223,6 +224,8 @@ def generate_source_mappings(
         ir_type (str): The type of the intermediate representation (e.g., 'ttir').
         other_mappings (List[Any]): A collection of additional mappings, primarily utilized for PTX mappings since PTX's location annotations reference the file name instead of the complete path.
         metadata (Dict[str, Any]): Optional metadata for resolving backend-specific parsers.
+        ir_extension: Artifact filename extension when it differs from the
+            logical stage name (for example ``.source`` for ``ttir_pre_opt``).
 
     Returns:
         Dict[str, Dict[str, Any]]: A dictionary mapping line numbers to their corresponding source file,
@@ -240,8 +243,12 @@ def generate_source_mappings(
             registry = get_backend_registry()
             adapter = registry.resolve_from_trace(metadata)
 
-            # Resolve the stage descriptor directly by stage name.
+            # Prefer the logical stage name, then fall back to the physical
+            # artifact extension. The two intentionally differ for Triton's
+            # ``.source`` pre-optimization artifact.
             stage_descriptor = adapter.get_stage_by_name(ir_type)
+            if stage_descriptor is None and ir_extension is not None:
+                stage_descriptor = adapter.get_stage_by_extension(ir_extension)
             if stage_descriptor is not None and stage_descriptor.parser_id != "none":
                 parser_id = stage_descriptor.parser_id
                 parser = adapter.get_parser(parser_id)
@@ -266,6 +273,18 @@ def generate_source_mappings(
         return extract_sass_mappings(ir_content)
 
     return _parse_generic_loc(ir_content, other_mappings, ir_type)
+
+
+def _pre_opt_stage_name(payload: Dict[str, Any]) -> str:
+    pre_opt = payload.get("pre_opt_ir", {})
+    if isinstance(pre_opt, dict):
+        stage = pre_opt.get("stage")
+        if isinstance(stage, str) and stage:
+            return stage
+        ir_kind = pre_opt.get("ir_kind")
+        if isinstance(ir_kind, str) and ir_kind:
+            return f"{ir_kind}_pre_opt"
+    return "pre_opt_ir"
 
 
 def _resolve_source_mappable_stage_keys(
@@ -314,8 +333,13 @@ def _resolve_source_mappable_stage_keys(
             )
             if artifact_name is None:
                 continue
-            if stage.name not in stage_keys:
-                stage_keys[stage.name] = artifact_name
+            stage_name = (
+                _pre_opt_stage_name(payload)
+                if stage.name == "pre_opt_ir"
+                else stage.name
+            )
+            if stage_name not in stage_keys:
+                stage_keys[stage_name] = artifact_name
 
         if stage_keys:
             logger.debug(f"Resolved stage keys from adapter: {list(stage_keys.keys())}")
@@ -328,6 +352,7 @@ def _resolve_source_mappable_stage_keys(
 
     # Path 2: hardcoded extension fallback (original upstream behavior).
     fallback_extensions = {
+        _pre_opt_stage_name(payload): ".source",
         "ttir": ".ttir",
         "ttgir": ".ttgir",
         "ptx": ".ptx",
@@ -356,12 +381,20 @@ def process_ir(
     file_path: Dict[str, str],
     other_mappings: List[Any] | None = None,
     metadata: Dict[str, Any] | None = None,
+    stage_name: str | None = None,
 ):
     ir_content = load_ir_contents(key, file_content, file_path)
     if not ir_content:
         return {}
-    ir_type = key.split(".")[1]
-    mapping = generate_source_mappings(ir_content, ir_type, other_mappings, metadata)
+    extension = f".{key.rsplit('.', 1)[-1]}" if "." in key else ""
+    ir_type = stage_name or extension.lstrip(".") or key.lower()
+    mapping = generate_source_mappings(
+        ir_content,
+        ir_type,
+        other_mappings,
+        metadata,
+        ir_extension=extension or None,
+    )
     logger.debug(f"Generated source mapping for {key}")
     return mapping
 
@@ -525,18 +558,36 @@ def parse_single_trace_content(trace_content: str) -> str:
             from tritonparse.backend import get_backend_registry
 
             adapter = get_backend_registry().resolve_from_trace(metadata)
-            payload["ir_stages"] = [
-                {
-                    "name": stage.name,
-                    "extension": stage.extension,
-                    "display_name": stage.display_name,
-                    "display_order": stage.display_order,
-                    "is_text": stage.is_text,
-                    "supports_source_mapping": stage.supports_source_mapping,
-                    "syntax_id": stage.syntax_id,
-                }
-                for stage in adapter.list_ir_stages()
-            ]
+            stage_descriptors = []
+            for stage in adapter.list_ir_stages():
+                if stage.name == "pre_opt_ir":
+                    if not any(name.endswith(stage.extension) for name in file_content):
+                        continue
+                    name = _pre_opt_stage_name(payload)
+                    pre_opt = payload.get("pre_opt_ir", {})
+                    ir_kind = (
+                        pre_opt.get("ir_kind") if isinstance(pre_opt, dict) else None
+                    )
+                    display_name = (
+                        f"{ir_kind.upper()} (pre-optimization)"
+                        if isinstance(ir_kind, str) and ir_kind
+                        else stage.display_name
+                    )
+                else:
+                    name = stage.name
+                    display_name = stage.display_name
+                stage_descriptors.append(
+                    {
+                        "name": name,
+                        "extension": stage.extension,
+                        "display_name": display_name,
+                        "display_order": stage.display_order,
+                        "is_text": stage.is_text,
+                        "supports_source_mapping": stage.supports_source_mapping,
+                        "syntax_id": stage.syntax_id,
+                    }
+                )
+            payload["ir_stages"] = stage_descriptors
         except ValueError:
             logger.warning("Could not resolve adapter for ir_stages; skipping")
 
@@ -585,6 +636,7 @@ def parse_single_trace_content(trace_content: str) -> str:
                 file_path,
                 other_mappings if other_mappings else None,
                 metadata,
+                stage_name,
             )
             if stage_map:
                 stage_maps[stage_name] = stage_map

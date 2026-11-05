@@ -1,4 +1,4 @@
-import type { IRStageDescriptor } from "./dataLoader";
+import { getIRStageDescriptor, type IRStageDescriptor } from "./dataLoader";
 
 /**
  * Utility functions for IR language display
@@ -12,8 +12,7 @@ import type { IRStageDescriptor } from "./dataLoader";
 export const getDisplayLanguage = (irType: string, irStages?: IRStageDescriptor[]): string => {
   // Try dynamic lookup from ir_stages
   if (irStages && irStages.length > 0) {
-    const type = irType.split('.').pop()?.toLowerCase() || irType.toLowerCase();
-    const stage = irStages.find(s => s.name === type);
+    const stage = getIRStageDescriptor(irType, irStages);
     if (stage) return stage.display_name;
   }
 

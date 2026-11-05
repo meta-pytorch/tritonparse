@@ -42,7 +42,7 @@ function listIRTypesForKernel(kernel: ProcessedKernel | undefined): Set<string> 
   const s = new Set<string>();
   if (!kernel) return s;
   for (const key of Object.keys(kernel.irFiles || {})) {
-    s.add(getIRType(key));
+    s.add(getIRType(key, kernel.ir_stages));
   }
   if (kernel.pythonSourceInfo?.code) s.add("python");
   return s;
@@ -54,7 +54,7 @@ function getContentByIRType(kernel: ProcessedKernel | undefined, irType: string)
     return kernel.pythonSourceInfo?.code || "";
   }
   const keys = Object.keys(kernel.irFiles || {});
-  const found = keys.find(k => getIRType(k) === irType);
+  const found = keys.find(k => getIRType(k, kernel.ir_stages) === irType);
   return found ? kernel.irFiles[found] : "";
 }
 

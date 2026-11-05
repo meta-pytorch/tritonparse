@@ -1,4 +1,4 @@
-import type { IRStageDescriptor } from "./dataLoader";
+import { getIRStageDescriptor, type IRStageDescriptor } from "./dataLoader";
 
 /**
  * Monaco language ids provided by the IR migration (§4.6).
@@ -47,8 +47,7 @@ export function mapFileToMonacoLanguage(
   irStages?: IRStageDescriptor[]
 ): string {
   if (irStages && irStages.length > 0) {
-    const type = filename.split(".").pop()?.toLowerCase() || filename.toLowerCase();
-    const stage = irStages.find((s) => s.name === type);
+    const stage = getIRStageDescriptor(filename, irStages);
     if (stage) {
       const mapped = SYNTAX_ID_TO_MONACO.get(stage.syntax_id);
       if (mapped) {

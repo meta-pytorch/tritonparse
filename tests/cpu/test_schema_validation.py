@@ -153,6 +153,35 @@ class ValidateRecordTest(unittest.TestCase):
         is_valid, errors = validate_record(record)
         self.assertTrue(is_valid, f"Unexpected errors: {errors}")
 
+    def test_valid_compilation_record_with_pre_opt_ir(self):
+        record = {
+            "event_type": "compilation",
+            "pid": 12345,
+            "timestamp": "2025-01-01T00:00:00Z",
+            "payload": {
+                "metadata": {"hash": "abc123", "name": "my_kernel"},
+                "file_content": {
+                    "my_kernel.source": "module ...",
+                    "my_kernel.ttir": "module ...",
+                },
+                "file_path": {
+                    "my_kernel.source": "/tmp/my_kernel.source",
+                    "my_kernel.ttir": "/tmp/my_kernel.ttir",
+                },
+                "pre_opt_ir": {
+                    "file": "my_kernel.source",
+                    "stage": "ttir_pre_opt",
+                    "ir_kind": "ttir",
+                    "producer": "ASTSource.make_ir",
+                    "language": "triton",
+                    "before_stage": "ttir",
+                    "optimized": False,
+                },
+            },
+        }
+        is_valid, errors = validate_record(record)
+        self.assertTrue(is_valid, f"Unexpected errors: {errors}")
+
     def test_valid_launch_record(self):
         record = {
             "event_type": "launch",

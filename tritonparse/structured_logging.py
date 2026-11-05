@@ -42,7 +42,15 @@ from .shared_vars import (
 
 log = logging.getLogger(__name__)
 
-TEXT_FILE_EXTENSIONS = [".ttir", ".ttgir", ".llir", ".ptx", ".amdgcn", ".json"]
+TEXT_FILE_EXTENSIONS = [
+    ".source",
+    ".ttir",
+    ".ttgir",
+    ".llir",
+    ".ptx",
+    ".amdgcn",
+    ".json",
+]
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB limit for file content extraction
 # Size cap for a launch event's "function" handle. Triton documents this as an
 # opaque backend value (CUDA/HIP report an int address or None), but some
@@ -58,6 +66,13 @@ triton_trace_folder = os.environ.get("TRITON_TRACE", None)
 TRITONPARSE_DEBUG = os.getenv("TRITONPARSE_DEBUG", None) in ["1", "true", "True"]
 # Kernel allowlist for filtering traced kernels. Use comma separated list of fnmatch patterns.
 TRITONPARSE_KERNEL_ALLOWLIST = os.environ.get("TRITONPARSE_KERNEL_ALLOWLIST", None)
+# Capture the module produced by ASTSource.make_ir before the first backend
+# optimization stage. Triton stores this artifact with a ``.source`` suffix.
+TRITONPARSE_DUMP_SOURCE_IR = os.getenv("TRITONPARSE_DUMP_SOURCE_IR", "1").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 # Parsed kernel allowlist patterns (set during init)
 _KERNEL_ALLOWLIST_PATTERNS: Optional[List[str]] = None
 # Enable launch trace. WARNNING: it will overwrite launch_metadata function for each triton kernel.
@@ -1069,6 +1084,9 @@ def _extract_file_content_adapter_driven(
     for ir_filename, file_path in metadata_group.items():
         trace_data["file_path"][ir_filename] = file_path
 
+        if ir_filename.endswith(".source") and not TRITONPARSE_DUMP_SOURCE_IR:
+            continue
+
         if any(ir_filename.endswith(ext) for ext in text_extensions):
             try:
                 file_size = os.path.getsize(file_path)
@@ -1148,6 +1166,9 @@ def _extract_file_content_legacy(
     for ir_filename, file_path in metadata_group.items():
         trace_data["file_path"][ir_filename] = file_path
 
+        if ir_filename.endswith(".source") and not TRITONPARSE_DUMP_SOURCE_IR:
+            continue
+
         if any(ir_filename.endswith(ext) for ext in TEXT_FILE_EXTENSIONS):
             try:
                 # Check file size before reading to avoid memory issues
@@ -1204,6 +1225,54 @@ def extract_metadata_from_src(trace_data, src):
             "src_constants": src.constants if hasattr(src, "constants") else {},
         }
     )
+
+
+def _extract_compilation_input_metadata(
+    trace_data: Dict[str, Any], src: Any, metadata_group: Dict[str, str]
+) -> None:
+    """Describe the compiler input artifact without relying on its suffix.
+
+    Triton calls the AST-lowered module ``<kernel>.source`` even though it is
+    IR rather than Python source.  The logical stage name records the actual
+    IR kind, while ``file`` continues to point at Triton's cache filename.
+    Compilations that start from an IRSource have no ``.source`` artifact and
+    are identified separately as ``input_ir``.
+    """
+    language = getattr(src, "language", None)
+    language_name = getattr(language, "name", str(language or "triton")).lower()
+    ir_kind = str(getattr(src, "ext", "ttir")).lower().lstrip(".")
+
+    source_file = next(
+        (name for name in metadata_group if name.endswith(".source")), None
+    )
+    if source_file is not None:
+        if not TRITONPARSE_DUMP_SOURCE_IR:
+            return
+        trace_data["pre_opt_ir"] = {
+            "file": source_file,
+            "stage": f"{ir_kind}_pre_opt",
+            "ir_kind": ir_kind,
+            "producer": f"{type(src).__name__}.make_ir",
+            "language": language_name,
+            "before_stage": ir_kind,
+            "optimized": False,
+        }
+        return
+
+    if not hasattr(src, "path"):
+        return
+    extension = f".{ir_kind}"
+    input_file = next(
+        (name for name in metadata_group if name.endswith(extension)), None
+    )
+    if input_file is not None:
+        trace_data["input_ir"] = {
+            "file": input_file,
+            "stage": ir_kind,
+            "ir_kind": ir_kind,
+            "producer": f"{type(src).__name__}.make_ir",
+            "language": language_name,
+        }
 
 
 class TritonJsonFormatter(logging.Formatter):
@@ -1637,6 +1706,7 @@ def maybe_trace_triton(
     # Pass backend_name for adapter-driven file extraction
     backend_name = trace_data["metadata"].get("backend_name", "")
     extract_file_content(trace_data, metadata_group, backend_name)
+    _extract_compilation_input_metadata(trace_data, src, metadata_group)
     # Extract Python source code information if available
     extract_python_source_info(trace_data, src)
     extract_metadata_from_src(trace_data, src)

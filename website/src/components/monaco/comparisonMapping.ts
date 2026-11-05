@@ -74,7 +74,7 @@ export function calculateMappedLines(
   const sourceMapping = sourceMappings?.[lineKey];
   if (!sourceMapping) return [];
 
-  const targetIRType = getIRType(targetTitle);
+  const targetIRType = getIRType(targetTitle, irStages);
 
   const irTypesToCheck: Array<{ type: string; property: string }> =
     irStages && irStages.length > 0

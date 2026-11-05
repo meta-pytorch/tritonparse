@@ -14,6 +14,15 @@ export interface IRStageDescriptor {
     syntax_id: string;
 }
 
+/** Resolve the trace stage represented by an artifact filename. */
+export function getIRStageDescriptor(
+    fileName: string,
+    stages?: IRStageDescriptor[]
+): IRStageDescriptor | undefined {
+    const normalized = fileName.toLowerCase();
+    return stages?.find(stage => normalized.endsWith(stage.extension.toLowerCase()));
+}
+
 /**
  * Source mapping information that connects lines in IR code to source code.
  * Dynamic cross-reference fields follow the pattern:
@@ -44,7 +53,10 @@ export interface SourceMapping {
  * @param fileName - The name of the file
  * @returns The type of IR file (without the dot)
  */
-export function getIRType(fileName: string): string {
+export function getIRType(fileName: string, stages?: IRStageDescriptor[]): string {
+    const stage = getIRStageDescriptor(fileName, stages);
+    if (stage) return stage.name;
+
     // 1. Extract the file extension
     const extMatch = fileName.toLowerCase().match(/\.([^.]+)$/);
     if (extMatch) return extMatch[1];

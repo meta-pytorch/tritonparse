@@ -490,7 +490,7 @@ function App() {
       const irFile = {
         content: irContent,
         // Add source mapping if available in the kernel data
-        source_mapping: kernel.sourceMappings?.[getIRType(selectedIR)],
+        source_mapping: kernel.sourceMappings?.[getIRType(selectedIR, kernel.ir_stages)],
       };
 
       return (

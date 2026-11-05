@@ -79,6 +79,18 @@ test("custom display_name never changes the resolved language (R6)", () => {
   );
 });
 
+test("logical pre-opt stage uses the declared .source extension", () => {
+  const preOpt: IRStageDescriptor = {
+    ...stage("ttir_pre_opt", "mlir", "TTIR (pre-optimization)"),
+    extension: ".source",
+    display_order: 0,
+  };
+  assert.equal(
+    mapFileToMonacoLanguage("kernel.source", [preOpt]),
+    MONACO_LANGUAGE_IDS.mlir
+  );
+});
+
 test("legacy extension fallback without stages (old traces)", () => {
   const cases: Array<[string, string]> = [
     ["k.ttgir", MONACO_LANGUAGE_IDS.mlir],

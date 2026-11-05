@@ -42,6 +42,28 @@ test("mapped lines resolve through stage-discovered properties", () => {
   assert.deepEqual(out, [10, 20]);
 });
 
+test("logical pre-opt stage resolves through its .source extension", () => {
+  const stages: IRStageDescriptor[] = [
+    {
+      name: "ttir_pre_opt",
+      extension: ".source",
+      display_name: "TTIR (pre-optimization)",
+      display_order: 0,
+      is_text: true,
+      supports_source_mapping: true,
+      syntax_id: "mlir",
+    },
+    ...STAGES,
+  ];
+  const out = calculateMappedLines(
+    entry({ ttir_pre_opt_lines: [3] }),
+    5,
+    "kernel.source",
+    stages
+  );
+  assert.deepEqual(out, [3]);
+});
+
 test("mapped lines fall back to the legacy stage list without ir_stages", () => {
   const out = calculateMappedLines(
     entry({ ptx_lines: [3] }),
