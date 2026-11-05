@@ -669,6 +669,74 @@ class AscendTritonAdapter(CompilationPipelineAdapter):
         ]
 
 
+class CuteDSLAdapter(CompilationPipelineAdapter):
+    """Compilation pipeline adapter for NVIDIA CuTeDSL (@cute.jit) kernels.
+
+    CuTeDSL compiles Python -> CuTe-dialect MLIR -> PTX -> CUBIN. Both MLIR
+    stages (the raw module and its canonicalized "clean" form) reuse the shared
+    ``generic_loc`` parser, since CuTe MLIR uses standard ``#loc`` directives
+    when line info is on, and the PTX and SASS stages reuse the NVIDIA parsers.
+    SASS is derived from the CUBIN with nvdisasm, as for Triton. Resolved from
+    traces with ``metadata.backend_name == "cutedsl"``.
+    """
+
+    adapter_name: str = "cutedsl"
+    runtime_backend: str = "cuda"
+    pytorch_module: str = "cuda"
+
+    def __init__(self):
+        super().__init__()
+
+        # CuTeDSL lowers to NVIDIA PTX like Triton/CUDA.
+        from tritonparse.parse.ir_parser import _parse_ptx_loc, _parse_sass_loc
+
+        self.register_backend_parser("ptx_loc", _parse_ptx_loc)
+        self.register_backend_parser("sass_loc", _parse_sass_loc)
+
+        from tritonparse.tools.disasm import extract as derive_sass
+
+        self.register_backend_derived_artifact(
+            target_stage_name="sass",
+            source_stage_name="cubin",
+            tool_name="nvdisasm",
+            derive_func=derive_sass,
+        )
+
+        # Pre-initialize stage descriptors (immutable objects, can be reused)
+        self._stages = [
+            IRStageDescriptor(
+                "mlir",
+                ".mlir",
+                "MLIR (CuTe DSL)",
+                10,
+                True,
+                True,
+                "generic_loc",
+                "mlir",
+            ),
+            IRStageDescriptor(
+                "clean_mlir",
+                ".clean_mlir",
+                "Clean MLIR (CuTe DSL)",
+                15,
+                True,
+                True,
+                "generic_loc",
+                "mlir",
+            ),
+            IRStageDescriptor("ptx", ".ptx", "PTX", 20, True, True, "ptx_loc", "ptx"),
+            IRStageDescriptor(
+                "cubin", ".cubin", "CUBIN", 30, False, False, "none", "plaintext"
+            ),
+            IRStageDescriptor(
+                "sass", ".sass", "SASS", 40, True, True, "sass_loc", "asm"
+            ),
+            IRStageDescriptor(
+                "json", ".json", "JSON", 100, True, False, "none", "json"
+            ),
+        ]
+
+
 # =============================================================================
 # ADAPTER REGISTRY (LAZY INITIALIZATION)
 # =============================================================================
@@ -722,17 +790,23 @@ class PipelineAdapterRegistry:
         self,
         backend_name: str,
     ) -> CompilationPipelineAdapter:
-        """Resolve an adapter from a backend name (e.g., "cuda" → "cuda_triton").
+        """Resolve an adapter from a backend name.
+
+        An adapter registered under the backend name itself wins (e.g.,
+        "cutedsl"); otherwise the name is taken as a Triton runtime backend
+        (e.g., "cuda" → "cuda_triton").
 
         Args:
-            backend_name: Backend name (e.g., "cuda", "hip").
+            backend_name: Backend name (e.g., "cuda", "hip", "cutedsl").
 
         Returns:
             The resolved CompilationPipelineAdapter instance.
 
         Raises:
-            ValueError: If no adapter matches the inferred name.
+            ValueError: If no adapter matches the backend name.
         """
+        if backend_name.lower() in self._adapter_classes:
+            return self.resolve(adapter_name=backend_name.lower())
         inferred_adapter_name = f"{backend_name}_triton"
         return self.resolve(adapter_name=inferred_adapter_name)
 
@@ -766,6 +840,7 @@ _REGISTRY = PipelineAdapterRegistry()
 _REGISTRY.register(NvidiaTritonAdapter)
 _REGISTRY.register(AmdTritonAdapter)
 _REGISTRY.register(AscendTritonAdapter)
+_REGISTRY.register(CuteDSLAdapter)
 
 
 def get_backend_registry() -> PipelineAdapterRegistry:

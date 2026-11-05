@@ -28,6 +28,7 @@ class TritonParseManager:
         compression: Optional[str] = None,
         tensor_save_skip_runs=None,
         tensor_save_max_runs=None,
+        enable_cutedsl_tracing: bool = False,
         log_dir=None,
         keep_logs=False,
         **parse_kwargs,
@@ -69,6 +70,9 @@ class TritonParseManager:
                 win over an explicitly passed value.
             tensor_save_skip_runs: Skip tensor blob saving for the first N kernel runs
             tensor_save_max_runs: Save tensor blobs for at most N kernel runs after skipping
+            enable_cutedsl_tracing: Whether to also trace CuTeDSL (@cute.jit)
+                compilations (and launches when launch tracing is on). Forwarded
+                to init() unchanged.
             log_dir: Optional directory path to store raw trace logs. If not provided,
                 a temporary directory will be created and cleaned up after parsing.
                 If provided, the directory will be created if it doesn't exist and
@@ -89,6 +93,7 @@ class TritonParseManager:
         self.compression = compression
         self.tensor_save_skip_runs = tensor_save_skip_runs
         self.tensor_save_max_runs = tensor_save_max_runs
+        self.enable_cutedsl_tracing = enable_cutedsl_tracing
         self.user_log_dir = log_dir
         self.keep_logs = keep_logs
         self.parse_kwargs = parse_kwargs
@@ -121,6 +126,7 @@ class TritonParseManager:
             "enable_sass_dump": self.enable_sass_dump,
             "enable_full_python_source": self.enable_full_python_source,
             "compression": self.compression,
+            "enable_cutedsl_tracing": self.enable_cutedsl_tracing,
         }
         if self.tensor_storage_quota is not None:
             init_kwargs["tensor_storage_quota"] = self.tensor_storage_quota

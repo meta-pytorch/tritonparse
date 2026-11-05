@@ -87,6 +87,13 @@ TRITON_TRACE_LAUNCH_WITHIN_PROFILING = os.getenv(
 TRITONPARSE_MORE_TENSOR_INFORMATION = os.getenv(
     "TRITONPARSE_MORE_TENSOR_INFORMATION", None
 ) in ["1", "true", "True"]
+# Enable CuTeDSL (@cute.jit) compilation/launch tracing alongside Triton.
+# Also settable per-call via init(enable_cutedsl_tracing=True).
+TRITONPARSE_CUTEDSL_TRACING = os.getenv("TRITONPARSE_CUTEDSL_TRACING", None) in [
+    "1",
+    "true",
+    "True",
+]
 # Enable full Python source file extraction instead of just the function definition
 TRITON_FULL_PYTHON_SOURCE = os.getenv("TRITON_FULL_PYTHON_SOURCE", "0") in [
     "1",
@@ -646,6 +653,17 @@ def _is_from_triton_kernels_module(obj):
     return type_name in ("Tensor", "Storage") and module_name.startswith(
         "triton_kernels"
     )
+
+
+def _is_cute_tensor(obj):
+    """
+    Check if an object is a CuTeDSL runtime Tensor (``cutlass.cute``
+    ``_Tensor``, e.g. from ``from_dlpack``).
+    """
+    t = type(obj)
+    return getattr(t, "__name__", "") == "_Tensor" and getattr(
+        t, "__module__", ""
+    ).startswith("cutlass.")
 
 
 def _is_tensor_descriptor(obj):
@@ -1801,6 +1819,26 @@ def extract_arg_info(arg_dict):
             padding = getattr(arg_value, "padding", "zero")
             arg_info["padding"] = convert(padding) if padding else "zero"
 
+        # Handle CuTeDSL runtime tensors (cute.Tensor from from_dlpack).
+        # Only the proven-safe attributes are read; dtype/layout-style
+        # properties raise on some versions, so each read is guarded and
+        # a hostile attribute degrades to a missing field, not a failed
+        # extraction.
+        elif _is_cute_tensor(arg_value):
+            arg_info["type"] = "cute.Tensor"
+            for attr in ("shape", "stride", "memspace", "data_ptr"):
+                try:
+                    arg_info[attr] = convert(getattr(arg_value, attr))
+                except Exception as e:
+                    log.debug("CuTeDSL tensor has no readable %s: %s", attr, e)
+            # data_ptr reads as an int on the upstream type. Log it as a hex
+            # string like the torch tensor path does, which is what the
+            # launch schema expects; anything else is dropped, not recorded.
+            if type(arg_info.get("data_ptr")) is int:
+                arg_info["data_ptr"] = hex(arg_info["data_ptr"])
+            else:
+                arg_info.pop("data_ptr", None)
+
         # Handle scalar values
         elif isinstance(arg_value, (int, float, bool)):
             arg_info["type"] = type(arg_value).__name__
@@ -2324,6 +2362,7 @@ def init(
     compression: Optional[str] = None,
     tensor_save_skip_runs: Optional[int] = None,
     tensor_save_max_runs: Optional[int] = None,
+    enable_cutedsl_tracing: bool = False,
 ):
     """
     This function is a wrapper around init_basic() that also sets up the compilation listener. Its arguments have higher priority than the environment variables for same settings.
@@ -2355,6 +2394,16 @@ def init(
             If not specified, respects TRITON_TRACE_COMPRESSION env var, or defaults to "none".
         tensor_save_skip_runs (Optional[int]): Skip tensor blob saving for the first N kernel runs.
         tensor_save_max_runs (Optional[int]): Save tensor blobs for at most N kernel runs after skipping.
+        enable_cutedsl_tracing (bool): Whether to also trace CuTeDSL (@cute.jit)
+            compilations (and launches when launch tracing is on). Requires a
+            cutlass build with `cutlass.hooks` `POST_COMPILE`
+            (NVIDIA/cutlass#3697); launches additionally require
+            `PRE_EXECUTE` (NVIDIA/cutlass#3703). Without `POST_COMPILE` it
+            is a no-op with a warning. Also enabled via TRITONPARSE_CUTEDSL_TRACING=1. Enabling
+            makes CuTeDSL keep its MLIR/PTX/CUBIN with line info until
+            clear_logging_config(), in a temporary directory unless the user
+            already keeps artifacts or set CUTE_DSL_DUMP_DIR. It works even
+            when cutlass was imported first. SASS follows enable_sass_dump.
     """
     global TRITON_TRACE_LAUNCH, TRITON_TRACE_LAUNCH_WITHIN_PROFILING
     global TRITONPARSE_MORE_TENSOR_INFORMATION
@@ -2427,6 +2476,15 @@ def init(
             "(triton >= 3.7); raw 'autotune' events will not be recorded"
         )
 
+    if enable_cutedsl_tracing or TRITONPARSE_CUTEDSL_TRACING:
+        # Local import: cutedsl_logging imports this module, so a top-level
+        # import would be circular.
+        from tritonparse.cutedsl_logging import setup_cutedsl_tracing
+
+        # CuTeDSL launches follow the same ALL-launches switch as Triton.
+        # (The within-profiling phased mode only drives Triton hooks.)
+        setup_cutedsl_tracing(enable_launch=bool(TRITON_TRACE_LAUNCH))
+
 
 def init_with_env():
     """
@@ -2491,6 +2549,15 @@ def clear_logging_config():
         knobs.autotuning.listener = None
     knobs.runtime.jit_post_compile_hook = None
     knobs.runtime.launch_enter_hook = None
+
+    # 4b. Remove CuTeDSL hooks (no-op when never set up; teardown is
+    # guarded so a missing/broken cutlass install cannot fail clearing).
+    try:
+        from tritonparse.cutedsl_logging import teardown_cutedsl_tracing
+
+        teardown_cutedsl_tracing()
+    except Exception as e:
+        log.warning("[tritonparse] CuTeDSL teardown during clear failed: %s", e)
 
     # 5. Unpatch torch.profiler.schedule if patched
     unpatch_profiler_schedule()
