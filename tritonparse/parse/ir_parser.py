@@ -76,6 +76,9 @@ PTX_LOC_PATTERN = re.compile(
 )
 # `.file N "path"` -- resolves the file index used by `inlined_at`.
 PTX_FILE_PATTERN = re.compile(r'^\s*\.file\s+(\d+)\s+"([^"]+)"', re.MULTILINE)
+# Bare `.loc` without a trailing `// file:line:col` comment, e.g. NVVM output
+# consumed directly: `.loc 1 41 0`. The file index resolves via `.file`.
+PTX_BARE_LOC_PATTERN = re.compile(r"^\s*\.loc\s+(\d+)\s+(\d+)\s+(\d+)\s*$")
 
 # the definition of the AMDGCN loc directive.
 # Example: .loc	1 32 30                         ; abcd.py:32:30
@@ -708,6 +711,28 @@ def extract_ptx_amdgcn_mappings(
             function_end_line = i
             break
 
+    if ir_type == "ptx" and (function_start_line == 0 or function_end_line == 0):
+        # Fallback for PTX without ptxas-style markers (e.g. NVVM output
+        # consumed directly, as with CuTeDSL): use the first `.visible .entry`
+        # through the `}` that closes its body as the function scope.
+        entry_pattern = re.compile(r"^\s*\.visible\s+\.entry\s+\S+")
+        entry_line = next(
+            (i for i, line in enumerate(lines, 1) if entry_pattern.search(line)),
+            0,
+        )
+        if entry_line:
+            # The body nests `{ ... }` scopes (CuTeDSL wraps every inline asm
+            # block in one, each brace on its own line), so the body closes
+            # where the brace depth returns to zero, not at the first lone `}`.
+            depth, opened = 0, False
+            for i, line in enumerate(lines[entry_line - 1 :], entry_line):
+                code = line.split("//", 1)[0]
+                opened = opened or "{" in code
+                depth += code.count("{") - code.count("}")
+                if opened and depth == 0:
+                    function_start_line, function_end_line = entry_line, i
+                    break
+
     # If no function boundaries are found, return empty mapping
     if function_start_line == 0 or function_end_line == 0:
         logger.warning(
@@ -748,9 +773,18 @@ def extract_ptx_amdgcn_mappings(
         try:
             # Check .loc directive line
             match = tmp_loc_pattern.match(line)
-            if match:
+            bare_ptx_loc = None
+            if match is None and is_ptx:
+                bare_ptx_loc = PTX_BARE_LOC_PATTERN.match(line)
+            if match or bare_ptx_loc:
                 inl_file_idx = inl_line = None
-                if is_ptx:
+                if bare_ptx_loc is not None:
+                    own_file_idx, py_line, py_col = bare_ptx_loc.groups()
+                    filename = ptx_files.get(own_file_idx)
+                    if filename is None:
+                        current_mapping = None
+                        continue
+                elif is_ptx:
                     (
                         own_file_idx,
                         py_line,

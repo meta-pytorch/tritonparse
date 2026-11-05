@@ -299,6 +299,97 @@ class TestAmdgcnLocEdgeCases(unittest.TestCase):
         self.assertNotIn("6", m)
 
 
+class TestPtxEntryFallback(unittest.TestCase):
+    """PTX without ptxas `-- Begin/End function` markers (e.g. NVVM output
+    consumed directly, as with CuTeDSL) still maps via `.visible .entry`."""
+
+    PTX_NO_MARKERS = """\
+.version 8.8
+.target sm_90a
+.address_size 64
+
+.visible .entry kernel_main(
+    .param .u64 a,
+    .param .u64 b
+)
+{
+    .reg .pred %p<2>;
+    .loc    1 41 0
+    mov.u32 %r1, 0;
+    .loc    1 44 8
+    add.s32 %r2, %r1, 1;
+    ret;
+}
+.file   1 "/work/k.py"
+"""
+
+    def test_entry_span_bounds_the_scan(self):
+        m = extract_ptx_amdgcn_mappings(self.PTX_NO_MARKERS, None, "ptx")
+        # .loc lines map; lines outside the entry span do not.
+        self.assertEqual(m["11"]["line"], 41)
+        self.assertEqual(m["11"]["file"], "/work/k.py")
+        self.assertEqual(m["13"]["line"], 44)
+        self.assertNotIn("5", m)
+        self.assertNotIn("17", m)
+
+    # CuTeDSL wraps each inline asm block in a `{ ... }` scope whose braces
+    # sit on their own lines, and vector operands carry braces too.
+    PTX_INLINE_ASM = """\
+.version 8.8
+.target sm_90a
+.address_size 64
+
+.visible .entry kernel_main(
+    .param .u64 a
+)
+{
+    .reg .pred %p<2>;
+    .loc    1 41 0
+    mov.b64 {%r1, %r2}, %rd1;
+    // begin inline asm
+    {
+    .reg .pred       P1;
+    .loc    1 50 16
+    LAB_WAIT:
+    mbarrier.try_wait.parity.shared.b64 P1, [%r1], %r2, 10000000;
+    @P1 bra.uni DONE;
+    bra.uni     LAB_WAIT;
+    DONE:
+    }
+    // end inline asm
+    .loc    1 44 8
+    add.s32 %r3, %r1, 1;
+    ret;
+}
+
+.visible .entry kernel_other(
+    .param .u64 a
+)
+{
+    .loc    1 90 0
+    ret;
+}
+.file   1 "/work/k.py"
+"""
+
+    def test_nested_braces_do_not_end_the_entry_span(self):
+        m = extract_ptx_amdgcn_mappings(self.PTX_INLINE_ASM, None, "ptx")
+        self.assertEqual(m["15"]["line"], 50)
+        # After the inline asm block, still inside the entry body.
+        self.assertEqual(m["23"]["line"], 44)
+        # The second entry lies outside the first entry's span.
+        self.assertNotIn("32", m)
+
+    def test_still_empty_without_any_scope(self):
+        m = extract_ptx_amdgcn_mappings("mov.u32 %r1, 0;\n", None, "ptx")
+        self.assertEqual(m, {})
+
+    def test_amdgcn_untouched_by_fallback(self):
+        # The fallback is PTX-only: marker-less AMDGCN still yields nothing.
+        m = extract_ptx_amdgcn_mappings("v_mov_b32 v0, 0\n", None, "amdgcn")
+        self.assertEqual(m, {})
+
+
 class TestIRParser(unittest.TestCase):
     """Tests for IR parsing functions."""
 
