@@ -111,6 +111,25 @@ class RewriteRulesTest(unittest.TestCase):
         replacements = [rule.replacement for rule in _build_rewrite_rules()]
         self.assertIn("/tritonparse", replacements)
 
+    @patch(
+        "tritonparse.tools.generate_examples.os.path.expanduser",
+        return_value="/fakehome/someone",
+    )
+    def test_cutlass_checkout_under_home_maps_to_cutlass(self, _expanduser):
+        """Like the repo, the CUTLASS checkout usually lives under $HOME."""
+        with patch.dict(os.environ, {"CUTLASS_PATH": "/fakehome/someone/cutlass"}):
+            rules = _build_rewrite_rules()
+        self.assertEqual(
+            sanitize_text("/fakehome/someone/cutlass/examples/gemm.py", rules),
+            "/cutlass/examples/gemm.py",
+        )
+
+    def test_no_cutlass_rule_without_cutlass_path(self):
+        with patch.dict(os.environ):
+            os.environ.pop("CUTLASS_PATH", None)
+            replacements = [rule.replacement for rule in _build_rewrite_rules()]
+        self.assertNotIn("/cutlass", replacements)
+
 
 class AssertCleanTest(unittest.TestCase):
     """Tests for the pre-publication leak check."""
@@ -303,6 +322,30 @@ class WorkloadRegistryTest(unittest.TestCase):
         dedicated_log_triton_trace_findhao__mapped.ndjson.gz.
         """
         self.assertEqual(WORKLOADS["triton"].trace_token, "findhao")
+
+    def test_cutedsl_workload_keeps_the_published_filename(self):
+        """The website card and the docs link hard-code
+        dedicated_log_triton_trace_cutedsl__mapped.ndjson.gz.
+        """
+        self.assertEqual(WORKLOADS["cutedsl"].trace_token, "cutedsl")
+
+
+class CutedslWorkloadTest(unittest.TestCase):
+    """The CuTeDSL workload stops before any GPU work without a CUTLASS checkout."""
+
+    def test_requires_cutlass_path(self):
+        with patch.dict(os.environ):
+            os.environ.pop("CUTLASS_PATH", None)
+            with self.assertRaisesRegex(RuntimeError, "CUTLASS_PATH"):
+                WORKLOADS["cutedsl"].run()
+
+    def test_requires_the_example_in_the_checkout(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"CUTLASS_PATH": tmp}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CUTLASS example is missing"):
+                WORKLOADS["cutedsl"].run()
 
 
 class GenerateTest(unittest.TestCase):

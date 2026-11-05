@@ -16,8 +16,16 @@ Usage::
     python -m tritonparse.tools.generate_examples triton --out-dir /tmp/regen
     python -m tritonparse.tools.generate_examples triton --install
 
-Requires a CUDA GPU: the workloads compile and launch real Triton kernels.
+Requires a CUDA GPU: the workloads compile and launch real kernels.
 ``--install`` overwrites files that are checked in, so it is opt-in.
+
+The ``cutedsl`` workload needs a Hopper GPU, a CuTeDSL build supporting
+``cutlass.hooks`` with ``POST_COMPILE`` (NVIDIA/cutlass#3697) and
+``PRE_EXECUTE`` (NVIDIA/cutlass#3703), and ``CUTLASS_PATH`` pointing at a
+CUTLASS checkout, whose example kernel it runs::
+
+    CUTLASS_PATH=/path/to/cutlass \\
+        python -m tritonparse.tools.generate_examples cutedsl --install
 
 Three things happen between running the workload and writing the artifacts, and
 all three are the point of this module:
@@ -84,6 +92,10 @@ TRITON_TRACE_TOKEN = "findhao"
 # free-form name would not be re-parseable by our own CLI.
 INDUCTOR_TRACE_TOKEN = "inductor"
 
+# Chosen the same way as the inductor token. The website card and the docs link
+# hard-code the resulting filename.
+CUTEDSL_TRACE_TOKEN = "cutedsl"
+
 
 # =============================================================================
 # Path sanitizing
@@ -104,6 +116,12 @@ class RewriteRule:
         if self.is_regex:
             return re.sub(self.pattern, lambda _match: self.replacement, text)
         return text.replace(self.pattern, self.replacement)
+
+
+def _cutlass_root() -> Optional[Path]:
+    """The CUTLASS checkout named by CUTLASS_PATH, if any."""
+    root = os.environ.get("CUTLASS_PATH")
+    return Path(root).resolve() if root else None
 
 
 def _build_rewrite_rules() -> List[RewriteRule]:
@@ -131,6 +149,12 @@ def _build_rewrite_rules() -> List[RewriteRule]:
             priority=1,
         )
     )
+
+    # The CuTeDSL workload runs an example from a CUTLASS checkout. Its path
+    # lands in python_source, in the MLIR locs and in the PTX file table.
+    cutlass_root = _cutlass_root()
+    if cutlass_root is not None:
+        rules.append(RewriteRule(str(cutlass_root), "/cutlass"))
 
     home = os.path.expanduser("~")
     if home and home not in {"/", "~"}:
@@ -489,6 +513,57 @@ def _run_inductor() -> None:
         inductor_config.compile_threads = previous_threads
 
 
+def _run_cutedsl() -> None:
+    """The upstream CuTeDSL Hopper GEMM, compiled once and launched twice.
+
+    This is the multicast case of tools/cutedsl_hopper_e2e.py, the most
+    Hopper-specific of its cases: the two CTAs of a cluster share each B tile
+    through TMA multicast and feed WGMMA. One ``cute.compile`` followed by two
+    launches on fresh tensors gives a single compilation whose launch_diff
+    shows the tensor pointers that changed. Static layouts let the compiled
+    launch configuration fix the grid, so both launches record it. The kernel
+    is imported unmodified from the CUTLASS checkout, and every result is
+    checked against torch.
+    """
+    from tritonparse.tools.cutedsl_hopper_e2e import EXAMPLE, run_cases
+
+    cutlass_root = _cutlass_root()
+    if cutlass_root is None:
+        raise RuntimeError(
+            "the cutedsl workload needs CUTLASS_PATH set to a CUTLASS checkout"
+        )
+    example = cutlass_root / EXAMPLE
+    if not example.is_file():
+        raise RuntimeError(f"CUTLASS example is missing: {example}")
+    # This example is built around its two launch events; a build with only
+    # POST_COMPILE (NVIDIA/cutlass#3697) would silently produce a
+    # compilation-only trace, so refuse it up front.
+    try:
+        from cutlass.hooks import HookEvent
+    except ImportError as e:
+        raise RuntimeError(
+            "the cutedsl workload needs a CuTeDSL build with "
+            "cutlass.hooks POST_COMPILE (NVIDIA/cutlass#3697) and "
+            "PRE_EXECUTE (NVIDIA/cutlass#3703)"
+        ) from e
+    if getattr(HookEvent, "PRE_EXECUTE", None) is None:
+        raise RuntimeError(
+            "the cutedsl workload needs cutlass.hooks PRE_EXECUTE "
+            "(NVIDIA/cutlass#3703) in the CuTeDSL build; with only "
+            "POST_COMPILE the regenerated example would have no launches"
+        )
+    # The harness's --cases multicast --mode compiled --static-layout.
+    options = argparse.Namespace(
+        cases=["multicast"], repeats=2, mode="compiled", static_layout=True
+    )
+    _, environment = run_cases(example, options)
+    logger.info(
+        "Ran nvidia-cutlass-dsl %s on %s",
+        environment["cutlass_dsl"],
+        environment["gpu"],
+    )
+
+
 WORKLOADS: Dict[str, Workload] = {
     "triton": Workload(
         name="triton",
@@ -518,6 +593,27 @@ WORKLOADS: Dict[str, Workload] = {
         trace_token=INDUCTOR_TRACE_TOKEN,
         website_example=True,
         fixture_subdir="parsed_output_inductor",
+    ),
+    "cutedsl": Workload(
+        name="cutedsl",
+        description=(
+            "CuTeDSL: the CUTLASS Hopper dense GEMM with TMA multicast in a "
+            "cluster of two CTAs. Needs a Hopper GPU, CuTeDSL with the "
+            "cutlass.hooks events, and CUTLASS_PATH."
+        ),
+        run=_run_cutedsl,
+        # Launches give the launch_diff its data and SASS completes the stage
+        # list. The full Python source matters more than for Triton: the
+        # traced @cute.jit entry point is the host side __call__, while the
+        # device code most IR lines map back to is the kernel method.
+        init_kwargs={
+            "enable_cutedsl_tracing": True,
+            "enable_trace_launch": True,
+            "enable_full_python_source": True,
+            "enable_sass_dump": True,
+        },
+        trace_token=CUTEDSL_TRACE_TOKEN,
+        website_example=True,
     ),
 }
 

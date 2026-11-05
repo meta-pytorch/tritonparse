@@ -314,7 +314,13 @@ def _run_case(example, case_name: str, args: argparse.Namespace) -> list[dict]:
     return expected_launches
 
 
-def _run_cases(example_path: Path, args: argparse.Namespace) -> tuple[list[dict], dict]:
+def run_cases(example_path: Path, args: argparse.Namespace) -> tuple[list[dict], dict]:
+    """Run ``args.cases`` with the example, checking every result against torch.
+
+    Reads ``cases``, ``repeats``, ``mode`` and ``static_layout`` from ``args``.
+    Also drives the CuTeDSL workload of generate_examples.py, which is why it
+    returns the expected launches instead of checking the trace itself.
+    """
     import torch
 
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
@@ -359,7 +365,7 @@ def main() -> None:
             enable_sass_dump=args.sass,
         )
         dump_dir = _cutedsl_dump_dir()
-        expected_launches, environment = _run_cases(example_path, args)
+        expected_launches, environment = run_cases(example_path, args)
     finally:
         clear_logging_config()
     if not {"CUTE_DSL_KEEP", "CUTE_DSL_DUMP_DIR"} & set(os.environ):
