@@ -21,6 +21,7 @@ import unittest
 from types import SimpleNamespace
 
 import tritonparse.structured_logging as sl
+from tritonparse.hook_compat import install_runtime_hook
 
 _HOOK_ENV = "TORCHINDUCTOR_RUN_JIT_POST_COMPILE_HOOK"
 _STUBBED_MODULES = (
@@ -48,14 +49,33 @@ def _install_torch_stub(*, has_attr: bool = True):
     return config_mod
 
 
-def _install_triton_stub():
+class _FakeHookChain:
+    """Mirror of upstream Triton's HookChain: always truthy, even when empty."""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def add(self, func) -> None:
+        if func not in self.calls:
+            self.calls.append(func)
+
+    def remove(self, func) -> None:
+        if func in self.calls:
+            self.calls.remove(func)
+
+    def __call__(self, *args, **kwargs) -> None:
+        for call in list(self.calls):
+            call(*args, **kwargs)
+
+
+def _install_triton_stub(*, hook_chain: bool = False):
     knobs = SimpleNamespace(
         compilation=SimpleNamespace(listener=None),
         autotuning=SimpleNamespace(listener=None),
         runtime=SimpleNamespace(
             jit_cache_hook=None,
             jit_post_compile_hook=None,
-            launch_enter_hook=None,
+            launch_enter_hook=_FakeHookChain() if hook_chain else None,
         ),
     )
     triton_mod = types.ModuleType("triton")
@@ -124,6 +144,67 @@ class InductorHookConfigTest(unittest.TestCase):
         self.assertIsNotNone(knobs.runtime.launch_enter_hook)
         # Future workers: fresh interpreters re-read the env var at import.
         self.assertEqual(os.environ.get(_HOOK_ENV), "1")
+
+    def test_init_preserves_foreign_hook_chain_subscribers(self):
+        _install_torch_stub()
+        knobs = _install_triton_stub(hook_chain=True)
+        chain = knobs.runtime.launch_enter_hook
+        sentinel = lambda metadata: None  # noqa: E731
+        chain.add(sentinel)
+        sl.init(self.trace_dir, enable_trace_launch=True)
+        # The chain object is untouched, the foreign subscriber stays, and
+        # tritonparse's launch hook joins it instead of replacing it.
+        self.assertIs(knobs.runtime.launch_enter_hook, chain)
+        self.assertIn(sentinel, chain.calls)
+        self.assertTrue(
+            any(isinstance(call, sl.LaunchHookImpl) for call in chain.calls)
+        )
+        sl.clear_logging_config()
+        self.assertIs(knobs.runtime.launch_enter_hook, chain)
+        self.assertEqual(chain.calls, [sentinel])
+        self.assertIsNone(knobs.runtime.jit_post_compile_hook)
+
+    def test_init_restores_previous_legacy_slot_hooks(self):
+        _install_torch_stub()
+        knobs = _install_triton_stub()
+        previous_launch = lambda metadata: None  # noqa: E731
+        previous_jit = lambda **kwargs: None  # noqa: E731
+        previous_listener = lambda *args, **kwargs: None  # noqa: E731
+        knobs.runtime.launch_enter_hook = previous_launch
+        knobs.runtime.jit_post_compile_hook = previous_jit
+        knobs.compilation.listener = previous_listener
+        sl.init(self.trace_dir, enable_trace_launch=True)
+        self.assertIsInstance(knobs.runtime.launch_enter_hook, sl.LaunchHookImpl)
+        self.assertIsInstance(knobs.runtime.jit_post_compile_hook, sl.JITHookImpl)
+        self.assertIs(knobs.compilation.listener, sl.maybe_trace_triton)
+        sl.clear_logging_config()
+        self.assertIs(knobs.runtime.launch_enter_hook, previous_launch)
+        self.assertIs(knobs.runtime.jit_post_compile_hook, previous_jit)
+        self.assertIs(knobs.compilation.listener, previous_listener)
+
+    def test_restore_survives_external_removal_from_chain(self):
+        # A chain whose remove() does not guard membership (unlike Triton's
+        # own HookChain): restore must still be a no-op after another tool
+        # removed our hook first, and must be safe to call twice.
+        class UnguardedChain:
+            def __init__(self):
+                self.calls = []
+
+            def add(self, func):
+                self.calls.append(func)
+
+            def remove(self, func):
+                self.calls.remove(func)
+
+        chain = UnguardedChain()
+        runtime = SimpleNamespace(launch_enter_hook=chain)
+        hook = lambda metadata: None  # noqa: E731
+        restore = install_runtime_hook(runtime, "launch_enter_hook", hook)
+        self.assertEqual(chain.calls, [hook])
+        chain.calls.clear()
+        restore()
+        restore()
+        self.assertEqual(chain.calls, [])
 
     def test_init_without_launch_leaves_inductor_alone(self):
         config_mod = _install_torch_stub()

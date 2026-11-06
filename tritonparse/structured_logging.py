@@ -29,6 +29,7 @@ import zstandard as zstd  # @manual=fbsource//third-party/pypi/zstandard:zstanda
 # for the original incident and D105172002 for the torch-side workaround.
 from tritonparse._json_compat import dumps, loads
 from tritonparse.compiler_identity import get_compiler_identity
+from tritonparse.hook_compat import install_runtime_hook
 from tritonparse.kernel_filter import (
     first_matching_kernel_pattern,
     parse_kernel_patterns,
@@ -146,6 +147,15 @@ set_runtime_sass_dump_override(
 # The flag to mark if launch is traced. It is used to avoid initilizing the launch hook twice.
 _trace_launch_enabled = False
 _restore_jit_call_hook: Optional[Callable[[], None]] = None
+# Restore callables for the runtime hooks installed by enable_launch_tracing()
+# and the listeners installed by init(). Each undoes exactly one registration
+# (see tritonparse.hook_compat.install_runtime_hook): on a Triton hook chain
+# it removes our hook, on a legacy single-slot hook it restores the value the
+# slot held before us, so hooks owned by other tools survive init/clear cycles.
+_restore_launch_enter_hook: Optional[Callable[[], None]] = None
+_restore_jit_post_compile_hook: Optional[Callable[[], None]] = None
+_restore_compilation_listener: Optional[Callable[[], None]] = None
+_restore_autotuning_listener: Optional[Callable[[], None]] = None
 # Set once the first oversized launch "function" handle is summarized, so the
 # message is emitted once per process instead of once per kernel launch.
 _logged_oversized_launch_function = False
@@ -2261,6 +2271,7 @@ def enable_launch_tracing() -> None:
     """
 
     global _trace_launch_enabled, _restore_jit_call_hook
+    global _restore_launch_enter_hook, _restore_jit_post_compile_hook
     if _trace_launch_enabled:
         return
 
@@ -2269,8 +2280,12 @@ def enable_launch_tracing() -> None:
     launch_hook = LaunchHookImpl()
     jit_hook = JITHookImpl()
     _restore_jit_call_hook = _patch_jit_call_hook(jit_hook)
-    knobs.runtime.jit_post_compile_hook = jit_hook
-    knobs.runtime.launch_enter_hook = launch_hook
+    _restore_jit_post_compile_hook = install_runtime_hook(
+        knobs.runtime, "jit_post_compile_hook", jit_hook
+    )
+    _restore_launch_enter_hook = install_runtime_hook(
+        knobs.runtime, "launch_enter_hook", launch_hook
+    )
 
     _trace_launch_enabled = True
 
@@ -2328,13 +2343,16 @@ def disable_launch_tracing() -> None:
     Disable launch event tracing.
     """
     global _trace_launch_enabled, _restore_jit_call_hook
+    global _restore_launch_enter_hook, _restore_jit_post_compile_hook
     if not _trace_launch_enabled:
         return
 
-    from triton import knobs
-
-    knobs.runtime.jit_post_compile_hook = None
-    knobs.runtime.launch_enter_hook = None
+    if _restore_launch_enter_hook is not None:
+        _restore_launch_enter_hook()
+        _restore_launch_enter_hook = None
+    if _restore_jit_post_compile_hook is not None:
+        _restore_jit_post_compile_hook()
+        _restore_jit_post_compile_hook = None
     if _restore_jit_call_hook is not None:
         _restore_jit_call_hook()
         _restore_jit_call_hook = None
@@ -2437,6 +2455,7 @@ def init(
     global TRITONPARSE_SAVE_TENSOR_BLOBS, TRITONPARSE_TENSOR_STORAGE_QUOTA
     global TRITON_TRACE_COMPRESSION
     global TRITONPARSE_TENSOR_SAVE_SKIP_RUNS, TRITONPARSE_TENSOR_SAVE_MAX_RUNS
+    global _restore_compilation_listener, _restore_autotuning_listener
 
     # Set global flags BEFORE calling init_basic, so init_logs() can see them
     # TRITON_TRACE_LAUNCH and TRITON_TRACE_LAUNCH_WITHIN_PROFILING are mutually exclusive.
@@ -2488,9 +2507,15 @@ def init(
     init_basic(trace_folder)
     from triton import knobs
 
-    knobs.compilation.listener = maybe_trace_triton
+    if _restore_compilation_listener is None:
+        _restore_compilation_listener = install_runtime_hook(
+            knobs.compilation, "listener", maybe_trace_triton
+        )
     if hasattr(knobs.autotuning, "listener"):
-        knobs.autotuning.listener = _autotune_listener
+        if _restore_autotuning_listener is None:
+            _restore_autotuning_listener = install_runtime_hook(
+                knobs.autotuning, "listener", _autotune_listener
+            )
     else:
         # Triton 3.7 removed knobs.autotuning.listener; without it the writer
         # cannot emit raw 'autotune' events. Not an error -- the derived
@@ -2536,6 +2561,7 @@ def clear_logging_config():
     global _trace_launch_enabled
     global TENSOR_BLOB_MANAGER
     global _kernel_run_counts_per_hash, _save_blobs_for_current_launch
+    global _restore_compilation_listener, _restore_autotuning_listener
     disable_launch_tracing()
     # 1. Clean up the log handler
     if TRITON_TRACE_HANDLER is not None:
@@ -2566,15 +2592,18 @@ def clear_logging_config():
     _kernel_run_counts_per_hash = {}
     _save_blobs_for_current_launch = True
 
-    # 4. Reset Triton knobs
-    # Check if triton was actually imported and used
-    from triton import knobs
-
-    knobs.compilation.listener = None
-    if hasattr(knobs.autotuning, "listener"):
-        knobs.autotuning.listener = None
-    knobs.runtime.jit_post_compile_hook = None
-    knobs.runtime.launch_enter_hook = None
+    # 4. Undo the Triton hook/listener registrations made by init() and
+    # enable_launch_tracing(). disable_launch_tracing() above already
+    # restored the runtime hooks; here we restore the compilation and
+    # autotuning listeners to the values they held before init(), which
+    # may be another tool's listener or a hook chain. Values installed by
+    # someone else after init() are left alone.
+    if _restore_compilation_listener is not None:
+        _restore_compilation_listener()
+        _restore_compilation_listener = None
+    if _restore_autotuning_listener is not None:
+        _restore_autotuning_listener()
+        _restore_autotuning_listener = None
 
     # 4b. Remove CuTeDSL hooks (no-op when never set up; teardown is
     # guarded so a missing/broken cutlass install cannot fail clearing).
