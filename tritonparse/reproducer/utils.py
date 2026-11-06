@@ -400,7 +400,7 @@ def _create_constexpr_arg(arg_info):
 
     value_info = {k: v for k, v in arg_info.items() if k != "constexpr"}
     value_type = value_info.get("type")
-    if value_type not in ("NoneType", "int", "bool", "float", "str", "dtype"):
+    if value_type not in ("NoneType", "int", "bool", "float", "str", "dtype", "tuple"):
         raise NotImplementedError(
             f"Unsupported tl.constexpr argument of type {value_type!r}: "
             f"{value_info.get('repr')!r}"
@@ -408,13 +408,14 @@ def _create_constexpr_arg(arg_info):
     return tl.constexpr(_create_arg_from_info(value_info))
 
 
-def _create_arg_from_info(arg_info):
+def _create_arg_from_info(arg_info, *, strict=False):  # noqa: C901
     """
     Recursively construct a kernel argument from its JSON schema.
 
     Args:
         arg_info (dict): JSON object describing a single argument, including
             fields like 'type', 'value', 'dtype', 'shape', 'device', etc.
+        strict (bool): Reject unhandled types instead of substituting None.
 
     Returns:
         Any: The constructed Python object suitable for kernel invocation.
@@ -439,6 +440,38 @@ def _create_arg_from_info(arg_info):
         value = arg_info.get("value")
         return float(value) if value is not None else None
 
+    elif arg_type == "tuple":
+        # This function is embedded verbatim in standalone reproducer scripts.
+        from collections import namedtuple
+
+        items = arg_info.get("items")
+        if not isinstance(items, list) or not all(
+            isinstance(item, dict) for item in items
+        ):
+            raise NotImplementedError(
+                "Cannot recover tuple argument without structured 'items'. "
+                "Re-capture it with a newer tritonparse."
+            )
+        values = tuple(_create_arg_from_info(item, strict=True) for item in items)
+        if "fields" not in arg_info and "tuple_type" not in arg_info:
+            return values
+        fields = arg_info.get("fields")
+        type_name = arg_info.get("tuple_type")
+        if (
+            not isinstance(type_name, str)
+            or not isinstance(fields, list)
+            or not all(isinstance(field, str) for field in fields)
+            or len(fields) != len(values)
+        ):
+            raise NotImplementedError("Invalid namedtuple type or fields in trace")
+        try:
+            tuple_type = namedtuple(type_name, fields)
+        except ValueError as e:
+            raise NotImplementedError(
+                "Invalid namedtuple type or fields in trace"
+            ) from e
+        return tuple_type(*values)
+
     elif arg_type == "tensor":
         return _create_tensor(arg_info)
 
@@ -448,7 +481,7 @@ def _create_arg_from_info(arg_info):
                 "Optional dependency 'triton_kernels.tensor' is not installed; cannot construct Tensor."
             )
         Tensor, Storage, StridedLayout = _get_triton_tensor_types()
-        storage = _create_arg_from_info(arg_info.get("storage"))
+        storage = _create_arg_from_info(arg_info.get("storage"), strict=strict)
         dtype_str = arg_info.get("dtype")
         torch_dtype = getattr(torch, dtype_str.split(".")[-1])
         return Tensor(
@@ -464,8 +497,8 @@ def _create_arg_from_info(arg_info):
                 "Optional dependency 'triton_kernels.tensor' is not installed; cannot construct Storage."
             )
         Tensor, Storage, StridedLayout = _get_triton_tensor_types()
-        data = _create_arg_from_info(arg_info.get("data"))
-        layout = _create_arg_from_info(arg_info.get("layout"))
+        data = _create_arg_from_info(arg_info.get("data"), strict=strict)
+        layout = _create_arg_from_info(arg_info.get("layout"), strict=strict)
         return Storage(data=data, layout=layout)
 
     elif arg_type == "StridedLayout":
@@ -507,6 +540,10 @@ def _create_arg_from_info(arg_info):
             raise NotImplementedError(f"Unsupported Triton dtype: {dtype_repr}")
 
     else:
+        if strict:
+            raise NotImplementedError(
+                f"Unsupported argument type {arg_type!r}: {arg_info.get('repr')!r}"
+            )
         print(f"Warning: Unhandled argument type '{arg_type}'. Returning None.")
         return None
 

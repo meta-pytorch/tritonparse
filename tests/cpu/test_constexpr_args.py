@@ -203,10 +203,15 @@ class ConstexprReproduceTest(unittest.TestCase):
                 with self.assertRaisesRegex(NotImplementedError, "only its repr"):
                     _create_arg_from_info({"type": "constexpr", "repr": arg_repr})
 
-    def test_unsupported_wrapped_value_raises(self) -> None:
+    def test_wrapped_tuple_round_trip(self) -> None:
         info = _capture(tl.constexpr((1, 2)))
         self.assertEqual(info["type"], "tuple")
-        with self.assertRaisesRegex(NotImplementedError, "type 'tuple'"):
+        self.assert_constexpr(_create_arg_from_info(info), (1, 2))
+
+    def test_unsupported_wrapped_value_raises(self) -> None:
+        info = _capture(tl.constexpr([1, 2]))
+        self.assertEqual(info["type"], "list")
+        with self.assertRaisesRegex(NotImplementedError, "type 'list'"):
             _create_arg_from_info(info)
 
     def test_error_names_the_argument(self) -> None:

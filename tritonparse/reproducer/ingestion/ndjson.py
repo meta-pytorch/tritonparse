@@ -177,6 +177,9 @@ def _decode_arg(raw: Any) -> Any:
         return _SKIP
     if t == "NoneType":
         return None
+    if t == "tuple" and "items" in raw:
+        values = tuple(_decode_arg(item) for item in raw["items"])
+        return _SKIP if any(value is _SKIP for value in values) else values
     return raw.get("value", raw.get("repr"))
 
 
@@ -193,7 +196,12 @@ def _pack_args(args: Dict[str, Any]) -> Dict[str, Any]:
     packed = {}
     for k, v in args.items():
         t = v.get("type") if isinstance(v, dict) else None
-        if t == "tensor":
+        if t == "tuple" and "items" in v:
+            packed[k] = dict(v)
+            value = _decode_arg(v)
+            if value is not _SKIP:
+                packed[k]["value"] = value
+        elif t == "tensor":
             packed[k] = {
                 "type": "tensor",
                 "shape": v.get("shape") if isinstance(v, dict) else None,

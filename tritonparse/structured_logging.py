@@ -1839,6 +1839,14 @@ def extract_arg_info(arg_dict):
             else:
                 arg_info.pop("data_ptr", None)
 
+        elif isinstance(arg_value, tuple):
+            arg_info["type"] = "tuple"
+            arg_info["items"] = [
+                extract_arg_info({arg_name: item})[arg_name] for item in arg_value
+            ]
+            if hasattr(arg_value, "_fields"):
+                arg_info["fields"] = list(arg_value._fields)
+                arg_info["tuple_type"] = type(arg_value).__name__
         # Handle scalar values
         elif isinstance(arg_value, (int, float, bool)):
             arg_info["type"] = type(arg_value).__name__
