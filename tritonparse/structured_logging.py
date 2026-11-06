@@ -43,6 +43,9 @@ from .shared_vars import (
 
 log = logging.getLogger(__name__)
 
+# Process-lifetime capture state; clearing logging must not erase its provenance.
+_virtual_target: dict[str, Any] | None = None
+
 TEXT_FILE_EXTENSIONS = [
     ".source",
     ".ttir",
@@ -1647,6 +1650,12 @@ def trace_structured_triton(
     if custom_metadata:
         metadata_dict.update(custom_metadata)
 
+    if _virtual_target is not None:
+        metadata_dict["virtual_target"] = _virtual_target
+        metadata_dict["runtime_validated"] = False
+        if name == "launch":
+            metadata_dict["executed"] = False
+
     metadata_dict["stack"] = get_stack_trace()
 
     # Log the record using our custom LogRecord
@@ -1713,6 +1722,13 @@ def maybe_trace_triton(
             trace_data["metadata"].update(metadata)
     else:
         trace_data["metadata"].update(metadata)
+    if _virtual_target is not None:
+        if convert(trace_data["metadata"].get("target")) != _virtual_target["target"]:
+            raise ValueError(
+                "Compilation target does not match the virtual-target capture profile"
+            )
+        trace_data["metadata"]["virtual_target"] = _virtual_target
+        trace_data["metadata"]["runtime_validated"] = False
     # Handle torch._guards which might not be recognized by type checker
     trace_id = torch._guards.CompileContext.current_trace_id()  # type: ignore
     cid = trace_id.compile_id if trace_id else None
@@ -2288,6 +2304,8 @@ def _enable_inductor_jit_post_compile_hook() -> None:
 
 def _autotune_listener(*, fn, key, best_config, configs_timings, duration, cache_hit):
     """AutotuneListener callback — writes an 'autotune' event to NDJSON."""
+    if _virtual_target is not None:
+        return
     kernel_name = fn.fn.__name__
     if _KERNEL_ALLOWLIST_PATTERNS is not None:
         if not should_trace_kernel(kernel_name, _KERNEL_ALLOWLIST_PATTERNS):

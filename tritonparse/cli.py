@@ -8,6 +8,7 @@ from .bisect.cli import (
     _validate_args as _validate_bisect_args,
     bisect_command,
 )
+from .capture import add_capture_args, run_capture
 from .compat_builder.cli import (
     _add_compat_build_args,
     _validate_compat_build_args,
@@ -58,6 +59,13 @@ def main():
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # capture subcommand
+    capture_parser = subparsers.add_parser(
+        "capture", help="Compile and trace an eager script for a virtual GPU target"
+    )
+    add_capture_args(capture_parser)
+    capture_parser.set_defaults(func="capture")
 
     # parse subcommand
     parse_parser = subparsers.add_parser(
@@ -148,7 +156,9 @@ def main():
 
         usage_report_logger()
 
-    if args.func == "parse":
+    if args.func == "capture":
+        run_capture(args)
+    elif args.func == "parse":
         parse_args = {
             k: v for k, v in vars(args).items() if k not in ["command", "func"]
         }

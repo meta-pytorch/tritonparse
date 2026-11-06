@@ -139,6 +139,50 @@ result = reproduce(
 
 </details>
 
+## Virtual-target capture
+
+Capture a controlled eager script for a different GPU without executing its
+Triton kernels:
+
+```bash
+python -m tritonparse.capture --target hip:gfx950 --out ./virtual-traces capture_mm.py
+# The same arguments are available as: tritonparseoss capture ...
+```
+
+Run each capture in a **fresh process** and use a new output directory. The
+initial profiles are H100 SXM5 (`cuda:90`), B200 (`cuda:100`), MI300X (`hip:gfx942`)
+and MI350X (`hip:gfx950`). These names fix processor counts and shared-memory budgets as
+well as the ISA; they are not defaults for every device with that ISA.
+
+A real host GPU and its working PyTorch runtime are still required for tensor
+allocation and initialization. The target GPU is not required. The capture
+runtime currently supports Triton 3.9 and needs the full compiler tools for the
+selected backend, including AMD codegen and the linker for HIP targets, and a
+Blackwell-capable `ptxas` for `cuda:100`. For example, an H100 host can capture a
+B200 workload with `--target cuda:100`: allocations and streams remain on H100,
+while compilation and the supported target queries describe B200. Missing
+compiler tools are errors; capture never substitutes placeholder binaries.
+
+The script must use eager dispatch with deterministic heuristics, a singleton
+configuration, or an explicitly selected configuration. Host Python and ordinary
+PyTorch operations still run. Triton outputs are unchanged by skipped launches,
+so the script must not inspect them to choose later dispatches or claim numerical
+correctness. This is not an emulator and does not detect arbitrary output-dependent
+Python. Benchmark-driven autotuning, CUDA graphs, `torch.compile`, in-process
+target switching, and GPU-free/FakeTensor capture are outside this initial scope.
+
+Compilation and launch events carry `virtual_target` and
+`runtime_validated: false`; launch events additionally carry `executed: false`.
+The runtime preserves real argument binding and specialization, including nested
+tuples and integer grids. Register counts, occupancy and launch-time resource
+validity are not inferred. Tensor statistics, tensor blobs, external autotune
+caches and Manifold trace upload are disabled. Compiler caches are private to the
+capture and removed on exit. Runtime patches last until process exit.
+
+Parse these traces normally. Parsing does not label virtual invocations as
+measured autotune winners. Offline parsing and static analysis do not require a
+GPU, but any later execution or reproducer run requires a suitable real target.
+
 ## 📚 Complete Documentation
 
 | 📖 Guide | Description |

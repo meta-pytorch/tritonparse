@@ -7,6 +7,14 @@
   "required": ["event_type", "pid", "timestamp", "payload"],
   "additionalProperties": true,
   "properties": {
+    "virtual_target": {
+      "type": "object",
+      "description": "Compile-only device profile and physical host GPU; also preserved in payload.metadata."
+    },
+    "runtime_validated": {
+      "type": "boolean",
+      "description": "False for virtual-target capture; compilation is not evidence of runtime validity."
+    },
     "event_type": {
       "type": "string",
       "enum": ["compilation"],
@@ -81,6 +89,14 @@
           "additionalProperties": true,
           "required": ["hash", "name"],
           "properties": {
+            "virtual_target": {
+              "type": "object",
+              "description": "Virtual compilation profile; consumers must not treat this as production execution."
+            },
+            "runtime_validated": {
+              "type": "boolean",
+              "description": "False for virtual-target capture."
+            },
             "hash": {
               "type": "string",
               "description": "Unique kernel hash identifying this compilation."

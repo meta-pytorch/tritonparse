@@ -523,6 +523,14 @@ def _create_fake_compilation(
         },
     }
 
+    if "virtual_target" in launch_event:
+        fake_compilation["virtual_target"] = launch_event["virtual_target"]
+        fake_compilation["runtime_validated"] = False
+        fake_compilation["payload"]["metadata"].update(
+            virtual_target=launch_event["virtual_target"],
+            runtime_validated=False,
+            target=compilation_metadata.get("target"),
+        )
     return fake_compilation
 
 
@@ -953,6 +961,8 @@ def parse_single_rank(
                     # the per-PID autotune session metadata may differ).
                     stack = parsed_json.get("stack", [])
                     session_id, user_stack = get_autotune_session_id(stack)
+                    if parsed_json.get("virtual_target") is not None:
+                        session_id = None
                     if session_id:
                         autotune_sessions[session_id]["compilations"].append(
                             parsed_json
@@ -991,6 +1001,8 @@ def parse_single_rank(
 
                     stack = parsed_json.get("stack", [])
                     session_id, user_stack = get_autotune_session_id(stack)
+                    if parsed_json.get("virtual_target") is not None:
+                        session_id = None
                     if selection is not None:
                         if kernel_hash:
                             if kernel_hash not in selection.selected_hashes:
@@ -1057,6 +1069,8 @@ def parse_single_rank(
                 elif event_type == "autotune":
                     stack = parsed_json.get("stack", [])
                     session_id, user_stack = get_autotune_session_id(stack)
+                    if parsed_json.get("virtual_target") is not None:
+                        session_id = None
                     if selection is not None and (
                         session_id is None
                         or session_id not in selection.selected_sessions

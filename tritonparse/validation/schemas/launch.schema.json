@@ -2,11 +2,23 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "launch.schema.json",
   "title": "TritonParse Launch Event",
-  "description": "Event emitted when a compiled Triton kernel is launched on the GPU.",
+  "description": "Event emitted when a compiled Triton kernel is invoked. Virtual-target captures set executed=false and do not launch a GPU kernel.",
   "type": "object",
   "required": ["event_type", "pid", "timestamp", "name", "grid"],
   "additionalProperties": true,
   "properties": {
+    "virtual_target": {
+      "type": "object",
+      "description": "Compile-only device profile and physical host GPU; target kernels did not execute."
+    },
+    "runtime_validated": {
+      "type": "boolean",
+      "description": "False for virtual-target capture; runtime resources and numerical results are unvalidated."
+    },
+    "executed": {
+      "type": "boolean",
+      "description": "False when this invocation was captured without loading or executing the kernel."
+    },
     "event_type": {
       "type": "string",
       "enum": ["launch"],
