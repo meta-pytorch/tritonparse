@@ -21,11 +21,31 @@ from tritonparse.parse.trace_processor import (
 from tritonparse.target_profiles import target_profiles
 from tritonparse.virtual_target import (
     _capture_launch,
+    _check_runtime,
     _install_grid_patch,
     _install_kernel_patch,
     _VirtualDriver,
     UnsupportedCaptureError,
 )
+
+
+class _FakeHookChain:
+    """Mirror of upstream Triton's HookChain: always truthy, even when empty."""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def add(self, func) -> None:
+        if func not in self.calls:
+            self.calls.append(func)
+
+    def remove(self, func) -> None:
+        if func in self.calls:
+            self.calls.remove(func)
+
+    def __call__(self, *args, **kwargs) -> None:
+        for call in list(self.calls):
+            call(*args, **kwargs)
 
 
 class VirtualTargetTest(unittest.TestCase):
@@ -160,6 +180,51 @@ class VirtualTargetTest(unittest.TestCase):
         with patch.object(torch.cuda, "is_available", return_value=False):
             with self.assertRaisesRegex(UnsupportedCaptureError, "host GPU"):
                 virtual_target.install(target_profiles()["cuda:90"], "/unused")
+
+    def test_check_runtime_hook_shapes(self) -> None:
+        class CompiledKernel:
+            def _init_handles(self):
+                pass
+
+        chain_names = (
+            "launch_enter_hook",
+            "launch_exit_hook",
+            "kernel_load_start_hook",
+            "kernel_load_end_hook",
+            "kernel_unload_hook",
+        )
+
+        def make_knobs(hooks):
+            runtime = SimpleNamespace(
+                interpret=False,
+                override_arch=None,
+                add_stages_inspection_hook=None,
+                jit_cache_hook=None,
+                jit_post_compile_hook=None,
+                **hooks,
+            )
+            return SimpleNamespace(
+                runtime=runtime,
+                compilation=SimpleNamespace(override=None),
+            )
+
+        triton_stub = SimpleNamespace(__version__="3.9.0")
+        jit_stub = SimpleNamespace(_triton_jit_function_registry={})
+
+        # Empty hook chains are truthy containers but carry no subscribers.
+        chains = {name: _FakeHookChain() for name in chain_names}
+        _check_runtime(triton_stub, make_knobs(chains), jit_stub, CompiledKernel)
+
+        chains["launch_exit_hook"].add(lambda metadata: None)
+        with self.assertRaisesRegex(UnsupportedCaptureError, "launch_exit_hook"):
+            _check_runtime(triton_stub, make_knobs(chains), jit_stub, CompiledKernel)
+
+        # Legacy single-slot hooks: None passes, a callable is rejected.
+        legacy = dict.fromkeys(chain_names)
+        _check_runtime(triton_stub, make_knobs(legacy), jit_stub, CompiledKernel)
+        legacy["launch_enter_hook"] = lambda metadata: None
+        with self.assertRaisesRegex(UnsupportedCaptureError, "launch_enter_hook"):
+            _check_runtime(triton_stub, make_knobs(legacy), jit_stub, CompiledKernel)
 
     def test_install_rejects_a_second_target_before_touching_gpu(self) -> None:
         with patch.object(virtual_target, "_installed", True):

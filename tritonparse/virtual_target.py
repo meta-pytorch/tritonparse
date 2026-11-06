@@ -10,6 +10,7 @@ import os
 from functools import wraps
 from typing import Any
 
+from .hook_compat import hook_is_set
 from .target_profiles import TargetProfile
 
 
@@ -145,7 +146,7 @@ def _check_runtime(triton: Any, knobs: Any, jit: Any, compiled_kernel: Any) -> N
         "jit_cache_hook",
         "jit_post_compile_hook",
     ):
-        if getattr(knobs.runtime, name, None):
+        if hook_is_set(getattr(knobs.runtime, name, None)):
             raise UnsupportedCaptureError(f"Capture cannot share runtime hook {name}")
     registry = getattr(jit, "_triton_jit_function_registry", {})
     if any(function.device_caches for function in registry.values()):
