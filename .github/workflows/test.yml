@@ -60,8 +60,9 @@ jobs:
                   make lint-check || (echo "❌ Lint check failed. Please run 'make lint' to fix lint issues, then commit the changes." && exit 1)
 
     # ===================================================================
-    # GPU tests on PyTorch self-hosted runner: AWS g5.4xlarge / NVIDIA
-    # A10G, ephemeral EC2 (1 job per VM, no cross-PR pollution).
+    # GPU tests on PyTorch self-hosted runners: AWS G5 / NVIDIA A10G
+    # and an OSDC single-H100 slice. The job container supplies the
+    # toolchain; neither lane needs a runner-provided conda or uv env.
     #
     # Architecture: `runs-on:` + `container:` (helion-style). We run the
     # job directly inside the `pytorch/almalinux-builder:cuda13.0`
@@ -86,15 +87,31 @@ jobs:
     # cuda>=13.2"). Bump once PyTorch infra rolls out a newer driver
     # AMI. Probed on 2026-04-29.
     # ===================================================================
+    # The nightly lane covers both Ampere (A10G) and Hopper (H100).
+    # Keep the existing A10G check name and isolate failures between GPUs.
     test-from-nightly:
-        runs-on: linux.g5.4xlarge.nvidia.gpu
+        name: ${{ matrix.check_name }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - check_name: test-from-nightly
+                      runner_group: default-old
+                      runner: linux.g5.4xlarge.nvidia.gpu
+                      cuda_arch: "8.6"
+                    - check_name: test-h100-nightly
+                      runner_group: meta-prod-aws-ue2
+                      runner: mt-l-x86iamx-22-225-h100
+                      cuda_arch: "9.0"
+        runs-on:
+            group: ${{ matrix.runner_group }}
+            labels: ${{ matrix.runner }}
         container:
             image: pytorch/almalinux-builder:cuda13.0
             options: --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g --ipc=host
         timeout-minutes: 60
         env:
-            # A10G compute capability (Ampere)
-            TORCH_CUDA_ARCH_LIST: "8.6"
+            TORCH_CUDA_ARCH_LIST: ${{ matrix.cuda_arch }}
             CONDA_ENV: tritonparse
             PYTHON_VERSION: "3.14"
             PYTORCH_CUDA_TAG: cu130
@@ -121,7 +138,7 @@ jobs:
               run: |
                   # Calculate date (e.g., 2024-01-15) for daily cache expiration
                   DATE_STAMP=$(date +"%Y-%m-%d")
-                  echo "date=$DATE_STAMP" >> $GITHUB_OUTPUT
+                  echo "date=$DATE_STAMP" >> "$GITHUB_OUTPUT"
                   echo "Using daily cache stamp: $DATE_STAMP"
 
             - name: Cache pip dependencies
@@ -200,6 +217,31 @@ jobs:
               run: |
                   bash .ci/install-project.sh
 
+            - name: Verify CUDA runner
+              run: |
+                  eval "$(/opt/conda/bin/conda shell.bash hook)"
+                  conda activate "$CONDA_ENV"
+                  nvidia-smi
+                  python - <<'PY'
+                  import os
+
+                  import torch
+
+                  if not torch.cuda.is_available():
+                      raise RuntimeError("CUDA runner did not expose a GPU")
+                  expected = tuple(map(int, os.environ["TORCH_CUDA_ARCH_LIST"].split(".")))
+                  actual = torch.cuda.get_device_capability(0)
+                  device = torch.cuda.get_device_name(0)
+                  print(
+                      f"GPU: {device}; capability: {actual}; "
+                      f"PyTorch CUDA: {torch.version.cuda}"
+                  )
+                  if actual != expected:
+                      raise RuntimeError(
+                          f"Expected compute capability {expected}, got {actual}"
+                      )
+                  PY
+
             - name: Run tests
               env:
                   TEST_TYPE: ${{ github.event.inputs.test-type || 'all' }}
@@ -230,7 +272,7 @@ jobs:
               id: daily-cache
               run: |
                   DATE_STAMP=$(date +"%Y-%m-%d")
-                  echo "date=$DATE_STAMP" >> $GITHUB_OUTPUT
+                  echo "date=$DATE_STAMP" >> "$GITHUB_OUTPUT"
                   echo "Using daily cache stamp: $DATE_STAMP"
 
             - name: Cache pip dependencies
@@ -349,7 +391,7 @@ jobs:
               id: daily-cache
               run: |
                   DATE_STAMP=$(date +"%Y-%m-%d")
-                  echo "date=$DATE_STAMP" >> $GITHUB_OUTPUT
+                  echo "date=$DATE_STAMP" >> "$GITHUB_OUTPUT"
                   echo "Using daily cache stamp: $DATE_STAMP"
 
             - name: Cache pip dependencies
