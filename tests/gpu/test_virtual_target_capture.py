@@ -2,7 +2,7 @@
 
 """Real cross-target codegen with host allocations, never target execution.
 
-Requires Triton beta (3.9), an H100 host GPU, and both compiler backends.
+Requires Triton beta (3.9), an NVIDIA host GPU, and both compiler backends.
 Every capture/reference runs in a fresh spawn process: install has no undo.
 The sentinel checks prove non-execution, not numerical correctness.
 """
@@ -10,6 +10,7 @@ The sentinel checks prove non-execution, not numerical correctness.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import multiprocessing
 import os
@@ -23,6 +24,7 @@ from parameterized import parameterized
 
 
 _SCRIPT_COMMON = """
+import inspect
 import json
 import os
 from pathlib import Path
@@ -31,6 +33,19 @@ import torch
 import triton
 import triton.language as tl
 from triton import knobs
+
+
+# `c_cache` is an fb-Triton jit() option; upstream Triton does not accept
+# it. Request it only where the installed Triton supports it.
+_C_CACHE_KWARGS = (
+    {"c_cache": True}
+    if "c_cache" in inspect.signature(triton.jit).parameters
+    else {}
+)
+
+
+def capture_jit(fn):
+    return triton.jit(fn, **_C_CACHE_KWARGS)
 
 
 def binary_info(binary):
@@ -50,14 +65,14 @@ def save_report(report):
 _JIT_SCRIPT = (
     _SCRIPT_COMMON
     + """
-@triton.jit(c_cache=True)
+@capture_jit
 def store_kernel(x, output, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     value = tl.load(x + offsets, offsets < N, other=0) + 7
     tl.store(output + offsets, value, offsets < N)
 
 
-@triton.jit(c_cache=True)
+@capture_jit
 def tuple_kernel(values, output, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     x = tl.load(values[0] + offsets, offsets < N, other=0)
@@ -72,7 +87,8 @@ reference = os.environ["TRITONPARSE_TEST_REFERENCE"] == "1"
 report = {"kernels": [], "unchanged": [], "hot_reused": []}
 for kernel, args in ((store_kernel, (x, output)),
                      (tuple_kernel, ((x, (x, 3)), output))):
-    assert kernel.c_cache is True
+    if _C_CACHE_KWARGS:
+        assert kernel.c_cache is True
     for block_size in (32, 64):
         # Different specializations give each grid form a cold and a hot call.
         if block_size == 32:
@@ -141,7 +157,7 @@ for custom_bench in (False, True):
         do_bench=benchmark if custom_bench else None,
         cache_results=True,
     )
-    @triton.jit(c_cache=True)
+    @capture_jit
     def measured_kernel(output, N: tl.constexpr, BLOCK_SIZE: tl.constexpr):
         offsets = tl.arange(0, BLOCK_SIZE)
         tl.store(output + offsets, 0, offsets < N)
@@ -370,8 +386,8 @@ class VirtualTargetCaptureTest(unittest.TestCase):
                 self.assertEqual(actual["hash"], expected["hash"])
                 self.assertEqual(actual["ir"], expected["ir"])
             if target == "cuda:100":
-                self.assertIn("H100", captured["host_device"])
-                self.assertIn("H100", reference["host_device"])
+                self.assertTrue(captured["host_device"])
+                self.assertEqual(captured["host_device"], reference["host_device"])
                 self.assertTrue(
                     all(
                         ".target sm_100" in kernel["ir"]["ptx"]
@@ -429,6 +445,14 @@ class VirtualTargetCaptureTest(unittest.TestCase):
     def test_tlx_eager_mm(
         self, target: str, key: str, arch_marker: str, elf_machine: int
     ) -> None:
+        try:
+            tlx_available = (
+                importlib.util.find_spec("triton.language.extra.tlx") is not None
+            )
+        except ModuleNotFoundError:
+            tlx_available = False
+        if not tlx_available:
+            self.skipTest("TLX is not available in this Triton build")
         with tempfile.TemporaryDirectory(prefix="virtual-target-tlx-") as temp:
             root = Path(temp)
             (root / "workload.py").write_text(_TLX_SCRIPT)
@@ -438,7 +462,7 @@ class VirtualTargetCaptureTest(unittest.TestCase):
             self.assertEqual(result["unchanged"], [True, True])
             self.assertTrue(result["kernels"])
             if target == "cuda:100":
-                self.assertIn("H100", result["host_device"])
+                self.assertTrue(result["host_device"])
                 self.assertEqual(512, result["tmem_columns"])
             for kernel in result["kernels"]:
                 self.assertEqual(kernel["binary"]["machine"], elf_machine)
