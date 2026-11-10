@@ -94,6 +94,21 @@ CONDA_ENV=tritonparse bash .ci/install-project.sh
 CONDA_ENV=tritonparse TEST_TYPE=all COVERAGE=true bash .ci/run-tests.sh
 ```
 
+## GPU CI coverage
+
+`.github/workflows/test.yml` keeps the A10G nightly and pip lanes and the
+MI350 ROCm nightly lane. The upstream Triton nightly job also runs on a
+single-H100 OSDC runner (`mt-l-x86iamx-22-225-h100`, `meta-prod-aws-ue2`).
+Its check name is `test-h100-nightly`; the existing A10G nightly check remains
+`test-from-nightly`. Matrix failures do not cancel the other GPU lane.
+
+Both CUDA nightly lanes use `pytorch/almalinux-builder:cuda13.0` and the same
+setup and test steps, with compute capabilities `8.6` (A10G) and `9.0` (H100).
+A pre-test probe logs the GPU and driver and verifies the expected capability.
+The default `all` test selection retains CPU, native GPU, and virtual-target
+capture coverage on both hosts. Virtual-target code generation is not proof
+that the generated target binary can execute on that target GPU.
+
 ## Local Development
 
 For local development, you can use these scripts to set up the same environment as CI:
