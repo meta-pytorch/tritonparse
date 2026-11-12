@@ -215,8 +215,19 @@ def _apply_stride_and_offset(tensor, shape, stride, storage_offset):
         size=shape, stride=stride, storage_offset=storage_offset
     )
 
-    # Copy data from the base tensor into the strided layout
-    strided_view.copy_(tensor.flatten()[: strided_view.numel()].view(shape))
+    # Copy data from the base tensor into the strided layout. copy_() rejects a
+    # destination with a zero-stride dimension of size > 1 (an expanded or
+    # broadcast view); every index along such a dimension maps to the same
+    # storage, so only index 0 is written.
+    source = tensor.flatten()[: strided_view.numel()].view(shape)
+    write_shape = list(shape)
+    for dim, (dim_size, dim_stride) in enumerate(zip(shape, stride)):
+        if dim_stride == 0 and dim_size > 1:
+            source = source.narrow(dim, 0, 1)
+            write_shape[dim] = 1
+    storage_tensor.as_strided(
+        size=write_shape, stride=stride, storage_offset=storage_offset
+    ).copy_(source)
 
     return strided_view
 
