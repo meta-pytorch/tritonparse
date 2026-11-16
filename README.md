@@ -2,6 +2,7 @@
 
 [![License: BSD-3](https://img.shields.io/badge/License-BSD--3-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Deploy-brightgreen)](https://meta-pytorch.org/tritonparse/)
+[![DOI](https://img.shields.io/badge/DOI-10.1145%2F3845814.3850058-blue)](https://doi.org/10.1145/3845814.3850058)
 
 **A comprehensive visualization and analysis tool for Triton kernel compilation and launch** — helping developers analyze, debug, and understand Triton kernel compilation processes.
 
@@ -220,6 +221,29 @@ We welcome contributions! Please see our **[Developer Guide](https://github.com/
 - **🐛 Report Issues**: [GitHub Issues](https://github.com/meta-pytorch/tritonparse/issues)
 - **💬 Discussions**: [GitHub Discussions](https://github.com/meta-pytorch/tritonparse/discussions)
 - **📚 Documentation**: [TritonParse Wiki](https://github.com/meta-pytorch/tritonparse/wiki)
+
+## Citation
+
+If you use TritonParse in your research, please cite our ASPLOS '27 paper:
+
+```bibtex
+@inproceedings{li2027tritonparse,
+  author = {Li, Ying and Hao, Yueming and Berard, David and Zhao, Xu and Huang, Barney and Chi, Wenyuan and Tsai, Cheng-huan and Patel, Prithvi and Ramesh, Srivatsan and Ren, Manman and Yu, Hongtao and Wu, James and Zimmerman, Dan and Riasanovsky, Nicholas J. and Mainz, Adam and Maher, Bert and Hua, Peiying and Shi, Daohang and Robie, Taylor and Fang, Yuanwei and Zhu, Shuofei and Yu, Shangdi and Patel, Nikhil and Bao, Bin and Chen, Yang and Szczepaniec, Jan and Zhu, Haishan and Li, Patrick and Nay, Shane and Aziz, Adnan and Yoshimi, Bill and Loginov, Alexey and Sun, Yifan},
+  title = {TritonParse: Multi-IR Provenance and Reproducible Debugging for Triton Kernel Compilation},
+  year = {2027},
+  isbn = {9798400730122},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3845814.3850058},
+  doi = {10.1145/3845814.3850058},
+  booktitle = {Proceedings of the 32nd ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 1},
+  pages = {1021–1037},
+  numpages = {17},
+  keywords = {triton, compiler debugging, gpu kernels, multi-ir provenance, reproducibility},
+  location = {Heraklion, Greece},
+  series = {ASPLOS '27}
+}
+```
 
 ## 📄 License
 
