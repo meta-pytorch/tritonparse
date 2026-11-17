@@ -132,6 +132,33 @@ class OpenCompressedFileTest(unittest.TestCase):
         finally:
             Path(path).unlink()
 
+    def test_read_gzip_truncated_trailing_member(self):
+        """A writer killed mid-record leaves a partial last gzip member.
+
+        The complete records before it must still be readable, as they are for
+        plain-text and zstd traces.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            for i in range(3):
+                f.write(gzip.compress(f'{{"line": {i}}}\n'.encode("utf-8")))
+            last = b'{"line": 3, "payload": "' + b"x" * 4096 + b'"}\n'
+            partial = gzip.compress(last)
+            f.write(partial[: len(partial) // 2])
+        try:
+            with self.assertLogs("tritonparse", level="WARNING") as logs:
+                with open_compressed_file(path) as fh:
+                    records = [line for line in fh if line.endswith("\n")]
+            self.assertEqual(len(records), 3)
+            self.assertIn('"line": 2', records[2])
+            self.assertIn("truncated gzip record", logs.output[0])
+            with self.assertLogs("tritonparse", level="WARNING"):
+                with open_compressed_file(path) as fh:
+                    text = fh.read()
+            self.assertEqual(text.count('"line": 2}\n'), 1)
+        finally:
+            Path(path).unlink()
+
     def test_read_zstd_single_frame(self):
         cctx = zstd.ZstdCompressor()
         content = '{"c": 1}\n{"c": 2}\n'
