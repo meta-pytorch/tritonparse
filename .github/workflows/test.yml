@@ -60,32 +60,29 @@ jobs:
                   make lint-check || (echo "❌ Lint check failed. Please run 'make lint' to fix lint issues, then commit the changes." && exit 1)
 
     # ===================================================================
-    # GPU tests on PyTorch self-hosted runners: AWS G5 / NVIDIA A10G
-    # and an OSDC single-H100 slice. The job container supplies the
+    # GPU tests on OSDC runners: a single-A10G and a single-H100
+    # slice. The job container supplies the
     # toolchain; neither lane needs a runner-provided conda or uv env.
     #
     # Architecture: `runs-on:` + `container:` (helion-style). We run the
     # job directly inside the `pytorch/almalinux-builder:cuda13.0`
     # docker image (AlmaLinux 8.10 + CUDA 13.0 toolkit + conda 23.5.2 in
-    # /opt/conda + Python 3.11 base env). The host AMI provides the
-    # NVIDIA driver (580.65.06) and nvidia-container-toolkit; the
-    # container picks them up via `--gpus all`.
+    # /opt/conda + Python 3.11 base env). The runner host provides the
+    # NVIDIA driver.
     #
     # We bypass `pytorch/test-infra/linux_job_v2.yml` to retain native
     # `actions/cache` support (the reusable workflow's opaque `script:`
     # block prevents standard caching). This trade-off costs us the
-    # reusable workflow's auto NVIDIA driver freshness check, but the
-    # AMI's pre-installed driver has been verified working.
+    # reusable workflow's auto NVIDIA driver freshness check.
     #
     # `.ci/setup.sh` is intentionally NOT called here — it targets a
     # GitHub-hosted Ubuntu fresh-image runner and is kept for local
     # development only. The container ships with everything we need.
     #
-    # Why CUDA 13.0 (not 13.2): host driver on G5 runners (580.65.06)
-    # exposes CUDA runtime 13.0; cuda13.2 image fails the
-    # nvidia-container-cli capability check ("unsatisfied condition:
-    # cuda>=13.2"). Bump once PyTorch infra rolls out a newer driver
-    # AMI. Probed on 2026-04-29.
+    # Why CUDA 13.0 (not 13.2): the host driver (580.x) exposes CUDA
+    # runtime 13.0; a cuda13.2 image fails the nvidia-container-cli
+    # capability check ("unsatisfied condition: cuda>=13.2"). Bump once
+    # the runners get a newer driver.
     # ===================================================================
     # The nightly lane covers both Ampere (A10G) and Hopper (H100).
     # Keep the existing A10G check name and isolate failures between GPUs.
@@ -96,16 +93,12 @@ jobs:
             matrix:
                 include:
                     - check_name: test-from-nightly
-                      runner_group: default-old
-                      runner: linux.g5.4xlarge.nvidia.gpu
+                      runner: mt-l-x86aavx2-11-41-a10g
                       cuda_arch: "8.6"
                     - check_name: test-h100-nightly
-                      runner_group: meta-prod-aws-ue2
                       runner: mt-l-x86iamx-22-225-h100
                       cuda_arch: "9.0"
-        runs-on:
-            group: ${{ matrix.runner_group }}
-            labels: ${{ matrix.runner }}
+        runs-on: ${{ matrix.runner }}
         container:
             image: pytorch/almalinux-builder:cuda13.0
             options: --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g --ipc=host
@@ -127,7 +120,7 @@ jobs:
               # actions/checkout sets safe.directory in a *temporary* HOME
               # that is discarded after the step. Subsequent git invocations
               # (e.g. setuptools-scm during 'pip install -e .') see the
-              # workspace as ec2-user-owned (uid 1000) while the container
+              # workspace as owned by the runner user (uid 1000) while the container
               # runs as root (uid 0), and refuse with 'dubious ownership'.
               # Persist the safe.directory in /github/home/.gitconfig so all
               # later steps inherit it.
@@ -250,7 +243,7 @@ jobs:
                   bash .ci/run-tests.sh
 
     test-from-pip:
-        runs-on: linux.g5.4xlarge.nvidia.gpu
+        runs-on: mt-l-x86aavx2-11-41-a10g
         container:
             image: pytorch/almalinux-builder:cuda13.0
             options: --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --shm-size=2g --ipc=host
