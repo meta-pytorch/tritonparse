@@ -5,7 +5,10 @@ Covers magic number detection, transparent reading of gzip/zstd/plain files,
 and the critical multi-frame zstd scenario (per-record frame concatenation).
 """
 
+import base64
 import gzip
+import json
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -129,6 +132,127 @@ class OpenCompressedFileTest(unittest.TestCase):
             self.assertEqual(len(lines), 5)
             self.assertIn('"line": 0', lines[0])
             self.assertIn('"line": 4', lines[4])
+        finally:
+            Path(path).unlink()
+
+    @staticmethod
+    def _write_members(f, records):
+        """Write each record as its own gzip member, as TritonTraceHandler does."""
+        for r in records:
+            f.write(gzip.compress(r.encode("utf-8")))
+
+    def test_read_gzip_truncated_trailing_member(self):
+        """A writer killed mid-record leaves a partial last gzip member.
+
+        The complete records before it must still be readable, as they are for
+        plain-text and zstd traces.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            self._write_members(f, [f'{{"line": {i}}}\n' for i in range(3)])
+            last = b'{"line": 3, "payload": "' + b"x" * 4096 + b'"}\n'
+            partial = gzip.compress(last)
+            f.write(partial[: len(partial) // 2])
+        try:
+            with self.assertLogs("tritonparse", level="WARNING") as logs:
+                with open_compressed_file(path) as fh:
+                    records = [line for line in fh if line.endswith("\n")]
+            self.assertEqual(len(records), 3)
+            self.assertIn('"line": 2', records[2])
+            self.assertEqual(len(logs.output), 1)
+            self.assertIn("truncated gzip record", logs.output[0])
+            with self.assertLogs("tritonparse", level="WARNING"):
+                with open_compressed_file(path) as fh:
+                    text = fh.read()
+            self.assertEqual(text.count('"line": 2}\n'), 1)
+        finally:
+            Path(path).unlink()
+
+    def test_read_gzip_truncated_member_partial_line(self):
+        """The decodable prefix of a truncated record comes through as is.
+
+        With data that does not compress well, gzip can still decode part of
+        the cut-off member. That part is returned as a last line without a
+        newline, the same as a truncated plain-text trace, and the parser drops
+        it as invalid JSON.
+        """
+        payload = base64.b64encode(random.Random(0).randbytes(8192))
+        last = b'{"line": 1, "payload": "' + payload + b'"}\n'
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            self._write_members(f, ['{"line": 0}\n'])
+            partial = gzip.compress(last)
+            f.write(partial[: len(partial) // 2])
+        try:
+            with self.assertLogs("tritonparse", level="WARNING"):
+                with open_compressed_file(path) as fh:
+                    lines = list(fh)
+            self.assertEqual(lines[0], '{"line": 0}\n')
+            self.assertEqual(len(lines), 2)
+            tail = lines[1]
+            self.assertFalse(tail.endswith("\n"))
+            self.assertGreater(len(tail), 0)
+            self.assertTrue(last.decode("utf-8").startswith(tail))
+            with self.assertRaises(ValueError):
+                json.loads(tail)
+        finally:
+            Path(path).unlink()
+
+    def test_read_gzip_corrupt_middle_member_raises(self):
+        """Only a truncated tail is tolerated; a bad CRC mid-file still raises."""
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+        members = [
+            gzip.compress(f'{{"line": {i}}}\n'.encode("utf-8")) for i in range(3)
+        ]
+        bad = bytearray(members[1])
+        bad[-8] ^= 0xFF  # first byte of the CRC32 in the member trailer
+        Path(path).write_bytes(members[0] + bytes(bad) + members[2])
+        try:
+            with self.assertRaises(gzip.BadGzipFile):
+                with open_compressed_file(path) as fh:
+                    fh.read()
+        finally:
+            Path(path).unlink()
+
+    def test_gzip_seek_and_tell(self):
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            self._write_members(f, [f'{{"line": {i}}}\n' for i in range(3)])
+        try:
+            with open_compressed_file(path) as fh:
+                self.assertTrue(fh.seekable())
+                self.assertEqual(fh.readline(), '{"line": 0}\n')
+                pos = fh.tell()
+                rest = fh.read()
+                self.assertEqual(rest, '{"line": 1}\n{"line": 2}\n')
+                fh.seek(pos)
+                self.assertEqual(fh.read(), rest)
+                fh.seek(0)
+                self.assertEqual(fh.readline(), '{"line": 0}\n')
+        finally:
+            Path(path).unlink()
+
+    def test_gzip_seek_with_truncated_tail(self):
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            self._write_members(f, [f'{{"line": {i}}}\n' for i in range(2)])
+            partial = gzip.compress(b'{"line": 2, "payload": "' + b"x" * 4096 + b'"}\n')
+            f.write(partial[: len(partial) // 2])
+        complete = '{"line": 0}\n{"line": 1}\n'
+        try:
+            with self.assertLogs("tritonparse", level="WARNING") as logs:
+                with open_compressed_file(path) as fh:
+                    self.assertEqual(fh.read(), complete)
+                    # seek resets the truncation state, so the data reads again.
+                    fh.seek(0)
+                    self.assertEqual(fh.read(), complete)
+                    # Seeking past the end stops where the readable data ends.
+                    fh.seek(0)
+                    end = fh.buffer.seek(1 << 20)
+                    self.assertEqual(end, len(complete))
+                    self.assertEqual(fh.buffer.read(), b"")
+            self.assertEqual(len(logs.output), 1)
         finally:
             Path(path).unlink()
 

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Iterator, TextIO, Union
 
 import zstandard as zstd
+from tritonparse.tp_logger import logger
 
 # Magic numbers for compression format detection
 # gzip: 0x1F 0x8B (RFC 1952)
@@ -99,6 +100,82 @@ def is_zstd_file(filepath: Union[str, Path]) -> bool:
         return False
 
 
+class _TruncatedGzipTailReader(io.BufferedIOBase):
+    """Treat a truncated trailing gzip member as end of file.
+
+    TritonTraceHandler writes one gzip member per record, so a trace whose
+    writer was killed mid-record, or that is read while the job is still
+    writing, ends in an incomplete member. gzip raises EOFError there and the
+    complete records before it would be lost. Plain-text and zstd traces
+    already keep those records, so do the same for gzip.
+
+    Whatever part of the truncated record gzip could still decode is passed
+    through, so the stream ends with that partial line and no trailing
+    newline. That matches what a truncated plain-text trace gives, and the
+    parser drops the line as invalid JSON.
+
+    Only EOFError is caught. A bad CRC or corrupt deflate data in any member
+    still raises.
+    """
+
+    def __init__(self, gzip_file: gzip.GzipFile, filepath: Path):
+        self._gzip_file = gzip_file
+        self._filepath = filepath
+        self._truncated = False
+        self._warned = False
+
+    def _hit_truncated_tail(self) -> None:
+        self._truncated = True
+        if not self._warned:
+            self._warned = True
+            logger.warning(
+                f"{self._filepath} ends with a truncated gzip record; "
+                "the records before it were read, the last one is incomplete."
+            )
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return self._gzip_file.seekable()
+
+    def tell(self) -> int:
+        return self._gzip_file.tell()
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        self._truncated = False
+        try:
+            return self._gzip_file.seek(offset, whence)
+        except EOFError:
+            # Seeking forward decompresses up to the target, so it can run
+            # into the truncated tail. Stop at the end of the readable data.
+            self._hit_truncated_tail()
+            return self._gzip_file.tell()
+
+    def read1(self, size: int = -1) -> bytes:
+        if self._truncated:
+            return b""
+        try:
+            # read1 returns data one member at a time, so records decoded
+            # before the truncated member have already been handed out.
+            return self._gzip_file.read1(size)
+        except EOFError:
+            self._hit_truncated_tail()
+            return b""
+
+    def read(self, size: int = -1) -> bytes:
+        chunks = []
+        remaining = size if size is not None and size >= 0 else None
+        while remaining is None or remaining > 0:
+            chunk = self.read1(-1 if remaining is None else remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+        return b"".join(chunks)
+
+
 @contextmanager
 def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
     """
@@ -129,9 +206,11 @@ def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
     compression = detect_compression(filepath)
 
     if compression == "gzip":
-        # gzip.open handles gzip member concatenation automatically
-        with gzip.open(filepath, "rt", encoding="utf-8") as f:
-            yield f
+        # GzipFile handles gzip member concatenation automatically
+        with gzip.GzipFile(filepath, "rb") as gzip_file:
+            reader = _TruncatedGzipTailReader(gzip_file, filepath)
+            with io.TextIOWrapper(reader, encoding="utf-8") as f:
+                yield f
     elif compression == "zstd":
         dctx = zstd.ZstdDecompressor()
         with open(filepath, "rb") as binary_file:
