@@ -10,15 +10,52 @@ updates:
     commit-message:
       prefix: "[dependabot]"
 
-    # Group all updates into a single PR to reduce "PR bombing"
+    # TypeScript is intentionally split into two side-by-side npm: aliases
+    # in website/package.json:
+    #   "typescript":  npm:@typescript/typescript6@^6.0.2 (parser API used
+    #                  by typescript-eslint, whose peer range is <6.1.0)
+    #   "typescript7": npm:typescript@^7.0.2 (the tsc run by npm run build,
+    #                  invoked as node ./node_modules/typescript7/bin/tsc)
+    # Do not rename typescript7 back to @typescript/native. Since
+    # typescript-eslint 8.73, typescript-estree declares an optional peer on
+    # @typescript/native that requires TypeScript >=7.1.0-dev for its
+    # experimental native backend. The website ESLint config does not enable
+    # that backend, so the peer must stay absent; a same-named root alias at
+    # 7.0.2 makes npm resolve a 7.1 nightly instead, and Dependabot then
+    # produces a package-lock.json that npm ci rejects as out of sync.
+    # Dependabot skips npm: aliases, so both TypeScript entries stay pinned
+    # for manual bumps; that hold is intentional. When typescript-eslint's
+    # typescript peer officially includes 7.x, collapse both aliases into a
+    # single plain "typescript": "^7.x" dependency and remove this note.
+    #
+    # The ESLint toolchain gets its own group so that a peer-dependency
+    # break in that stack cannot block unrelated (including security)
+    # updates in the website-all group.
     groups:
+      website-eslint:
+        patterns:
+          - "@eslint/*"
+          - "eslint"
+          - "eslint-*"
+          - "typescript-eslint"
+          - "globals"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       website-all:
         patterns:
           - "*"
+        exclude-patterns:
+          - "@eslint/*"
+          - "eslint"
+          - "eslint-*"
+          - "typescript-eslint"
+          - "globals"
         update-types:
           - "major"
           - "minor"
           - "patch"
 
-    # Limit the number of open PRs at a time (optional)
-    open-pull-requests-limit: 1
+    # Two grouped PRs (website-eslint, website-all) may be open at once.
+    open-pull-requests-limit: 5
