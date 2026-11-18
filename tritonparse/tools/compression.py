@@ -108,15 +108,49 @@ class _TruncatedGzipTailReader(io.BufferedIOBase):
     writing, ends in an incomplete member. gzip raises EOFError there and the
     complete records before it would be lost. Plain-text and zstd traces
     already keep those records, so do the same for gzip.
+
+    Whatever part of the truncated record gzip could still decode is passed
+    through, so the stream ends with that partial line and no trailing
+    newline. That matches what a truncated plain-text trace gives, and the
+    parser drops the line as invalid JSON.
+
+    Only EOFError is caught. A bad CRC or corrupt deflate data in any member
+    still raises.
     """
 
     def __init__(self, gzip_file: gzip.GzipFile, filepath: Path):
         self._gzip_file = gzip_file
         self._filepath = filepath
         self._truncated = False
+        self._warned = False
+
+    def _hit_truncated_tail(self) -> None:
+        self._truncated = True
+        if not self._warned:
+            self._warned = True
+            logger.warning(
+                f"{self._filepath} ends with a truncated gzip record; "
+                "the records before it were read, the last one is incomplete."
+            )
 
     def readable(self) -> bool:
         return True
+
+    def seekable(self) -> bool:
+        return self._gzip_file.seekable()
+
+    def tell(self) -> int:
+        return self._gzip_file.tell()
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        self._truncated = False
+        try:
+            return self._gzip_file.seek(offset, whence)
+        except EOFError:
+            # Seeking forward decompresses up to the target, so it can run
+            # into the truncated tail. Stop at the end of the readable data.
+            self._hit_truncated_tail()
+            return self._gzip_file.tell()
 
     def read1(self, size: int = -1) -> bytes:
         if self._truncated:
@@ -126,11 +160,7 @@ class _TruncatedGzipTailReader(io.BufferedIOBase):
             # before the truncated member have already been handed out.
             return self._gzip_file.read1(size)
         except EOFError:
-            self._truncated = True
-            logger.warning(
-                f"{self._filepath} ends with a truncated gzip record; "
-                "ignoring the incomplete trailing record."
-            )
+            self._hit_truncated_tail()
             return b""
 
     def read(self, size: int = -1) -> bytes:
