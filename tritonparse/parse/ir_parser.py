@@ -114,6 +114,10 @@ CALLSITE_PATTERN = re.compile(
     r"#loc(\d+)\s*=\s*loc\(\s*callsite\(\s*#loc(\d*)\s+at\s+#loc(\d*)\s*\)\s*\)"
 )
 
+# Unknown loc definitions in MLIR
+# Example: #loc1 = loc(unknown)
+UNKNOWN_LOC_PATTERN = re.compile(r"#loc(\d*)\s*=\s*loc\(unknown\)")
+
 
 def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
     """
@@ -140,7 +144,16 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
             "line": int(main_match.group(2)),
             "column": int(main_match.group(3)),
         }
-    # #loc1 = loc(unknown) is another special case. We ignore it.
+    # Handle loc(unknown) definitions - these are valid MLIR locations with no source info
+    for m in UNKNOWN_LOC_PATTERN.finditer(ir_content):
+        loc_id = m.group(1) or ""
+        locations[loc_id] = {
+            "file": "unknown",
+            "line": 0,
+            "column": 0,
+            "is_unknown": True,
+        }
+
     for loc_id, filename, line, col in LOC_PATTERN.findall(ir_content):
         key = loc_id
         locations[key] = {"file": filename, "line": int(line), "column": int(col)}
@@ -220,13 +233,19 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
             # Empty strings map to main loc key ""
             callsite_defs.append((loc_id, callee_id or "", caller_id or "", i))
 
-    # Resolve callsite definitions
+    # Resolve callsite definitions iteratively
     # A callsite inherits the location from its callee (the code being called)
-    # and stores a reference to its caller (the code doing the calling)
-    for loc_id, callee_id, caller_id, def_line in callsite_defs:
-        if loc_id not in locations:  # Avoid overwriting existing definitions
+    # and stores a reference to its caller (the code doing the calling).
+    # Iterative resolution handles cases where a callee is itself a callsite
+    # that needs to be resolved first.
+    unresolved = list(callsite_defs)
+    max_iterations = len(callsite_defs) + 1
+    for _ in range(max_iterations):
+        still_unresolved = []
+        for loc_id, callee_id, caller_id, def_line in unresolved:
+            if loc_id in locations:
+                continue
             if callee_id in locations:
-                # Inherit location info from callee
                 callee_info = locations[callee_id]
                 locations[loc_id] = {
                     "file": callee_info["file"],
@@ -238,10 +257,16 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
                     "callsite_caller": caller_id,
                 }
             else:
-                logger.warning(
-                    f"Callsite #loc{loc_id} references undefined callee #loc{callee_id}"
-                )
-                # Note: We don't add this callsite to locations since callee is missing
+                still_unresolved.append((loc_id, callee_id, caller_id, def_line))
+        if len(still_unresolved) == len(unresolved):
+            break
+        unresolved = still_unresolved
+
+    for loc_id, callee_id, _caller_id, _def_line in unresolved:
+        if loc_id not in locations:
+            logger.debug(
+                f"Callsite #loc{loc_id} references undefined callee #loc{callee_id}"
+            )
 
     # Resolve each callsite to the OUTERMOST frame of its chain. `file`/`line`
     # describe the callee -- the inlined library code actually emitted -- so on
@@ -269,10 +294,10 @@ def extract_loc_definitions(ir_content: str) -> Dict[str, Dict[str, Any]]:
             info["inlined_at_file"] = cur["file"]
             info["inlined_at_line"] = cur["line"]
 
-    # Verify caller references (warning only, don't block)
+    # Verify caller references (debug only, don't block)
     for loc_id, _callee_id, caller_id, _def_line in callsite_defs:
         if loc_id in locations and caller_id and caller_id not in locations:
-            logger.warning(
+            logger.debug(
                 f"Callsite #loc{loc_id} references undefined caller #loc{caller_id}"
             )
 

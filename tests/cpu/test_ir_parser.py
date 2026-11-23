@@ -448,6 +448,61 @@ module {
 
         print("✓ Callsite parsing tests passed")
 
+    def test_callsite_with_unknown_loc(self):
+        """Test that callsites referencing loc(unknown) resolve without warnings."""
+        ir_with_unknown = """
+module {
+  #loc1 = loc(unknown)
+  #loc5 = loc("/tmp/test.py":10:5)
+  #loc10 = loc(callsite(#loc5 at #loc1))
+  #loc115 = loc(callsite(#loc10 at #loc1))
+  %0 = tt.load %ptr loc(#loc115)
+}
+"""
+        locs = extract_loc_definitions(ir_with_unknown)
+
+        # loc(unknown) should be recognized
+        self.assertIn("1", locs)
+        self.assertTrue(locs["1"].get("is_unknown"))
+
+        # loc10: callee is loc5, caller is loc1 (unknown)
+        self.assertIn("10", locs)
+        self.assertEqual(locs["10"]["file"], "/tmp/test.py")
+        self.assertEqual(locs["10"]["line"], 10)
+        self.assertTrue(locs["10"].get("is_callsite"))
+
+        # loc115: callee is loc10 (another callsite), caller is loc1 (unknown)
+        self.assertIn("115", locs)
+        self.assertEqual(locs["115"]["file"], "/tmp/test.py")
+        self.assertEqual(locs["115"]["line"], 10)
+        self.assertTrue(locs["115"].get("is_callsite"))
+        self.assertEqual(locs["115"]["callsite_callee"], "10")
+
+    def test_callsite_reverse_order_resolution(self):
+        """Test callsite resolution when callee is a later-defined callsite."""
+        ir_reverse_order = """
+module {
+  #loc1 = loc("/tmp/test.py":50:0)
+  #loc2 = loc("/tmp/test.py":100:8)
+  #loc3 = loc("/tmp/test.py":200:4)
+  #loc200 = loc(callsite(#loc100 at #loc3))
+  #loc100 = loc(callsite(#loc1 at #loc2))
+  %0 = tt.load %ptr loc(#loc200)
+}
+"""
+        locs = extract_loc_definitions(ir_reverse_order)
+
+        # loc100: callee is loc1 (base loc)
+        self.assertIn("100", locs)
+        self.assertEqual(locs["100"]["file"], "/tmp/test.py")
+        self.assertEqual(locs["100"]["line"], 50)
+
+        # loc200: callee is loc100 (callsite resolved iteratively)
+        self.assertIn("200", locs)
+        self.assertEqual(locs["200"]["file"], "/tmp/test.py")
+        self.assertEqual(locs["200"]["line"], 50)
+        self.assertEqual(locs["200"]["callsite_callee"], "100")
+
     def test_loc_alias_parsing(self):
         """Test parsing of location aliases in TTIR/TTGIR"""
 
