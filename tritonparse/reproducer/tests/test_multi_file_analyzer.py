@@ -9,6 +9,7 @@ including cross-file dependency tracking, import resolution, and result consolid
 """
 
 import ast
+import os
 import sys
 import tempfile
 import unittest
@@ -25,8 +26,10 @@ class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
     def setUp(self) -> None:
         """Set up test fixtures."""
         # Get the directory containing the tritonparse package.
-        # Keep the same import tree as importlib, including Buck's link tree.
-        test_file = Path(__file__).absolute()
+        # The analyzer canonicalizes file paths with `Path.resolve()`, so the
+        # fixtures must use canonical paths too; under Buck, `__file__` names
+        # a link-tree path that resolves to the real source file.
+        test_file = Path(__file__).resolve()
         self.code_root = str(test_file.parents[3])
 
         # Test artifacts directory
@@ -119,6 +122,97 @@ class TestMultiFileCallGraphAnalyzer(unittest.TestCase):
         # Verify short names are correctly extracted
         self.assertEqual(result.function_short_names[scale_kernel_name], "scale_kernel")
         self.assertEqual(result.function_short_names[add_values_name], "add_values")
+
+    def test_symlink_path_resolution(self) -> None:
+        """Test that analyzer works correctly when entry_file is accessed via symlink.
+
+        This simulates the buck-out link-tree scenario where kernel source files
+        are symlinked from buck-out to the real fbcode source.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a symlink to the utils artifact
+            symlink_path = os.path.join(tmpdir, "triton_utils.py")
+            os.symlink(self.utils_file, symlink_path)
+
+            analyzer = MultiFileCallGraphAnalyzer(
+                entry_file=symlink_path,
+                entry_function="add_values",
+            )
+
+            # entry_file should be resolved to the real path, not the symlink
+            self.assertEqual(analyzer.entry_file, self.utils_file)
+
+            result = analyzer.analyze()
+
+            # analyzed_files should contain canonical (resolved) paths
+            self.assertEqual(result.stats.total_files_analyzed, 1)
+            self.assertIn(self.utils_file, result.analyzed_files)
+            # The symlink path should NOT appear in analyzed_files
+            self.assertNotIn(symlink_path, result.analyzed_files)
+
+    def test_symlink_multi_file_traversal(self) -> None:
+        """Test multi-file analysis when starting from a symlinked entry file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a symlink to the entry kernel
+            symlink_path = os.path.join(tmpdir, "triton_fused_kernel.py")
+            os.symlink(self.entry_file, symlink_path)
+
+            analyzer = MultiFileCallGraphAnalyzer(
+                entry_file=symlink_path,
+                entry_function="main_kernel",
+            )
+
+            result = analyzer.analyze()
+
+            # Should still traverse all 3 files
+            self.assertEqual(result.stats.total_files_analyzed, 3)
+
+            # All paths should be canonical (resolved)
+            self.assertIn(self.entry_file, result.analyzed_files)
+            self.assertIn(self.preprocess_file, result.analyzed_files)
+            self.assertIn(self.utils_file, result.analyzed_files)
+
+            # Dependent functions should still be found
+            function_names = set(result.functions.keys())
+            self.assertTrue(any("scale_kernel" in name for name in function_names))
+            self.assertTrue(any("add_values" in name for name in function_names))
+
+    def test_embedded_functions_filtered_from_imports(self) -> None:
+        """Test that get_dependent_source_map filters out imports for embedded functions.
+
+        When a function (e.g., scale_kernel) is extracted and embedded in the
+        reproducer, the corresponding 'from module import scale_kernel' should
+        not appear in import_statements.
+        """
+        from tritonparse.reproducer.placeholder_replacer import get_dependent_source_map
+
+        dep_result = get_dependent_source_map(
+            function_name="main_kernel",
+            file_path=self.entry_file,
+        )
+
+        self.assertIsNotNone(dep_result)
+        assert dep_result is not None
+
+        # scale_kernel and add_values should be in embedded functions
+        embedded_short_names = {
+            name.split(".")[-1] for name in dep_result.functions.keys()
+        }
+        self.assertIn("scale_kernel", embedded_short_names)
+        self.assertIn("add_values", embedded_short_names)
+
+        # Import statements should NOT contain imports for embedded functions
+        for stmt in dep_result.import_statements:
+            self.assertNotIn(
+                "scale_kernel",
+                stmt,
+                f"Embedded function 'scale_kernel' should not appear in import: {stmt}",
+            )
+            self.assertNotIn(
+                "add_values",
+                stmt,
+                f"Embedded function 'add_values' should not appear in import: {stmt}",
+            )
 
 
 class TestForwardHelperCopy(unittest.TestCase):

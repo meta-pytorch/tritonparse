@@ -886,7 +886,7 @@ def get_dependent_source_map(
     """
     from pathlib import Path
 
-    source_path = Path(file_path)
+    source_path = Path(file_path).resolve()
     if not source_path.exists() and source_repo_dir:
         source_path = _map_file_path_to_source_repo(file_path, source_repo_dir)
     if not source_path or not source_path.exists():

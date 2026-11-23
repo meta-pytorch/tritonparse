@@ -11,6 +11,7 @@ importing the modules (no side effects).
 import importlib.util
 import sys
 from importlib.machinery import ModuleSpec
+from pathlib import Path
 
 from tritonparse.tp_logger import get_logger
 
@@ -33,7 +34,7 @@ class ImportResolver:
             project_root: Absolute path to project root directory
                          (e.g., /path/to/project/root)
         """
-        self.project_root = project_root
+        self.project_root = str(Path(project_root).resolve())
 
         # Ensure project_root is in sys.path for importlib to find modules
         if project_root not in sys.path:
@@ -105,6 +106,9 @@ class ImportResolver:
                 return None, True
 
             origin = spec.origin
+
+            # Canonicalize for consistent comparison with project_root
+            origin = str(Path(origin).resolve())
 
             # Skip special cases like frozen/built-in modules
             if origin == "frozen" or origin == "built-in":

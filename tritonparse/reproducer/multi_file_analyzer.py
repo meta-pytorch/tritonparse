@@ -26,6 +26,16 @@ from tritonparse.tp_logger import get_logger
 logger = get_logger("multi_file_analyzer")
 
 
+def _canonicalize_path(path: str) -> str:
+    """Resolve symlinks and normalize a file path to its canonical form.
+
+    This ensures all paths in the analyzer use the same representation,
+    regardless of whether they came from buck-out link-trees, symlinks,
+    or direct filesystem references.
+    """
+    return str(Path(path).resolve())
+
+
 def _auto_detect_code_root(entry_file: str) -> str:
     """
     Auto-detect code root from entry file path.
@@ -106,18 +116,18 @@ class MultiFileCallGraphAnalyzer:
             ...     code_roots="/path/to/fbcode",  # Optional
             ... )
         """
-        self.entry_file = entry_file
+        self.entry_file = _canonicalize_path(entry_file)
         self.entry_function = entry_function
 
         # Auto-detect code_roots if not provided
         if code_roots is None:
-            code_roots = _auto_detect_code_root(entry_file)
+            code_roots = _auto_detect_code_root(self.entry_file)
         self.code_roots = code_roots
 
         # Track multiple code roots for files from different projects
-        self.file_to_code_root: dict[str, str] = {entry_file: code_roots}
+        self.file_to_code_root: dict[str, str] = {self.entry_file: code_roots}
 
-        entry_module = self._file_to_module_name(entry_file)
+        entry_module = self._file_to_module_name(self.entry_file)
         qualified_backend = f"{entry_module}.{entry_function}"
         self.backends = [entry_function]
         self.qualified_backend = qualified_backend
@@ -177,6 +187,7 @@ class MultiFileCallGraphAnalyzer:
             file_path: Absolute path to the Python file to analyze
             backends_for_file: Specific backends for this file (defaults to self.backends for entry file)
         """
+        file_path = _canonicalize_path(file_path)
         self.visited_files.add(file_path)
         logger.info("Analyzing %s", file_path)
 
