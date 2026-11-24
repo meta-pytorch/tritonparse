@@ -404,6 +404,60 @@ export interface AutotuneArgsSummary {
     autotune_configs?: AutotuneConfigs;
 }
 
+/** Authoritative autotune result from AutotuneListener */
+export interface AutotuneResult {
+    best_config: string | null;
+    /** Per-config do_bench quantiles [p50, p20, p80] in milliseconds */
+    configs_timings: Record<string, (number | null)[]> | null;
+    /** Seconds spent benchmarking; null on a cache hit */
+    benchmark_duration: number | null;
+    cache_hit: boolean | null;
+}
+
+/** One row of the autotune benchmark table, timings formatted in milliseconds */
+export interface AutotuneBenchmarkRow {
+    config: string;
+    isBest: boolean;
+    median: string;
+    p20: string;
+    p80: string;
+}
+
+function formatTimingMs(value: number | null | undefined): string {
+    return typeof value === "number" && Number.isFinite(value)
+        ? value.toFixed(3)
+        : "N/A";
+}
+
+/** Benchmark table rows, best config first; configs without timings are skipped. */
+export function getAutotuneBenchmarkRows(
+    result: AutotuneResult
+): AutotuneBenchmarkRow[] {
+    return Object.entries(result.configs_timings ?? {})
+        .filter(([, timings]) => Array.isArray(timings) && timings.length > 0)
+        .map(([config, [median, p20, p80]]) => ({
+            config,
+            isBest: config === result.best_config,
+            median: formatTimingMs(median),
+            p20: formatTimingMs(p20),
+            p80: formatTimingMs(p80),
+        }))
+        .sort(
+            (a, b) =>
+                Number(b.isBest) - Number(a.isBest) ||
+                a.config.localeCompare(b.config)
+        );
+}
+
+/** Benchmark wall time, or null when nothing was benchmarked (cache hit). */
+export function formatBenchmarkDuration(
+    seconds: number | null | undefined
+): string | null {
+    return typeof seconds === "number" && Number.isFinite(seconds)
+        ? `${seconds.toFixed(3)}s`
+        : null;
+}
+
 /** Autotune analysis event structure */
 export interface AutotuneAnalysisEvent {
     event_type: "autotune_analysis";
@@ -418,6 +472,7 @@ export interface AutotuneAnalysisEvent {
         [key: string]: any;
     } | null;
     autotune_args_summary?: AutotuneArgsSummary | null;
+    autotune_result?: AutotuneResult | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     [key: string]: any;
 }

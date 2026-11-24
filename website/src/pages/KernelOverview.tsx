@@ -2,7 +2,12 @@ import React, { useState, useRef, useLayoutEffect, useCallback } from "react";
 import ArgumentViewer from "../components/ArgumentViewer";
 import DiffViewer from "../components/DiffViewer";
 import { RooflineSummary, RooflineLaunchTable } from "../components/RooflineView";
-import { ProcessedKernel } from "../utils/dataLoader";
+import {
+  ProcessedKernel,
+  AutotuneResult,
+  formatBenchmarkDuration,
+  getAutotuneBenchmarkRows,
+} from "../utils/dataLoader";
 import ToggleSwitch from "../components/ToggleSwitch";
 import TruncatedValue from "../components/TruncatedValue";
 import { DocumentTextIcon, ChevronRightIcon } from "../components/icons";
@@ -612,6 +617,63 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                     <div className="mb-2 text-sm text-gray-700">
                       <span className="font-semibold">Session:</span> {sess.session_id}
                     </div>
+
+                    {/* Benchmark Results from AutotuneListener */}
+                    {sess.autotune_result && (() => {
+                      const result = sess.autotune_result as AutotuneResult;
+                      const rows = getAutotuneBenchmarkRows(result);
+                      const duration = formatBenchmarkDuration(result.benchmark_duration);
+                      return (
+                        <div className="mb-3 p-3 bg-white rounded-md border border-indigo-200">
+                          <div className="flex items-center gap-3 mb-2">
+                            <span className="text-sm font-semibold text-gray-800">Benchmark Results</span>
+                            {result.cache_hit != null &&
+                              (result.cache_hit ? (
+                                <span className="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-700">Cache Hit</span>
+                              ) : (
+                                <span className="px-2 py-0.5 text-xs font-medium rounded bg-blue-100 text-blue-700">Fresh Benchmark</span>
+                              ))}
+                            {duration && (
+                              <span className="text-xs text-gray-500">
+                                <span aria-hidden="true">⏱</span> {duration}
+                              </span>
+                            )}
+                          </div>
+                          {rows.length > 0 && (
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full text-sm">
+                                <caption className="sr-only">Autotune benchmark results per config</caption>
+                                <thead>
+                                  <tr className="text-left text-gray-600 border-b border-gray-200">
+                                    <th scope="col" className="px-2 py-1">Config</th>
+                                    <th scope="col" className="px-2 py-1 text-right">Median (ms)</th>
+                                    <th scope="col" className="px-2 py-1 text-right">P20 (ms)</th>
+                                    <th scope="col" className="px-2 py-1 text-right">P80 (ms)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rows.map((row) => (
+                                    <tr
+                                      key={row.config}
+                                      className={row.isBest ? 'bg-yellow-50' : 'hover:bg-gray-50'}
+                                    >
+                                      <td className="px-2 py-1 font-mono text-xs text-gray-800">
+                                        {row.isBest && <span aria-hidden="true">🏆 </span>}
+                                        {row.isBest && <span className="sr-only">Best config: </span>}
+                                        {row.config}
+                                      </td>
+                                      <td className="px-2 py-1 text-right font-mono text-xs">{row.median}</td>
+                                      <td className="px-2 py-1 text-right font-mono text-xs">{row.p20}</td>
+                                      <td className="px-2 py-1 text-right font-mono text-xs">{row.p80}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {/* Sames inline text */}
                     {Object.keys(sames).length > 0 && (
                       <div className="mb-3 text-sm text-gray-700">
