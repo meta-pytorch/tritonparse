@@ -25,7 +25,7 @@ import gzip
 import io
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, TextIO, Union
+from typing import BinaryIO, Iterator, TextIO, Union
 
 import zstandard as zstd
 from tritonparse.tp_logger import logger
@@ -176,6 +176,94 @@ class _TruncatedGzipTailReader(io.BufferedIOBase):
         return b"".join(chunks)
 
 
+class _ZstdFramesReader(io.BufferedIOBase):
+    """Read concatenated zstd frames and warn if the last one is cut off.
+
+    TritonTraceHandler writes one zstd frame per record. A trace whose writer
+    was killed mid-record, or that is read while the job is still writing,
+    ends in an incomplete frame. The complete records before it are read as
+    usual, the same as with ``stream_reader(read_across_frames=True)``, but
+    that reader drops the incomplete frame without saying so. Decoding one
+    frame at a time lets us tell that case apart and log one warning, as the
+    gzip path does.
+
+    Whatever part of the truncated frame zstd could already decode is passed
+    through, so the stream can end with a partial line, as with gzip.
+    Corrupt data still raises ``zstd.ZstdError``.
+    """
+
+    _READ_SIZE = zstd.DECOMPRESSION_RECOMMENDED_INPUT_SIZE
+    # A finished frame hands back the rest of the input it was given as a
+    # copy. Records are usually small, so feeding small pieces keeps that
+    # copy short; this was faster than 16 KiB or a whole read.
+    _FEED_SIZE = 2 * 1024
+
+    def __init__(self, binary_file: BinaryIO, filepath: Path):
+        self._file = binary_file
+        self._filepath = filepath
+        self._dctx = zstd.ZstdDecompressor()
+        # Decompressor for the frame being read; None between frames.
+        self._frame = None
+        # Compressed bytes read from the file; the part from _in_pos on has
+        # not been decoded yet.
+        self._input = memoryview(b"")
+        self._in_pos = 0
+        # Decoded bytes; the part from _pos on has not been returned yet.
+        self._output = b""
+        self._pos = 0
+        self._at_end = False
+
+    def readable(self) -> bool:
+        return True
+
+    def _fill(self) -> None:
+        """Decode until there is output or the file is exhausted."""
+        while self._pos == len(self._output) and not self._at_end:
+            if self._in_pos == len(self._input):
+                self._input = memoryview(self._file.read(self._READ_SIZE))
+                self._in_pos = 0
+                if not self._input:
+                    self._at_end = True
+                    if self._frame is not None:
+                        logger.warning(
+                            f"{self._filepath} ends with a truncated zstd record; "
+                            "the records before it were read, the last one is "
+                            "incomplete."
+                        )
+                    return
+            if self._frame is None:
+                self._frame = self._dctx.decompressobj()
+            data = self._input[self._in_pos : self._in_pos + self._FEED_SIZE]
+            self._output = self._frame.decompress(data)
+            self._pos = 0
+            self._in_pos += len(data)
+            if self._frame.eof:
+                # Bytes past the end of this frame belong to the next one.
+                self._in_pos -= len(self._frame.unused_data)
+                self._frame = None
+
+    def read1(self, size: int = -1) -> bytes:
+        self._fill()
+        end = len(self._output)
+        if size is not None and size >= 0:
+            end = min(end, self._pos + size)
+        out = self._output[self._pos : end]
+        self._pos = end
+        return out
+
+    def read(self, size: int = -1) -> bytes:
+        chunks = []
+        remaining = size if size is not None and size >= 0 else None
+        while remaining is None or remaining > 0:
+            chunk = self.read1(-1 if remaining is None else remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+        return b"".join(chunks)
+
+
 @contextmanager
 def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
     """
@@ -212,11 +300,10 @@ def open_compressed_file(filepath: Union[str, Path]) -> Iterator[TextIO]:
             with io.TextIOWrapper(reader, encoding="utf-8") as f:
                 yield f
     elif compression == "zstd":
-        dctx = zstd.ZstdDecompressor()
         with open(filepath, "rb") as binary_file:
-            with dctx.stream_reader(binary_file, read_across_frames=True) as reader:
-                with io.TextIOWrapper(reader, encoding="utf-8") as text_stream:
-                    yield text_stream
+            reader = _ZstdFramesReader(binary_file, filepath)
+            with io.TextIOWrapper(reader, encoding="utf-8") as text_stream:
+                yield text_stream
     else:
         # Plain text file
         with open(filepath, "r", encoding="utf-8") as f:

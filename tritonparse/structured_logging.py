@@ -1508,8 +1508,8 @@ class TritonTraceHandler(logging.StreamHandler):
                     self.stream.write(compressed_data)
                 elif TRITON_TRACE_COMPRESSION == "zstd":
                     # Create a separate zstd frame for each record
-                    # ZstdDecompressor.stream_reader() handles multi-frame files
-                    # via read_across_frames=True
+                    # open_compressed_file reads the frames one by one and
+                    # warns if the last one is incomplete
                     if self._zstd_compressor is None:
                         self._zstd_compressor = zstd.ZstdCompressor()
                     compressed_data = self._zstd_compressor.compress(

@@ -7,7 +7,9 @@ and the critical multi-frame zstd scenario (per-record frame concatenation).
 
 import base64
 import gzip
+import io
 import json
+import logging
 import random
 import tempfile
 import unittest
@@ -289,6 +291,105 @@ class OpenCompressedFileTest(unittest.TestCase):
             self.assertEqual(len(lines), 10)
             for i in range(10):
                 self.assertIn(f'"line": {i}', lines[i])
+        finally:
+            Path(path).unlink()
+
+    def test_read_zstd_truncated_trailing_frame(self):
+        """A writer killed mid-record leaves a partial last zstd frame.
+
+        The complete records before it are read, and one warning names the
+        file, as for a truncated gzip trace.
+        """
+        cctx = zstd.ZstdCompressor()
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+            for i in range(3):
+                f.write(cctx.compress(f'{{"line": {i}}}\n'.encode("utf-8")))
+            last = b'{"line": 3, "payload": "' + b"x" * 4096 + b'"}\n'
+            partial = cctx.compress(last)
+            f.write(partial[: len(partial) // 2])
+        try:
+            with self.assertLogs("tritonparse", level="WARNING") as logs:
+                with open_compressed_file(path) as fh:
+                    lines = list(fh)
+            self.assertEqual(lines, [f'{{"line": {i}}}\n' for i in range(3)])
+            self.assertEqual(len(logs.output), 1)
+            self.assertIn("truncated zstd record", logs.output[0])
+            with self.assertLogs("tritonparse", level="WARNING"):
+                with open_compressed_file(path) as fh:
+                    self.assertEqual(fh.read(), "".join(lines))
+        finally:
+            Path(path).unlink()
+
+    def test_read_zstd_cut_matches_stream_reader(self):
+        """Cut a multi-frame trace at every offset and compare with zstandard.
+
+        The decoded bytes must match stream_reader(read_across_frames=True),
+        so the only change is the warning, which must appear exactly when the
+        cut falls inside a frame. The frames include an empty frame, a
+        skippable frame and a record larger than one zstd block.
+        """
+        cctx = zstd.ZstdCompressor()
+        big = base64.b64encode(random.Random(0).randbytes(150_000))
+        skippable = b"\x50\x2a\x4d\x18" + (4).to_bytes(4, "little") + b"abcd"
+        frames = [
+            cctx.compress(b'{"line": 0}\n'),
+            cctx.compress(b""),
+            skippable,
+            cctx.compress(b'{"line": 1, "payload": "' + big + b'"}\n'),
+            cctx.compress(b'{"line": 2}\n'),
+        ]
+        data = b"".join(frames)
+        boundaries = set()
+        offset = 0
+        for frame in frames:
+            offset += len(frame)
+            boundaries.add(offset)
+        # Every offset in the small frames, and a spread through the large one.
+        cuts = sorted(
+            set(range(4, len(frames[0]) + len(frames[1]) + len(frames[2]) + 40))
+            | set(range(4, len(data) + 1, 997))
+            | {
+                b + d
+                for b in boundaries
+                for d in (-1, 0, 1, 3, 5)
+                if b + d <= len(data)
+            }
+        )
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+        try:
+            for cut in cuts:
+                with self.subTest(cut=cut):
+                    Path(path).write_bytes(data[:cut])
+                    reader = zstd.ZstdDecompressor().stream_reader(
+                        io.BytesIO(data[:cut]), read_across_frames=True
+                    )
+                    expected = reader.read()
+                    with self.assertLogs("tritonparse", level="WARNING") as logs:
+                        with open_compressed_file(path) as fh:
+                            got = fh.buffer.read()
+                        # assertLogs fails when nothing is logged.
+                        logging.getLogger("tritonparse").warning("end")
+                    self.assertEqual(got, expected)
+                    warned = [m for m in logs.output if "truncated zstd" in m]
+                    self.assertEqual(len(warned), 0 if cut in boundaries else 1)
+        finally:
+            Path(path).unlink()
+
+    def test_read_zstd_corrupt_middle_frame_raises(self):
+        """Only a truncated tail gets the warning; corrupt data still raises."""
+        cctx = zstd.ZstdCompressor(write_checksum=True)
+        frames = [cctx.compress(f'{{"line": {i}}}\n'.encode("utf-8")) for i in range(3)]
+        bad = bytearray(frames[1])
+        bad[-1] ^= 0xFF  # last byte of the content checksum
+        with tempfile.NamedTemporaryFile(suffix=".bin.ndjson", delete=False) as f:
+            path = f.name
+        Path(path).write_bytes(frames[0] + bytes(bad) + frames[2])
+        try:
+            with self.assertRaises(zstd.ZstdError):
+                with open_compressed_file(path) as fh:
+                    fh.read()
         finally:
             Path(path).unlink()
 
