@@ -11,6 +11,7 @@ import {
 import ToggleSwitch from "../components/ToggleSwitch";
 import TruncatedValue from "../components/TruncatedValue";
 import { DocumentTextIcon, ChevronRightIcon } from "../components/icons";
+import { changedMetadataKeys, formatMetadataValue } from "../utils/metadataDiff";
 
 /**
  * Collapse threshold for a value in the responsive metadata grid. Cells are as
@@ -239,27 +240,6 @@ const isLongValue = (value: unknown): boolean => {
 };
 
 /**
- * Formats a value for display in the metadata section
- * @param value - The value to format
- * @returns Formatted string representation
- */
-const formatMetadataValue = (value: unknown): string => {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (Array.isArray(value)) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
-};
-
-/**
  * Component for displaying a single metadata item with consistent styling
  */
 interface MetadataItemProps {
@@ -268,6 +248,8 @@ interface MetadataItemProps {
   span?: number; // Number of columns to span (default: 1)
   /** Length above which the value collapses behind a toggle. */
   maxChars?: number;
+  /** Set when the value differs from the previously selected same-name kernel. */
+  changedFrom?: string;
 }
 
 const MetadataItem: React.FC<MetadataItemProps> = ({
@@ -275,11 +257,19 @@ const MetadataItem: React.FC<MetadataItemProps> = ({
   value,
   span = 1,
   maxChars = GRID_CELL_MAX_CHARS,
+  changedFrom,
 }) => (
   <div
     className={`flex flex-col ${span > 1 ? `col-span-${span}` : ""} ${
       span === 0 ? "col-span-full" : ""
-    }`}
+    } ${changedFrom !== undefined ? "bg-amber-100 rounded px-1 -mx-1" : ""}`}
+    title={
+      changedFrom !== undefined
+        ? changedFrom === ""
+          ? "Not present on the previously selected kernel"
+          : `Previously selected kernel: ${changedFrom}`
+        : undefined
+    }
   >
     <span className="text-sm font-medium text-gray-500">{label}</span>
     <TruncatedValue
@@ -326,6 +316,15 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
   const [isSticky, setIsSticky] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(true);
   const buttonsContainerRef = useRef<HTMLDivElement>(null);
+  // Remember which kernel was selected before the current one, so metadata
+  // fields that changed between two same-name kernels can be highlighted.
+  const [selection, setSelection] = useState<{ current: number; previous: number | null }>({
+    current: selectedKernel,
+    previous: null,
+  });
+  if (selection.current !== selectedKernel) {
+    setSelection({ current: selectedKernel, previous: selection.current });
+  }
 
   /**
    * Finds the index of a kernel by its compilation hash.
@@ -390,6 +389,11 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
   }
 
   const kernel = kernels[selectedKernel];
+  const previousKernel =
+    selection.previous !== null && selection.previous !== selectedKernel
+      ? kernels[selection.previous]
+      : undefined;
+  const changedMetadata = changedMetadataKeys(previousKernel, kernel);
 
   return (
     <div className="p-6">
@@ -517,6 +521,12 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
               )}
             </h3>
             <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
+              {changedMetadata.size > 0 && (
+                <div className="mb-3 text-xs text-gray-600">
+                  <span className="px-1 bg-amber-100 rounded">Highlighted</span> fields differ from
+                  the previously selected kernel [{selection.previous}] with the same name.
+                </div>
+              )}
               {/* Short fields in responsive grid */}
               <div className="grid grid-cols-[repeat(auto-fit,_minmax(180px,_1fr))] gap-3 mb-4">
                 {/* All short metadata fields */}
@@ -535,6 +545,7 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                           )
                           .join(" ")}
                         value={formatMetadataValue(value)}
+                        changedFrom={changedMetadata.get(key)}
                       />
                     );
                   })}
@@ -549,7 +560,15 @@ const KernelOverview: React.FC<KernelOverviewProps> = ({
                     .filter(([, value]) => isLongValue(value))
                     .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
                     .map(([key, value]) => (
-                      <div key={key} className="w-full">
+                      <div
+                        key={key}
+                        className={`w-full ${changedMetadata.has(key) ? "bg-amber-100 rounded px-1 -mx-1" : ""}`}
+                        title={
+                          changedMetadata.has(key)
+                            ? `Changed from the previously selected kernel [${selection.previous}]`
+                            : undefined
+                        }
+                      >
                         <span className="text-sm font-medium text-gray-500 block mb-1">
                           {key
                             .split("_")
